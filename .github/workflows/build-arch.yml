@@ -110,19 +110,13 @@ jobs:
               useradd -m builder
               echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-              # Force PKGDEST in makepkg.conf so the output goes where we expect
-              echo "PKGDEST=/build" >> /etc/makepkg.conf
-
-              mkdir -p /home/builder/pkg
+              mkdir -p /home/builder/pkg /home/builder/output
               cp /build/PKGBUILD /home/builder/pkg/
               cp /build/*.tar.zst /home/builder/pkg/
-              chown -R builder:builder /home/builder/pkg
+              chown -R builder:builder /home/builder/pkg /home/builder/output
               cd /home/builder/pkg
-              sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
-
-              echo "==> Searching for output package:"
-              find / -name "nemo-smpl-*.pkg.tar.zst" 2>/dev/null || true
-              find / -name "nemo-smpl-*.pkg.tar.zst" -exec cp {} /build/ \; 2>/dev/null
+              PKGDEST=/home/builder/output sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
+              cp /home/builder/output/*.pkg.tar.zst /build/
             '
 
           echo "==> pkg-build contents:"
