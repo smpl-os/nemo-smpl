@@ -118,19 +118,25 @@ jobs:
               useradd -m builder
               echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
+              # Force PKGDEST in makepkg.conf so the output goes where we expect
+              echo "PKGDEST=/build" >> /etc/makepkg.conf
+
               mkdir -p /home/builder/pkg
               cp /build/PKGBUILD /home/builder/pkg/
               cp /build/*.tar.zst /home/builder/pkg/
               chown -R builder:builder /home/builder/pkg
               cd /home/builder/pkg
-              sudo -u builder PKGDEST=/home/builder/pkg makepkg -d --noconfirm --skipchecksums --skipinteg
-              echo "==> Package files:"
-              ls -lh /home/builder/pkg/*.pkg.tar.zst
-              find /home/builder -name "*.pkg.tar.zst" -exec cp {} /build/ \;
+              sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
+
+              echo "==> Searching for output package:"
+              find / -name "nemo-smpl-*.pkg.tar.zst" 2>/dev/null || true
+              find / -name "nemo-smpl-*.pkg.tar.zst" -exec cp {} /build/ \; 2>/dev/null
             '
 
-          ls -lh pkg-build/*.pkg.tar.zst
-          cp pkg-build/nemo-smpl-*.pkg.tar.zst .
+          echo "==> pkg-build contents:"
+          ls -lh pkg-build/nemo-smpl-*.pkg.tar.zst
+          cp pkg-build/nemo-smpl-*-${{ matrix.arch }}.pkg.tar.zst . 2>/dev/null || \
+            cp pkg-build/nemo-smpl-*.pkg.tar.zst .
 
       - name: List outputs
         run: ls -lh nemo-smpl-*
