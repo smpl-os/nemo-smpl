@@ -25,18 +25,10 @@ jobs:
           - arch: x86_64
             image: archlinux:latest
             platform: linux/amd64
-          - arch: aarch64
-            image: menci/archlinuxarm:base-devel
-            platform: linux/arm64/v8
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-
       - name: Extract version
         run: |
           VERSION=$(grep -Po "version\s*:\s*'\K[^']+" meson.build | head -n1)
