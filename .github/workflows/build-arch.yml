@@ -12,6 +12,9 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: write
+
 jobs:
   arch-build:
     runs-on: ubuntu-latest
@@ -65,23 +68,74 @@ jobs:
               rm -rf stage
               DESTDIR="$PWD/stage" ninja -C build install
 
-              ARTIFACT="nemo-smpl-${VERSION}-arch-'"${{ matrix.arch }}"'-rootfs.tar.zst"
-              tar -C stage -I "zstd -19 -T0" -cf "$ARTIFACT" .
-              echo "Created $ARTIFACT"
+              # ── Rootfs tarball (legacy artifact) ──
+              ROOTFS="nemo-smpl-${VERSION}-arch-'"${{ matrix.arch }}"'-rootfs.tar.zst"
+              tar -C stage -I "zstd -19 -T0" -cf "$ROOTFS" .
+              echo "Created $ROOTFS"
+
+              # ── Pacman package (.pkg.tar.zst) ──
+              # Wrap the rootfs into a proper pacman package so build-iso.sh
+              # can download and use it directly without running makepkg.
+              useradd -m builder
+              echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+              PKG_DIR=/home/builder/nemo-smpl
+              mkdir -p "$PKG_DIR"
+
+              cp "$ROOTFS" "$PKG_DIR/"
+
+              cat > "$PKG_DIR/PKGBUILD" << PKGBUILD_INNER
+pkgname=nemo-smpl
+pkgver=${VERSION}
+pkgrel=1
+pkgdesc="Nemo file manager with smplOS patches"
+arch=('"${{ matrix.arch }}"')
+url="https://github.com/smpl-os/nemo"
+license=("GPL-3.0-or-later AND LGPL-2.1-or-later")
+depends=(
+  at-spi2-core bash cairo cinnamon-desktop dconf exempi gcc-libs
+  gdk-pixbuf2 glib2 glibc gtk3 gvfs gvfs-mtp hicolor-icon-theme
+  json-glib libexif libx11 libxmlb pango python python-cairo
+  python-gobject xapp gstreamer gst-plugins-base gst-plugins-good
+  webp-pixbuf-loader libraw
+)
+provides=(nemo)
+conflicts=(nemo)
+replaces=(nemo)
+source=("file://\$(pwd)/${ROOTFS}")
+sha256sums=(SKIP)
+
+package() {
+  tar -xf "${ROOTFS}" -C "\$pkgdir"
+}
+PKGBUILD_INNER
+
+              chown -R builder:builder "$PKG_DIR"
+              cd "$PKG_DIR"
+              sudo -u builder makepkg -s --noconfirm --skipchecksums
+              cp *.pkg.tar.zst /src/
+              echo "Created pacman package"
             '
+
+      - name: List outputs
+        run: ls -lh nemo-smpl-*
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nemo-smpl-arch-rootfs-${{ matrix.arch }}
-          path: nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
+          name: nemo-smpl-arch-${{ matrix.arch }}
+          path: |
+            nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
+            nemo-smpl-${{ env.VERSION }}-1-${{ matrix.arch }}.pkg.tar.zst
           retention-days: 14
 
       - name: Create or update GitHub Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/release'
         uses: softprops/action-gh-release@v2
         with:
-          files: nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
+          files: |
+            nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
+            nemo-smpl-${{ env.VERSION }}-1-${{ matrix.arch }}.pkg.tar.zst
           tag_name: v${{ env.VERSION }}
           name: nemo-smpl ${{ env.VERSION }}
           body: |
