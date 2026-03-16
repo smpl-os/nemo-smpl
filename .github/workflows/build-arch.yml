@@ -105,10 +105,7 @@ jobs:
           }
           PKGEOF
 
-          # Remove leading whitespace from heredoc indentation
           sed -i 's/^          //' pkg-build/PKGBUILD
-          echo "PKGBUILD contents:"
-          cat pkg-build/PKGBUILD
 
       - name: Build pacman package
         run: |
@@ -126,13 +123,14 @@ jobs:
               cp /build/*.tar.zst /home/builder/pkg/
               chown -R builder:builder /home/builder/pkg
               cd /home/builder/pkg
-              sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
-              cp *.pkg.tar.zst /build/
+              sudo -u builder PKGDEST=/home/builder/pkg makepkg -d --noconfirm --skipchecksums --skipinteg
+              echo "==> Package files:"
+              ls -lh /home/builder/pkg/*.pkg.tar.zst
+              find /home/builder -name "*.pkg.tar.zst" -exec cp {} /build/ \;
             '
 
+          ls -lh pkg-build/*.pkg.tar.zst
           cp pkg-build/nemo-smpl-*.pkg.tar.zst .
-          echo "Created pacman package:"
-          ls -lh nemo-smpl-*.pkg.tar.zst
 
       - name: List outputs
         run: ls -lh nemo-smpl-*
