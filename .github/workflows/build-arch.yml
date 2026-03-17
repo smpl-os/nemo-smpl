@@ -77,7 +77,7 @@ jobs:
           pkgrel=1
           pkgdesc="Nemo file manager with smplOS patches"
           arch=(${{ matrix.arch }})
-          url="https://github.com/smpl-os/nemo"
+          url="https://github.com/smpl-os/nemo-smpl"
           license=("GPL-3.0-or-later AND LGPL-2.1-or-later")
           depends=(
             at-spi2-core bash cairo cinnamon-desktop dconf exempi gcc-libs
