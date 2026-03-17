@@ -114,8 +114,11 @@ jobs:
               cp /build/PKGBUILD /home/builder/pkg/
               cp /build/*.tar.zst /home/builder/pkg/
               chown -R builder:builder /home/builder/pkg /home/builder/output
+              echo "PKGDEST=/home/builder/output" > /home/builder/.makepkg.conf
+              chown builder:builder /home/builder/.makepkg.conf
               cd /home/builder/pkg
-              PKGDEST=/home/builder/output sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
+              sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
+              ls -lh /home/builder/output/
               cp /home/builder/output/*.pkg.tar.zst /build/
             '
 
