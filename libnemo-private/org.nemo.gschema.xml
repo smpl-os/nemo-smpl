@@ -362,6 +362,11 @@
       <summary>Whether to show per-pane location labels in dual-pane mode</summary>
       <description>If set to true, each pane in dual-pane mode will show a compact path label above its file list</description>
     </key>
+    <key name="restore-tabs-on-startup" type="b">
+      <default>false</default>
+      <summary>Restore the previous window tabs on startup</summary>
+      <description>If set to true, Nemo will restore the last saved window tab state when launched without explicit locations.</description>
+    </key>
     <key name="ignore-view-metadata" type="b">
       <default>false</default>
       <summary>Whether to ignore folder metadata for view zoom levels and layouts</summary>
@@ -717,6 +722,33 @@
       <default>'places'</default>
       <summary>Side pane view</summary>
       <description>The side pane view to show in newly opened windows.</description>
+    </key>
+
+    <!-- Saved session (last closed window) -->
+    <key name="saved-split-view" type="b">
+      <default>false</default>
+      <summary>Whether split view was enabled when the last window was closed</summary>
+      <description>Internal setting used to restore the last closed window's split view and tabs.</description>
+    </key>
+    <key name="saved-tabs-left" type="as">
+      <default>[]</default>
+      <summary>Saved tab URIs for the left pane</summary>
+      <description>Internal setting used to restore the last closed window's tabs for the left pane.</description>
+    </key>
+    <key name="saved-tabs-right" type="as">
+      <default>[]</default>
+      <summary>Saved tab URIs for the right pane</summary>
+      <description>Internal setting used to restore the last closed window's tabs for the right pane.</description>
+    </key>
+    <key name="saved-active-tab-left" type="i">
+      <default>0</default>
+      <summary>Index of the active tab in the left pane</summary>
+      <description>Internal setting used to restore which tab was active in the left pane.</description>
+    </key>
+    <key name="saved-active-tab-right" type="i">
+      <default>0</default>
+      <summary>Index of the active tab in the right pane</summary>
+      <description>Internal setting used to restore which tab was active in the right pane.</description>
     </key>
   </schema>
 
