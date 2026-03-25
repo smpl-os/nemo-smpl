@@ -878,6 +878,18 @@ set_gtk_filechooser_sort_first (GObject *object,
 				gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (object)));
 }
 
+static gboolean
+on_preferences_key_press (GtkWidget   *widget,
+                          GdkEventKey *event,
+                          gpointer     user_data)
+{
+    if (event->keyval == GDK_KEY_Escape) {
+        gtk_widget_destroy (widget);
+        return GDK_EVENT_STOP;
+    }
+    return GDK_EVENT_PROPAGATE;
+}
+
 static  void
 nemo_file_management_properties_dialog_setup (GtkBuilder  *builder,
                                               GtkWindow   *window,
@@ -1171,6 +1183,9 @@ nemo_file_management_properties_dialog_setup (GtkBuilder  *builder,
 
 	g_signal_connect (dialog, "delete-event",
 			  G_CALLBACK (gtk_widget_destroy), NULL);
+
+    g_signal_connect (dialog, "key-press-event",
+                      G_CALLBACK (on_preferences_key_press), NULL);
 
     g_signal_connect (dialog, "destroy",
                       G_CALLBACK (on_dialog_destroy), builder);
