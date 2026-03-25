@@ -2274,9 +2274,9 @@ static const GtkActionEntry main_entries[] = {
     G_CALLBACK (action_tabs_move_right_callback) },
   { "Sidebar List", NULL, N_("Sidebar") },
   { "Toolbar List", NULL, N_("Toolbar") },
-  { NEMO_ACTION_SHOW_PLACES, NULL, N_("Show _Places Sidebar"), NULL, N_("Switch to Places sidebar panel"),
+  { NEMO_ACTION_SHOW_PLACES, NULL, N_("Show _Places Sidebar"), "<Alt><Shift>p", N_("Switch to Places sidebar panel"),
     G_CALLBACK (action_show_places_callback) },
-  { NEMO_ACTION_SHOW_TREEVIEW, NULL, N_("Show _Tree Sidebar"), NULL, N_("Switch to Tree sidebar panel"),
+  { NEMO_ACTION_SHOW_TREEVIEW, NULL, N_("Show _Tree Sidebar"), "<Alt><Shift>t", N_("Switch to Tree sidebar panel"),
     G_CALLBACK (action_show_treeview_callback) },
 };
 
