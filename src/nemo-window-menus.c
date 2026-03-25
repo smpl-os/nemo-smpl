@@ -599,13 +599,57 @@ action_split_view_same_location_callback (GtkAction *action,
 	}
 }
 
+/* Focus the first selectable row in the sidebar tree view so that keyboard
+ * navigation works immediately after switching sidebar type.
+ * Detects whether the first row is a non-selectable heading (Places style,
+ * which has group headers as parent rows) or a real directory entry (Tree
+ * style) and picks "0:0" or "0" accordingly. */
+static gboolean
+focus_sidebar_idle (NemoWindow *window)
+{
+    if (window->details->sidebar == NULL) {
+        return G_SOURCE_REMOVE;
+    }
+
+    GList *children = gtk_container_get_children (GTK_CONTAINER (window->details->sidebar));
+    for (GList *l = children; l != NULL; l = l->next) {
+        GtkWidget *child = GTK_WIDGET (l->data);
+        if (GTK_IS_SCROLLED_WINDOW (child)) {
+            GtkWidget *inner = gtk_bin_get_child (GTK_BIN (child));
+            if (GTK_IS_TREE_VIEW (inner)) {
+                GtkTreeView  *tv    = GTK_TREE_VIEW (inner);
+                GtkTreeModel *model = gtk_tree_view_get_model (tv);
+                GtkTreeIter   iter, child_iter;
+                const gchar  *path_str = "0";
+
+                /* If the first row has children it is a heading (Places),
+                 * so select the first child row instead. */
+                if (model != NULL &&
+                    gtk_tree_model_get_iter_first (model, &iter) &&
+                    gtk_tree_model_iter_children (model, &child_iter, &iter)) {
+                    path_str = "0:0";
+                }
+
+                GtkTreePath *path = gtk_tree_path_new_from_string (path_str);
+                gtk_tree_view_set_cursor (tv, path, NULL, FALSE);
+                gtk_widget_grab_focus (GTK_WIDGET (tv));
+                gtk_tree_path_free (path);
+                break;
+            }
+        }
+    }
+    g_list_free (children);
+    return G_SOURCE_REMOVE;
+}
+
 static void
 action_show_places_callback (GtkAction *action,
                              gpointer user_data)
 {
     NemoWindow *window = NEMO_WINDOW (user_data);
+    nemo_window_show_sidebar (window);
     nemo_window_set_sidebar_id (window, NEMO_WINDOW_SIDEBAR_PLACES);
-    nemo_window_set_show_sidebar (window, TRUE);
+    g_idle_add ((GSourceFunc) focus_sidebar_idle, window);
 }
 
 static void
@@ -613,8 +657,9 @@ action_show_treeview_callback (GtkAction *action,
                                gpointer user_data)
 {
     NemoWindow *window = NEMO_WINDOW (user_data);
+    nemo_window_show_sidebar (window);
     nemo_window_set_sidebar_id (window, NEMO_WINDOW_SIDEBAR_TREE);
-    nemo_window_set_show_sidebar (window, TRUE);
+    g_idle_add ((GSourceFunc) focus_sidebar_idle, window);
 }
 
 static void
@@ -2792,6 +2837,18 @@ nemo_window_initialize_menus (NemoWindow *window)
 
 	/* add the UI */
 	gtk_ui_manager_add_ui_from_resource (ui_manager, "/org/nemo/nemo-shell-ui.xml", NULL);
+
+    /* Explicitly connect accelerators for actions that have no menu proxy.
+     * Without a proxy widget, gtk_action_connect_accelerator() is never called
+     * automatically, so the accel group never receives the binding. */
+    {
+        GtkAccelGroup *accel_group = gtk_ui_manager_get_accel_group (ui_manager);
+        GtkAction *a;
+        a = gtk_action_group_get_action (window->details->main_action_group, NEMO_ACTION_SHOW_PLACES);
+        if (a) { gtk_action_set_accel_group (a, accel_group); gtk_action_connect_accelerator (a); }
+        a = gtk_action_group_get_action (window->details->main_action_group, NEMO_ACTION_SHOW_TREEVIEW);
+        if (a) { gtk_action_set_accel_group (a, accel_group); gtk_action_connect_accelerator (a); }
+    }
 
     GtkWidget *menuitem, *submenu;
     menuitem = gtk_ui_manager_get_widget (nemo_window_get_ui_manager (window), NEMO_VIEW_MENUBAR_FILE_PATH);
