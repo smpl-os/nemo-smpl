@@ -21,6 +21,7 @@
 #include "nemo-statusbar.h"
 
 #include "nemo-actions.h"
+#include "nemo-window.h"
 
 #include <config.h>
 #include <glib/gi18n.h>
@@ -178,6 +179,39 @@ on_slider_changed_cb (GtkWidget *zoom_slider, gpointer user_data)
 }
 
 #define SLIDER_WIDTH 100
+
+/* Build a tooltip like "Show Split View (Ctrl+F3)" using the action's live
+ * accelerator. Falls back to base_label alone if no binding is found.
+ * Caller must g_free() the result. */
+static gchar *
+make_tooltip_with_accel (NemoStatusBar *bar,
+                         const gchar   *base_label,
+                         const gchar   *action_name)
+{
+    GtkActionGroup *group;
+    GtkAction      *action;
+    const gchar    *accel_path;
+    GtkAccelKey     key;
+
+    group = nemo_window_get_main_action_group (NEMO_WINDOW (bar->window));
+    if (group == NULL)
+        return g_strdup (base_label);
+
+    action = gtk_action_group_get_action (group, action_name);
+    if (action == NULL)
+        return g_strdup (base_label);
+
+    accel_path = gtk_action_get_accel_path (action);
+    if (accel_path == NULL ||
+        !gtk_accel_map_lookup_entry (accel_path, &key) ||
+        key.accel_key == 0)
+        return g_strdup (base_label);
+
+    gchar *accel_str = gtk_accelerator_get_label (key.accel_key, key.accel_mods);
+    gchar *tooltip   = g_strdup_printf ("%s (%s)", base_label, accel_str);
+    g_free (accel_str);
+    return tooltip;
+}
 
 static void
 nemo_status_bar_constructed (GObject *object)
