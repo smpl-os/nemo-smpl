@@ -224,7 +224,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_button_new ();
     icon = gtk_image_new_from_icon_name ("nemo-sidebar-hide-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Hide the Sidebar (F9)"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Hide the Sidebar"), NEMO_ACTION_SHOW_HIDE_SIDEBAR);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->hide_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
@@ -233,7 +237,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_button_new ();
     icon = gtk_image_new_from_icon_name ("nemo-sidebar-show-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Show the Sidebar (F9)"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Show the Sidebar"), NEMO_ACTION_SHOW_HIDE_SIDEBAR);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->show_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
@@ -260,7 +268,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_toggle_button_new ();
     icon = gtk_image_new_from_icon_name ("view-dual-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Show Split View (F3)"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Show Split View"), NEMO_ACTION_SHOW_HIDE_EXTRA_PANE);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->split_view_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
@@ -269,7 +281,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_toggle_button_new ();
     icon = gtk_image_new_from_icon_name ("document-properties-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Show the Preview Pane (Alt+F3)"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Show the Preview Pane"), NEMO_ACTION_SHOW_HIDE_PREVIEW_PANE);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->preview_pane_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
