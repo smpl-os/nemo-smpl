@@ -58,6 +58,8 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "show-hidden-files",     "<Actions>/ShellActions/Show Hidden Files",  N_("Show Hidden Files"),          N_("Window"), "<Control>h",                NULL, NULL },
 	{ "show-sidebar",          "<Actions>/ShellActions/Show Hide Sidebar",  N_("Toggle Sidebar"),             N_("Window"), "F9",                        NULL, NULL },
 	{ "split-view",            "<Actions>/ShellActions/Show Hide Extra Pane", N_("Toggle Split View"),        N_("Window"), "<Control>F3",                   NULL, NULL },
+	{ "show-places",           "<Actions>/ShellActions/Show Places",          N_("Show Places Sidebar"),      N_("Window"), "<Alt><Shift>p",               NULL, NULL },
+	{ "show-treeview",         "<Actions>/ShellActions/Show Treeview",        N_("Show Treeview Sidebar"),    N_("Window"), "<Alt><Shift>t",               NULL, NULL },
 	{ "quick-preview",         "<Actions>/ShellActions/Quick Preview", N_("Quick File Preview"),        N_("Window"), "F3",                        NULL, NULL },
 	{ "toggle-mute",           NULL,                                   N_("Mute/Unmute Preview Audio"), N_("Window"), "<Control>m",                  NULL, NULL },
 	{ "toggle-play",           NULL,                                   N_("Play/Pause Preview Audio"),  N_("Window"), "<Control>space",              NULL, NULL },

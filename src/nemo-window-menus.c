@@ -600,6 +600,24 @@ action_split_view_same_location_callback (GtkAction *action,
 }
 
 static void
+action_show_places_callback (GtkAction *action,
+                             gpointer user_data)
+{
+    NemoWindow *window = NEMO_WINDOW (user_data);
+    nemo_window_set_sidebar_id (window, NEMO_WINDOW_SIDEBAR_PLACES);
+    nemo_window_set_show_sidebar (window, TRUE);
+}
+
+static void
+action_show_treeview_callback (GtkAction *action,
+                               gpointer user_data)
+{
+    NemoWindow *window = NEMO_WINDOW (user_data);
+    nemo_window_set_sidebar_id (window, NEMO_WINDOW_SIDEBAR_TREE);
+    nemo_window_set_show_sidebar (window, TRUE);
+}
+
+static void
 action_show_hide_sidebar_callback (GtkAction *action,
 				   gpointer user_data)
 {
@@ -2256,6 +2274,10 @@ static const GtkActionEntry main_entries[] = {
     G_CALLBACK (action_tabs_move_right_callback) },
   { "Sidebar List", NULL, N_("Sidebar") },
   { "Toolbar List", NULL, N_("Toolbar") },
+  { NEMO_ACTION_SHOW_PLACES, NULL, N_("Show _Places Sidebar"), NULL, N_("Switch to Places sidebar panel"),
+    G_CALLBACK (action_show_places_callback) },
+  { NEMO_ACTION_SHOW_TREEVIEW, NULL, N_("Show _Tree Sidebar"), NULL, N_("Switch to Tree sidebar panel"),
+    G_CALLBACK (action_show_treeview_callback) },
 };
 
 static const GtkToggleActionEntry main_toggle_entries[] = {

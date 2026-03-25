@@ -998,6 +998,14 @@
       <default>'&lt;Control&gt;F3'</default>
       <summary>Toggle split view</summary>
     </key>
+    <key name="show-places" type="s">
+      <default>'&lt;Alt&gt;&lt;Shift&gt;p'</default>
+      <summary>Show Places sidebar</summary>
+    </key>
+    <key name="show-treeview" type="s">
+      <default>'&lt;Alt&gt;&lt;Shift&gt;t'</default>
+      <summary>Show Treeview sidebar</summary>
+    </key>
     <key name="quick-preview" type="s">
       <default>'F3'</default>
       <summary>Quick file preview</summary>

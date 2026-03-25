@@ -235,7 +235,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_toggle_button_new ();
     icon = gtk_image_new_from_icon_name ("nemo-sidebar-places-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Show Places"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Show Places"), NEMO_ACTION_SHOW_PLACES);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->places_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
@@ -244,7 +248,11 @@ nemo_status_bar_constructed (GObject *object)
     button = gtk_toggle_button_new ();
     icon = gtk_image_new_from_icon_name ("nemo-sidebar-tree-symbolic", size);
     gtk_button_set_image (GTK_BUTTON (button), icon);
-    gtk_widget_set_tooltip_text (GTK_WIDGET (button), _("Show Treeview"));
+    {
+        gchar *tip = make_tooltip_with_accel (bar, _("Show Treeview"), NEMO_ACTION_SHOW_TREEVIEW);
+        gtk_widget_set_tooltip_text (GTK_WIDGET (button), tip);
+        g_free (tip);
+    }
     bar->tree_button = button;
     gtk_box_pack_start (GTK_BOX (bar), button, FALSE, FALSE, 2);
     g_signal_connect (GTK_BUTTON (button), "clicked",
