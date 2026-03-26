@@ -335,6 +335,18 @@ action_preferences_callback (GtkAction *action,
 	nemo_file_management_properties_dialog_show (window, NULL);
 }
 
+static gboolean
+on_about_key_press (GtkWidget   *widget,
+                    GdkEventKey *event,
+                    gpointer     user_data)
+{
+    if (event->keyval == GDK_KEY_Escape) {
+        gtk_widget_destroy (widget);
+        return GDK_EVENT_STOP;
+    }
+    return GDK_EVENT_PROPAGATE;
+}
+
 static void
 action_about_nemo_callback (GtkAction *action,
 				gpointer user_data)
@@ -354,23 +366,33 @@ action_about_nemo_callback (GtkAction *action,
 	};
 	gchar *license_trans;
 	GDateTime *date;
+	GtkWidget *dialog;
 
 	license_trans = g_strjoin ("\n\n", _(license[0]), _(license[1]),
 					     _(license[2]), NULL);
 
 	date = g_date_time_new_now_local ();
 
-	gtk_show_about_dialog (GTK_WINDOW (user_data),
-			       "program-name", _("nemo-smpl"),
-			       "version", VERSION,
-			       "comments", _("nemo-smpl lets you organize "
-					     "files and folders, both on "
-					     "your computer and online. "
-					     "It is a community-maintained fork of Nemo."),
-			       "license", license_trans,
-			       "wrap-license", TRUE,
-			      "logo-icon-name", "folder",
-			      NULL);
+	dialog = g_object_new (GTK_TYPE_ABOUT_DIALOG,
+	                       "transient-for", GTK_WINDOW (user_data),
+	                       "modal",          TRUE,
+	                       "program-name",   _("nemo-smpl"),
+	                       "version",        VERSION,
+	                       "comments",       _("nemo-smpl lets you organize "
+	                                           "files and folders, both on "
+	                                           "your computer and online. "
+	                                           "It is a community-maintained fork of Nemo."),
+	                       "license",        license_trans,
+	                       "wrap-license",   TRUE,
+	                       "logo-icon-name", "folder",
+	                       NULL);
+
+	g_signal_connect (dialog, "key-press-event",
+	                  G_CALLBACK (on_about_key_press), NULL);
+	g_signal_connect (dialog, "response",
+	                  G_CALLBACK (gtk_widget_destroy), NULL);
+
+	gtk_window_present (GTK_WINDOW (dialog));
 
 	g_free (license_trans);
 	g_date_time_unref (date);
