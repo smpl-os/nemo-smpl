@@ -163,14 +163,7 @@ endif
 conf.set('HAVE_LIBRAW', libraw_enabled)
 
 # make sure pango development files are installed
-pango = dependency('pango', version: '>=1.40.0')
-# check for newer pango for necessary workarounds
-new_pango = dependency('pango', version: '>=1.44.0', required: false)
-if new_pango.found()
-  conf.set('HAVE_PANGO_144', true)
-else
-  message('................using pango @0@ instead'.format(new_pango.version()))
-endif
+pango = dependency('pango', version: '>=1.44.0')
 
 enableEmptyView = get_option('empty_view')
 conf.set10('ENABLE_EMPTY_VIEW', enableEmptyView)
