@@ -97,15 +97,15 @@
 #include <libnemo-private/nemo-debug.h>
 
 /* Minimum starting update inverval */
-#define UPDATE_INTERVAL_MIN 200
+#define UPDATE_INTERVAL_MIN 50
 /* Maximum update interval */
-#define UPDATE_INTERVAL_MAX 2000
+#define UPDATE_INTERVAL_MAX 200
 /* Amount of miliseconds the update interval is increased */
-#define UPDATE_INTERVAL_INC 250
+#define UPDATE_INTERVAL_INC 50
 /* Interval at which the update interval is increased */
-#define UPDATE_INTERVAL_TIMEOUT_INTERVAL 500
+#define UPDATE_INTERVAL_TIMEOUT_INTERVAL 150
 /* Milliseconds that have to pass without a change to reset the update interval */
-#define UPDATE_INTERVAL_RESET 1000
+#define UPDATE_INTERVAL_RESET 500
 
 #define SILENT_WINDOW_OPEN_LIMIT 5
 
@@ -3921,7 +3921,15 @@ queue_pending_files (NemoView *view,
 	*pending_list = g_list_concat (file_and_directory_list_from_files (directory, files),
 				       *pending_list);
 
-    schedule_timeout_display_of_pending_files (view, view->details->update_interval);
+    /* During initial load, show the first batch immediately (idle priority) so
+     * the blank flash between clear and first-file display is minimised.
+     * After the first batch is already scheduled/displayed, fall back to the
+     * normal timeout-throttled path so we don't hammer the UI on huge dirs. */
+    if (view->details->loading && view->details->display_pending_source_id == 0) {
+        schedule_idle_display_of_pending_files (view);
+    } else {
+        schedule_timeout_display_of_pending_files (view, view->details->update_interval);
+    }
 }
 
 static void

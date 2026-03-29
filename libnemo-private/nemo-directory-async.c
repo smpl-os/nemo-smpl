@@ -53,7 +53,7 @@
 #define DEBUG_START_STOP
 #endif
 
-#define DIRECTORY_LOAD_ITEMS_PER_CALLBACK 100
+#define DIRECTORY_LOAD_ITEMS_PER_CALLBACK 500
 
 /* Keep async. jobs down to this number for all directories. */
 #define MAX_ASYNC_JOBS 10
