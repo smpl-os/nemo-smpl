@@ -13,16 +13,26 @@ permissions:
   contents: write
 
 jobs:
+  bump:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    uses: smpl-os/.github/.github/workflows/auto-release.yml@main
+    with:
+      version-file: meson.build
+      branch: release
+    secrets: inherit
+
   debian-build:
+    needs: bump
+    if: always() && (needs.bump.result == 'success' && needs.bump.outputs.skipped != 'true' || github.event_name == 'pull_request')
     runs-on: ubuntu-latest
     container:
-      # LMDE 7 (Debian-based) — has Linux Mint repos pre-configured,
-      # so all Cinnamon/xapp/nemo build-deps are available out of the box.
       image: linuxmintd/lmde7-amd64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.sha || github.ref }}
 
       - name: Install dependencies
         run: |
@@ -47,9 +57,6 @@ jobs:
 
           dpkg-buildpackage -us -uc -b
 
-          # Only keep the packages users actually need to install.
-          # Skip -dev, -dbg, gir, and lib split packages.
-          # Rename from upstream "nemo_6.x.x" to "nemo-smpl_VERSION".
           mkdir -p debian-build
           cp ../nemo_*_amd64.deb   "debian-build/nemo-smpl_${VERSION}_amd64.deb"   || true
           cp ../nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb" || true
@@ -62,17 +69,13 @@ jobs:
           retention-days: 14
 
       - name: Add to GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           files: debian-build/*.deb
           tag_name: v${{ env.VERSION }}
           name: nemo-smpl ${{ env.VERSION }}
-          body: |
-            Automated build from release branch
-            - Version: ${{ env.VERSION }}
-            - Built from: release branch (LMDE 7)
-            - Contains all latest features and fixes
+          generate_release_notes: true
           draft: false
           prerelease: false
         env:
