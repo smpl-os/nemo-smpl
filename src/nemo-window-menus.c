@@ -1662,15 +1662,21 @@ show_bookmark_picker (NemoWindow *window,
 		                     : (window->details->active_pane && window->details->active_pane->tool_bar)
 		                       ? window->details->active_pane->tool_bar
 		                       : GTK_WIDGET (window);
-		/* Anchor rect at the upper-left corner of the panel. */
-		GdkRectangle rect = { 0, 0, 1, 1 };
+		/* Anchor rect at the upper-left corner of the panel.
+		 * Most child widgets share the toplevel's GdkWindow, so we
+		 * translate the toolbar's (0,0) into toplevel coordinates and
+		 * use the toplevel's GdkWindow for the popup rect. */
+		GtkWidget *toplevel = gtk_widget_get_toplevel (anchor);
+		gint tx = 0, ty = 0;
+		gtk_widget_translate_coordinates (anchor, toplevel, 0, 0, &tx, &ty);
+		GdkRectangle rect = { tx, ty, 1, 1 };
 
 		/* Handle letter key presses to activate the matching mnemonic item. */
 		g_signal_connect (menu, "key-press-event",
 		                  G_CALLBACK (on_picker_key_press), NULL);
 
 		gtk_menu_popup_at_rect (GTK_MENU (menu),
-		                        gtk_widget_get_window (anchor),
+		                        gtk_widget_get_window (toplevel),
 		                        &rect,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        GDK_GRAVITY_NORTH_WEST,
