@@ -1327,6 +1327,19 @@ create_picker_menu_item (const gchar *name,
 }
 
 static void
+on_picker_menu_mapped (GtkWidget *widget, gpointer user_data)
+{
+	GtkWidget *top;
+
+	gtk_menu_shell_select_first (GTK_MENU_SHELL (widget), TRUE);
+	top = gtk_widget_get_toplevel (widget);
+	if (GTK_IS_WINDOW (top)) {
+		gtk_window_set_mnemonics_visible (GTK_WINDOW (top), TRUE);
+	}
+	g_signal_handlers_disconnect_by_func (widget, on_picker_menu_mapped, user_data);
+}
+
+static void
 show_bookmark_picker (NemoWindow *window,
                       gboolean    right_pane)
 {
@@ -1626,23 +1639,11 @@ show_bookmark_picker (NemoWindow *window,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        NULL);
 
-		/* Two steps are required to show mnemonic underlines immediately:
-		 *
-		 * 1. select_first — puts the GtkMenuShell in keyboard-navigation mode
-		 *    (same effect as pressing Arrow-Down), which is a prerequisite for
-		 *    GTK to consider rendering mnemonics.
-		 *
-		 * 2. gtk_window_set_mnemonics_visible(TRUE) on the popup's GtkWindow
-		 *    toplevel — GTK resets this to FALSE when it detects select_first
-		 *    was not triggered by a real hardware key event, so we must force
-		 *    it back TRUE after the select call. */
-		gtk_menu_shell_select_first (GTK_MENU_SHELL (menu), TRUE);
-		{
-			GtkWidget *top = gtk_widget_get_toplevel (menu);
-			if (GTK_IS_WINDOW (top)) {
-				gtk_window_set_mnemonics_visible (GTK_WINDOW (top), TRUE);
-			}
-		}
+		/* Connect after so our handler fires after GTK's own map-time
+		 * mnemonics_visible reset.  The handler selects the first item
+		 * (keyboard-navigation mode) and forces underlines visible. */
+		g_signal_connect_after (menu, "map",
+		                        G_CALLBACK (on_picker_menu_mapped), NULL);
 	}
 }
 
