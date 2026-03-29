@@ -1341,7 +1341,39 @@ create_picker_menu_item (const gchar *name,
 	gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
 	gtk_container_add (GTK_CONTAINER (item), box);
 
+	/* Store the mnemonic char so the key-press handler can look it up. */
+	g_object_set_data (G_OBJECT (item), "picker-mnemonic", GINT_TO_POINTER ((gint) mnem_char));
+
 	return item;
+}
+
+static gboolean
+on_picker_key_press (GtkWidget *menu, GdkEventKey *event, gpointer user_data)
+{
+	gunichar key_char;
+	GList *children, *l;
+
+	/* Ignore modified keys (Ctrl, Alt, etc.) */
+	if (event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK))
+		return FALSE;
+
+	key_char = g_unichar_tolower (gdk_keyval_to_unicode (event->keyval));
+	if (key_char == 0)
+		return FALSE;
+
+	children = gtk_container_get_children (GTK_CONTAINER (menu));
+	for (l = children; l != NULL; l = l->next) {
+		GtkWidget *child_item = GTK_WIDGET (l->data);
+		gchar stored = (gchar) GPOINTER_TO_INT (
+			g_object_get_data (G_OBJECT (child_item), "picker-mnemonic"));
+		if (stored != '\0' && (gunichar) stored == key_char) {
+			gtk_menu_shell_activate_item (GTK_MENU_SHELL (menu), child_item, TRUE);
+			g_list_free (children);
+			return TRUE;
+		}
+	}
+	g_list_free (children);
+	return FALSE;
 }
 
 static void
@@ -1636,6 +1668,10 @@ show_bookmark_picker (NemoWindow *window,
 		gtk_widget_get_allocation (anchor, &alloc);
 		rect.width = alloc.width;
 		rect.y = alloc.height;  /* position just below the toolbar */
+
+		/* Handle letter key presses to activate the matching mnemonic item. */
+		g_signal_connect (menu, "key-press-event",
+		                  G_CALLBACK (on_picker_key_press), NULL);
 
 		gtk_menu_popup_at_rect (GTK_MENU (menu),
 		                        gtk_widget_get_window (anchor),
