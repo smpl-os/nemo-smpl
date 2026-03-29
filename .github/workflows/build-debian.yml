@@ -13,17 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  bump:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    uses: smpl-os/.github/.github/workflows/auto-release.yml@main
-    with:
-      version-file: meson.build
-      branch: release
-    secrets: inherit
-
   debian-build:
-    needs: bump
-    if: always() && (needs.bump.result == 'success' && needs.bump.outputs.skipped != 'true' || github.event_name == 'pull_request')
     runs-on: ubuntu-latest
     container:
       image: linuxmintd/lmde7-amd64
@@ -31,8 +21,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.bump.outputs.sha || github.ref }}
 
       - name: Install dependencies
         run: |
