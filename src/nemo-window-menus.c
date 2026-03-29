@@ -1285,27 +1285,8 @@ create_picker_menu_item (const gchar *name,
 	GtkWidget *icon;
 	GtkWidget *label;
 	gchar mnem_char;
-	gchar *label_text;
 
 	pick_mnemonic (name, mnemonic_used, &mnem_char);
-
-	if (mnem_char != '\0') {
-		/* Build label with underscore before the mnemonic char */
-		GString *s = g_string_new (NULL);
-		const gchar *p;
-		gboolean inserted = FALSE;
-		for (p = name; *p != '\0'; p = g_utf8_next_char (p)) {
-			gunichar c = g_utf8_get_char (p);
-			if (!inserted && g_unichar_tolower (c) == (gunichar)mnem_char) {
-				g_string_append_c (s, '_');
-				inserted = TRUE;
-			}
-			g_string_append_unichar (s, c);
-		}
-		label_text = g_string_free (s, FALSE);
-	} else {
-		label_text = g_strdup (name);
-	}
 
 	item = gtk_menu_item_new ();
 	box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1315,28 +1296,52 @@ create_picker_menu_item (const gchar *name,
 		gtk_box_pack_start (GTK_BOX (box), icon, FALSE, FALSE, 0);
 	}
 
-	label = gtk_label_new_with_mnemonic (label_text);
+	label = gtk_label_new (NULL);
 	gtk_label_set_xalign (GTK_LABEL (label), 0.0);
-	gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
 
+	if (mnem_char != '\0') {
+		/* Build Pango markup: wrap the mnemonic character in <u>…</u>.
+		 * This avoids relying on GtkWindow::mnemonics-visible, which is
+		 * inaccessible for GtkMenu popup windows. */
+		GString *before = g_string_new (NULL);
+		GString *after  = g_string_new (NULL);
+		const gchar *p;
+		gboolean found = FALSE;
+		gchar mnem_buf[8] = { 0 };
+
+		for (p = name; *p != '\0'; p = g_utf8_next_char (p)) {
+			gunichar c = g_utf8_get_char (p);
+			if (!found && g_unichar_tolower (c) == (gunichar)mnem_char) {
+				g_unichar_to_utf8 (c, mnem_buf);
+				found = TRUE;
+			} else if (!found) {
+				g_string_append_unichar (before, c);
+			} else {
+				g_string_append_unichar (after, c);
+			}
+		}
+
+		gchar *esc_before = g_markup_escape_text (before->str, -1);
+		gchar *esc_mnem   = g_markup_escape_text (mnem_buf, -1);
+		gchar *esc_after  = g_markup_escape_text (after->str, -1);
+		gchar *markup = g_strconcat (esc_before, "<u>", esc_mnem, "</u>", esc_after, NULL);
+
+		gtk_label_set_markup (GTK_LABEL (label), markup);
+
+		g_free (markup);
+		g_free (esc_after);
+		g_free (esc_mnem);
+		g_free (esc_before);
+		g_string_free (after, TRUE);
+		g_string_free (before, TRUE);
+	} else {
+		gtk_label_set_text (GTK_LABEL (label), name);
+	}
+
+	gtk_box_pack_start (GTK_BOX (box), label, TRUE, TRUE, 0);
 	gtk_container_add (GTK_CONTAINER (item), box);
 
-	g_free (label_text);
-
 	return item;
-}
-
-static void
-on_picker_menu_mapped (GtkWidget *widget, gpointer user_data)
-{
-	GtkWidget *top;
-
-	gtk_menu_shell_select_first (GTK_MENU_SHELL (widget), TRUE);
-	top = gtk_widget_get_toplevel (widget);
-	if (GTK_IS_WINDOW (top)) {
-		gtk_window_set_mnemonics_visible (GTK_WINDOW (top), TRUE);
-	}
-	g_signal_handlers_disconnect_by_func (widget, on_picker_menu_mapped, user_data);
 }
 
 static void
@@ -1639,11 +1644,8 @@ show_bookmark_picker (NemoWindow *window,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        NULL);
 
-		/* Connect after so our handler fires after GTK's own map-time
-		 * mnemonics_visible reset.  The handler selects the first item
-		 * (keyboard-navigation mode) and forces underlines visible. */
-		g_signal_connect_after (menu, "map",
-		                        G_CALLBACK (on_picker_menu_mapped), NULL);
+		/* Pre-select the first item so keyboard navigation works immediately. */
+		gtk_menu_shell_select_first (GTK_MENU_SHELL (menu), TRUE);
 	}
 }
 
