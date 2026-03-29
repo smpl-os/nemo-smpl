@@ -606,42 +606,6 @@ on_menu_selection_done (GtkMenuShell *menushell,
 	window->details->menu_hide_delay_id = g_timeout_add (0, (GSourceFunc) hide_menu_on_delay, window);
 }
 
-/* Force mnemonic underlines to always be visible in dropdown menus.
- * GTK3 popup windows initialise mnemonics_visible=FALSE regardless of
- * the gtk-auto-mnemonics setting; we fix that by hooking the map signal
- * on every GtkMenu as it is shown.                                         */
-static void
-on_submenu_map_show_mnemonics (GtkWidget *widget, gpointer user_data)
-{
-    GtkWidget *toplevel = gtk_widget_get_toplevel (widget);
-    if (GTK_IS_WINDOW (toplevel)) {
-        gtk_window_set_mnemonics_visible (GTK_WINDOW (toplevel), TRUE);
-    }
-}
-
-static void
-connect_submenu_mnemonic_signal (GtkWidget *menu)
-{
-    GList *items, *l;
-
-    /* When this popup menu window appears, make its mnemonics visible. */
-    g_signal_connect (menu, "map",
-                      G_CALLBACK (on_submenu_map_show_mnemonics), NULL);
-
-    /* Recurse into nested submenus (e.g. Open With ▶, Scripts ▶). */
-    items = gtk_container_get_children (GTK_CONTAINER (menu));
-    for (l = items; l != NULL; l = l->next) {
-        GtkWidget *item = GTK_WIDGET (l->data);
-        if (GTK_IS_MENU_ITEM (item)) {
-            GtkWidget *sub = gtk_menu_item_get_submenu (GTK_MENU_ITEM (item));
-            if (sub != NULL) {
-                connect_submenu_mnemonic_signal (sub);
-            }
-        }
-    }
-    g_list_free (items);
-}
-
 static void
 nemo_window_constructed (GObject *self)
 {
@@ -682,23 +646,6 @@ nemo_window_constructed (GObject *self)
 
     gtk_widget_set_can_focus (menu, TRUE);
 	gtk_widget_set_hexpand (menu, TRUE);
-
-    /* Always show mnemonic underlines on the main window and all its popup menus */
-    gtk_window_set_mnemonics_visible (GTK_WINDOW (window), TRUE);
-    {
-        GList *top_items, *tl;
-        top_items = gtk_container_get_children (GTK_CONTAINER (menu));
-        for (tl = top_items; tl != NULL; tl = tl->next) {
-            GtkWidget *item = GTK_WIDGET (tl->data);
-            if (GTK_IS_MENU_ITEM (item)) {
-                GtkWidget *sub = gtk_menu_item_get_submenu (GTK_MENU_ITEM (item));
-                if (sub != NULL) {
-                    connect_submenu_mnemonic_signal (sub);
-                }
-            }
-        }
-        g_list_free (top_items);
-    }
 
     g_signal_connect_object (menu,
                              "focus-out-event",

@@ -459,47 +459,6 @@ process_system_theme (GtkSettings *gtk_settings)
     g_free (theme_name);
 }
 
-static gboolean
-nemo_force_mnemonics_visible_hook (GSignalInvocationHint *ihint,
-                                   guint                  n_param_values,
-                                   const GValue          *param_values,
-                                   gpointer               user_data)
-{
-    if (n_param_values > 0) {
-        GObject *obj = g_value_get_object (&param_values[0]);
-
-        /* Main window: set directly. */
-        if (GTK_IS_WINDOW (obj)) {
-            gtk_window_set_mnemonics_visible (GTK_WINDOW (obj), TRUE);
-        }
-
-        /* GtkMenu popup menus: GtkMenu is a GtkMenuShell, NOT a GtkWindow.
-         *
-         * Mnemonic underlines in menu items are controlled entirely by the
-         * GtkMenuShell's internal _gtk_menu_shell_update_mnemonics() which
-         * is only triggered by:
-         *   a) a key press event (keyboard_mode → TRUE), or
-         *   b) the notify::gtk-auto-mnemonics GtkSettings signal firing.
-         *
-         * Case (b) is what we use.  The notify signal only fires when the
-         * value actually CHANGES.  If gtk-auto-mnemonics is already FALSE (set
-         * by dconf or our g_object_set at startup) the signal never fires for
-         * this newly-mapped menu because no change occurred.
-         *
-         * Fix: toggle FALSE→TRUE→FALSE each time a menu appears.  This fires
-         * notify twice (both with no visible flicker since no render frame
-         * occurs between them), guaranteeing _gtk_menu_shell_update_mnemonics
-         * runs on the new shell with the final value of FALSE → mnemonics shown.
-         */
-        else if (GTK_IS_MENU (obj)) {
-            GtkSettings *settings = gtk_widget_get_settings (GTK_WIDGET (obj));
-            g_object_set (settings, "gtk-auto-mnemonics", TRUE,  NULL);
-            g_object_set (settings, "gtk-auto-mnemonics", FALSE, NULL);
-        }
-    }
-    return TRUE; /* do not remove the hook */
-}
-
 static void
 init_icons_and_styles (void)
 {
@@ -532,31 +491,6 @@ init_icons_and_styles (void)
     g_signal_connect_swapped (gtk_settings, "notify::gtk-theme-name", G_CALLBACK (process_system_theme), gtk_settings);
 
     process_system_theme (gtk_settings);
-
-    /* Always show mnemonic underlines on every menu item.
-     *
-     * Two complementary fixes are required:
-     *
-     * 1. gtk-auto-mnemonics=FALSE
-     *    When TRUE (the default), GTK resets mnemonics_visible=FALSE on every
-     *    mouse event.  Opening a menu with the mouse fires a button-release,
-     *    which immediately hides underlines — even if we just set them visible.
-     *    Setting it FALSE tells GTK to never auto-hide underlines based on
-     *    pointer/keyboard events.
-     *
-     * 2. process-wide "map" emission hook
-     *    gtk-auto-mnemonics only propagates to windows that already exist when
-     *    the setting changes (via notify::).  Popup-menu windows are created
-     *    lazily long after startup, so they miss the notification and start
-     *    with mnemonics_visible=FALSE.  The hook intercepts every GtkWindow
-     *    map event and forces mnemonics_visible=TRUE immediately. */
-    g_object_set (gtk_settings, "gtk-auto-mnemonics", FALSE, NULL);
-
-    g_signal_add_emission_hook (
-        g_signal_lookup ("map", GTK_TYPE_WIDGET),
-        0,
-        nemo_force_mnemonics_visible_hook,
-        NULL, NULL);
 }
 
 static gboolean

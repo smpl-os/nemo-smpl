@@ -1594,6 +1594,7 @@ show_bookmark_picker (NemoWindow *window,
 	g_object_unref (volume_monitor);
 
 	/* Show and popup anchored to the target pane's toolbar */
+	gtk_widget_set_name (menu, "bookmark-picker-menu");
 	gtk_widget_show_all (menu);
 
 	{
@@ -1624,6 +1625,11 @@ show_bookmark_picker (NemoWindow *window,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        NULL);
+
+		/* Select the first activatable item immediately so the menu shell
+		 * enters keyboard-navigation mode — this is what makes GTK render
+		 * the mnemonic underlines without requiring the user to press a key. */
+		gtk_menu_shell_select_first (GTK_MENU_SHELL (menu), TRUE);
 	}
 }
 
