@@ -1626,10 +1626,23 @@ show_bookmark_picker (NemoWindow *window,
 		                        GDK_GRAVITY_NORTH_WEST,
 		                        NULL);
 
-		/* Select the first activatable item immediately so the menu shell
-		 * enters keyboard-navigation mode — this is what makes GTK render
-		 * the mnemonic underlines without requiring the user to press a key. */
+		/* Two steps are required to show mnemonic underlines immediately:
+		 *
+		 * 1. select_first — puts the GtkMenuShell in keyboard-navigation mode
+		 *    (same effect as pressing Arrow-Down), which is a prerequisite for
+		 *    GTK to consider rendering mnemonics.
+		 *
+		 * 2. gtk_window_set_mnemonics_visible(TRUE) on the popup's GtkWindow
+		 *    toplevel — GTK resets this to FALSE when it detects select_first
+		 *    was not triggered by a real hardware key event, so we must force
+		 *    it back TRUE after the select call. */
 		gtk_menu_shell_select_first (GTK_MENU_SHELL (menu), TRUE);
+		{
+			GtkWidget *top = gtk_widget_get_toplevel (menu);
+			if (GTK_IS_WINDOW (top)) {
+				gtk_window_set_mnemonics_visible (GTK_WINDOW (top), TRUE);
+			}
+		}
 	}
 }
 
