@@ -497,10 +497,12 @@ init_icons_and_styles (void)
      * setting it to FALSE makes them permanently visible so users can see at a
      * glance which letter activates each menu item.  This overrides whatever is in
      * settings.ini / dconf, because GTK reads GtkSettings from the default object
-     * and this programmatic set always wins. */
+     * and this programmatic set always wins.
+     * NOTE: only set gtk-auto-mnemonics here — gtk-enable-mnemonics is not a valid
+     * GtkSettings property and passing it to g_object_set would abort the call
+     * before reaching gtk-auto-mnemonics. */
     g_object_set (gtk_settings,
-                  "gtk-enable-mnemonics", TRUE,
-                  "gtk-auto-mnemonics",   FALSE,
+                  "gtk-auto-mnemonics", FALSE,
                   NULL);
 }
 
