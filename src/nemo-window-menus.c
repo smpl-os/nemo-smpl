@@ -1662,12 +1662,8 @@ show_bookmark_picker (NemoWindow *window,
 		                     : (window->details->active_pane && window->details->active_pane->tool_bar)
 		                       ? window->details->active_pane->tool_bar
 		                       : GTK_WIDGET (window);
+		/* Anchor rect at the upper-left corner of the panel. */
 		GdkRectangle rect = { 0, 0, 1, 1 };
-		GtkAllocation alloc;
-
-		gtk_widget_get_allocation (anchor, &alloc);
-		rect.width = alloc.width;
-		rect.y = alloc.height;  /* position just below the toolbar */
 
 		/* Handle letter key presses to activate the matching mnemonic item. */
 		g_signal_connect (menu, "key-press-event",
