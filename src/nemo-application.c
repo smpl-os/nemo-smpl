@@ -506,19 +506,25 @@ init_icons_and_styles (void)
 
     process_system_theme (gtk_settings);
 
-    /* Always show mnemonic underlines on every menu item from the first frame.
+    /* Always show mnemonic underlines on every menu item.
      *
-     * Why g_object_set("gtk-auto-mnemonics") alone is not enough:
-     *   GTK only propagates this setting to windows that already exist when
-     *   the setting changes (via notify:: signal handlers).  Popup-menu windows
-     *   are created lazily by GtkUIManager long after startup, so they miss the
-     *   notification and start life with mnemonics_visible=FALSE.
+     * Two complementary fixes are required:
      *
-     * Fix: install a process-wide emission hook on the "map" signal.  Every
-     * GtkWindow (including GTK_WINDOW_POPUP menu windows) emits "map" the
-     * moment it first appears on screen.  We intercept that and immediately
-     * call gtk_window_set_mnemonics_visible(TRUE).  The GTK_IS_WINDOW guard
-     * makes the hot path trivially cheap for non-window widgets. */
+     * 1. gtk-auto-mnemonics=FALSE
+     *    When TRUE (the default), GTK resets mnemonics_visible=FALSE on every
+     *    mouse event.  Opening a menu with the mouse fires a button-release,
+     *    which immediately hides underlines — even if we just set them visible.
+     *    Setting it FALSE tells GTK to never auto-hide underlines based on
+     *    pointer/keyboard events.
+     *
+     * 2. process-wide "map" emission hook
+     *    gtk-auto-mnemonics only propagates to windows that already exist when
+     *    the setting changes (via notify::).  Popup-menu windows are created
+     *    lazily long after startup, so they miss the notification and start
+     *    with mnemonics_visible=FALSE.  The hook intercepts every GtkWindow
+     *    map event and forces mnemonics_visible=TRUE immediately. */
+    g_object_set (gtk_settings, "gtk-auto-mnemonics", FALSE, NULL);
+
     g_signal_add_emission_hook (
         g_signal_lookup ("map", GTK_TYPE_WIDGET),
         0,
