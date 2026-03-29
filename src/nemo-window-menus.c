@@ -1657,15 +1657,12 @@ show_bookmark_picker (NemoWindow *window,
 			target = NEMO_WINDOW_PANE (panes->data);
 		}
 
-		GtkWidget *anchor = (target && target->tool_bar && gtk_widget_get_visible (target->tool_bar))
-		                     ? target->tool_bar
-		                     : (window->details->active_pane && window->details->active_pane->tool_bar)
-		                       ? window->details->active_pane->tool_bar
-		                       : GTK_WIDGET (window);
-		/* Anchor rect at the upper-left corner of the panel.
-		 * Most child widgets share the toplevel's GdkWindow, so we
-		 * translate the toolbar's (0,0) into toplevel coordinates and
-		 * use the toplevel's GdkWindow for the popup rect. */
+		/* Anchor to the pane widget itself (the GtkBox containing the
+		 * file view).  The toolbars live in a separate shared
+		 * toolbar_holder box at the window level — never use them as
+		 * the anchor or the menu ends up near the top of the app. */
+		GtkWidget *anchor = target ? GTK_WIDGET (target)
+		                           : GTK_WIDGET (window);
 		GtkWidget *toplevel = gtk_widget_get_toplevel (anchor);
 		gint tx = 0, ty = 0;
 		gtk_widget_translate_coordinates (anchor, toplevel, 0, 0, &tx, &ty);
