@@ -126,6 +126,49 @@ nemo_launch_application_by_uri (GAppInfo *application,
 
 	g_assert (uris != NULL);
 
+	/* Handle Terminal=true apps ourselves since GLib's built-in terminal
+	 * detection may not find our terminal emulator (e.g. st-wl). */
+	if (G_IS_DESKTOP_APP_INFO (application) &&
+	    g_desktop_app_info_get_boolean (G_DESKTOP_APP_INFO (application), "Terminal")) {
+		const gchar *executable = g_app_info_get_executable (application);
+		GString *cmd = g_string_new (executable);
+
+		for (l = uris; l != NULL; l = l->next) {
+			GFile *gf = g_file_new_for_uri ((const char *)l->data);
+			gchar *path = g_file_get_path (gf);
+			gchar *quoted;
+
+			if (path != NULL) {
+				quoted = g_shell_quote (path);
+				g_string_append_c (cmd, ' ');
+				g_string_append (cmd, quoted);
+				g_free (quoted);
+				g_free (path);
+			} else {
+				quoted = g_shell_quote ((const char *)l->data);
+				g_string_append_c (cmd, ' ');
+				g_string_append (cmd, quoted);
+				g_free (quoted);
+			}
+			g_object_unref (gf);
+		}
+
+		GdkScreen *screen = parent_window
+		                     ? gtk_window_get_screen (parent_window)
+		                     : gdk_screen_get_default ();
+
+		eel_gnome_open_terminal_on_screen (cmd->str, screen);
+		g_string_free (cmd, TRUE);
+
+		/* Still record recent files */
+		for (l = uris; l != NULL; l = l->next) {
+			file = nemo_file_get_by_uri (l->data);
+			nemo_recent_add_file (file, application);
+			nemo_file_unref (file);
+		}
+		return;
+	}
+
 	/* count the number of uris with local paths */
 	count = 0;
 	locations = NULL;

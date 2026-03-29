@@ -21,6 +21,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
@@ -36,6 +38,29 @@
 #define CACHE_RESCAN_SECS  120   /* background cache refresh period */
 #define SCAN_TIME_BUDGET_MS_UI     12000 /* per-volume interactive budget */
 #define SCAN_TIME_BUDGET_MS_CACHE   8000 /* per-volume cache refresh budget */
+#define LAZY_CACHE_DELAY_MS         150  /* let UI render before scanning */
+
+/* ── I/O priority helpers (Linux) ──────────────────────────────── */
+#ifdef __linux__
+#include <sched.h>
+#ifndef IOPRIO_WHO_THREAD
+#define IOPRIO_WHO_THREAD  1
+#endif
+#ifndef IOPRIO_CLASS_IDLE
+#define IOPRIO_CLASS_IDLE  3
+#endif
+#define IOPRIO_PRIO_VALUE(class, data) (((class) << 13) | (data))
+static inline void
+set_thread_low_priority (void)
+{
+	/* Idle I/O class: only use disk when nobody else needs it */
+	syscall (SYS_ioprio_set, IOPRIO_WHO_THREAD, 0,
+	         IOPRIO_PRIO_VALUE (IOPRIO_CLASS_IDLE, 0));
+	nice (19);
+}
+#else
+static inline void set_thread_low_priority (void) { }
+#endif
 
 /* ── Per-volume data ───────────────────────────────────────────── */
 typedef struct {
@@ -90,6 +115,7 @@ static GMutex        g_scan_cache_lock;
 static GCancellable *g_scan_cache_cancel = NULL;
 static gboolean      g_scan_cache_running = FALSE;
 static guint         g_scan_cache_timer_id = 0;
+static guint         g_lazy_cache_kickoff_id = 0;
 
 /* ── Widget ────────────────────────────────────────────────────── */
 struct _NemoOverview {
@@ -829,6 +855,8 @@ scan_thread_func (gpointer data)
 	ScanThreadData *td = data;
 	guint i;
 
+	set_thread_low_priority ();
+
 	for (i = 0; i < td->n_volumes; i++) {
 		GArray *deep;
 		ScanResult *sr;
@@ -964,6 +992,8 @@ cache_scan_thread_func (gpointer data)
 {
 	CacheScanJob *job = data;
 	guint i;
+
+	set_thread_low_priority ();
 
 	for (i = 0; i < job->n_volumes; i++) {
 		GArray *deep;
@@ -1180,9 +1210,10 @@ rebuild_ui (NemoOverview *self)
 
 /* ── Public API ────────────────────────────────────────────────── */
 
-void
-nemo_overview_start_lazy_cache (void)
+static gboolean
+lazy_cache_start_cb (gpointer data)
 {
+	(void) data;
 	scan_cache_init_once ();
 	start_cache_scan_if_needed ();
 
@@ -1190,6 +1221,19 @@ nemo_overview_start_lazy_cache (void)
 		g_scan_cache_timer_id = g_timeout_add_seconds (CACHE_RESCAN_SECS,
 		                                              cache_rescan_timer_cb,
 		                                              NULL);
+	g_lazy_cache_kickoff_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
+void
+nemo_overview_start_lazy_cache (void)
+{
+	/* Defer the first scan slightly so the UI can render its first
+	 * frame without competing for I/O with the background scanner. */
+	if (g_lazy_cache_kickoff_id == 0 && g_scan_cache_timer_id == 0)
+		g_lazy_cache_kickoff_id = g_timeout_add (LAZY_CACHE_DELAY_MS,
+		                                         lazy_cache_start_cb,
+		                                         NULL);
 }
 
 void

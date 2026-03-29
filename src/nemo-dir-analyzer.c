@@ -16,9 +16,14 @@
 
 #include <glib/gi18n.h>
 #include <math.h>
+#include <sched.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+
+/* Yield to the main thread every N directory entries so the scanner
+ * doesn't saturate the I/O queue and starve the UI.               */
+#define SCAN_YIELD_INTERVAL 64
 
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
@@ -199,6 +204,8 @@ scan_recursive (const char   *path,
 	if (dp == NULL)
 		return 0;
 
+	guint yield_counter = 0;
+
 	while ((entry = readdir (dp)) != NULL) {
 		struct stat st;
 		char *child;
@@ -210,6 +217,10 @@ scan_recursive (const char   *path,
 
 		if (g_cancellable_is_cancelled (cancel))
 			break;
+
+		/* Periodically yield so the UI's I/O isn't starved */
+		if (++yield_counter % SCAN_YIELD_INTERVAL == 0)
+			sched_yield ();
 
 		if (g_strcmp0 (entry->d_name, ".") == 0 ||
 		    g_strcmp0 (entry->d_name, "..") == 0)

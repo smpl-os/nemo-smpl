@@ -52,6 +52,7 @@ static const struct {
     { "rxvt", "-e", TRUE },
     { "sakura", "-x", TRUE },
     { "st", "-e", TRUE },
+    { "st-wl", "-e", FALSE },
     { "terminator", "-x", TRUE },
     { "terminology", "-e", TRUE },
     { "tilix", "-e", TRUE },

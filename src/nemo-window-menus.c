@@ -1095,6 +1095,61 @@ bookmark_picker_data_free (BookmarkPickerData *data)
 	g_slice_free (BookmarkPickerData, data);
 }
 
+/* Data for async volume mount from the picker */
+typedef struct {
+	NemoWindow *window;
+	gboolean    right_pane;
+	GVolume    *volume;     /* owned */
+} PickerMountData;
+
+static NemoWindowSlot *
+get_pane_slot (NemoWindow *window, gboolean right_pane, NemoWindowPane **out_pane);
+
+static gboolean
+deferred_focus_pane (gpointer user_data);
+
+static void
+picker_volume_mount_cb (GObject      *source_object,
+                        GAsyncResult *res,
+                        gpointer      user_data)
+{
+	PickerMountData *mdata = user_data;
+	GError *error = NULL;
+
+	if (g_volume_mount_finish (G_VOLUME (source_object), res, &error)) {
+		GMount *mount = g_volume_get_mount (mdata->volume);
+		if (mount != NULL) {
+			GFile *location = g_mount_get_default_location (mount);
+			NemoWindowSlot *slot;
+			NemoWindowPane *target_pane = NULL;
+
+			slot = get_pane_slot (mdata->window, mdata->right_pane, &target_pane);
+			if (slot != NULL) {
+				nemo_window_slot_open_location (slot, location, 0);
+				if (target_pane != NULL) {
+					g_object_ref (target_pane);
+					g_idle_add (deferred_focus_pane, target_pane);
+				}
+			}
+			g_object_unref (location);
+			g_object_unref (mount);
+		}
+	} else {
+		if (error->code != G_IO_ERROR_FAILED_HANDLED) {
+			char *name = g_volume_get_name (mdata->volume);
+			char *primary = g_strdup_printf (_("Unable to mount %s"), name);
+			eel_show_error_dialog (primary, error->message, NULL);
+			g_free (primary);
+			g_free (name);
+		}
+		g_error_free (error);
+	}
+
+	g_object_unref (mdata->volume);
+	g_object_unref (mdata->window);
+	g_slice_free (PickerMountData, mdata);
+}
+
 /* Idle callback to switch focus to a specific pane after navigation completes */
 static gboolean
 deferred_focus_pane (gpointer user_data)
@@ -1165,7 +1220,16 @@ bookmark_picker_item_activated (GtkMenuItem *item,
 			g_object_unref (mount);
 		}
 		if (location == NULL) {
-			/* Volume not mounted — could mount it, but skip for now */
+			/* Volume not mounted — mount it, then navigate on completion */
+			PickerMountData *mdata = g_slice_new0 (PickerMountData);
+			mdata->window = g_object_ref (data->window);
+			mdata->right_pane = data->right_pane;
+			mdata->volume = g_object_ref (data->volume);
+
+			GMountOperation *mount_op = gtk_mount_operation_new (GTK_WINDOW (data->window));
+			g_volume_mount (data->volume, 0, mount_op, NULL,
+			                picker_volume_mount_cb, mdata);
+			g_object_unref (mount_op);
 			return;
 		}
 		/* Take ownership so free works correctly */
@@ -1383,11 +1447,6 @@ show_bookmark_picker (NemoWindow *window,
 			gchar *icon_name_str = NULL;
 			BookmarkPickerData *data;
 
-			if (mount == NULL) {
-				/* Not mounted — skip */
-				continue;
-			}
-
 			name = g_volume_get_name (volume);
 			gicon = g_volume_get_icon (volume);
 
@@ -1400,7 +1459,12 @@ show_bookmark_picker (NemoWindow *window,
 			data = g_slice_new0 (BookmarkPickerData);
 			data->window = window;
 			data->right_pane = right_pane;
-			data->location = g_mount_get_default_location (mount);
+			if (mount != NULL) {
+				data->location = g_mount_get_default_location (mount);
+			} else {
+				data->location = NULL;
+				data->volume = g_object_ref (volume);
+			}
 
 			item = create_picker_menu_item (name,
 			                                icon_name_str ? icon_name_str : "drive-removable-media",
@@ -1414,7 +1478,7 @@ show_bookmark_picker (NemoWindow *window,
 			g_free (name);
 			g_free (icon_name_str);
 			g_clear_object (&gicon);
-			g_object_unref (mount);
+			g_clear_object (&mount);
 		}
 		g_list_free_full (drive_volumes, g_object_unref);
 	}
@@ -1440,11 +1504,6 @@ show_bookmark_picker (NemoWindow *window,
 			gchar *icon_name_str = NULL;
 			BookmarkPickerData *data;
 
-			if (mount == NULL) {
-				/* Not mounted — skip */
-				continue;
-			}
-
 			name = g_volume_get_name (volume);
 			gicon = g_volume_get_icon (volume);
 
@@ -1457,7 +1516,12 @@ show_bookmark_picker (NemoWindow *window,
 			data = g_slice_new0 (BookmarkPickerData);
 			data->window = window;
 			data->right_pane = right_pane;
-			data->location = g_mount_get_default_location (mount);
+			if (mount != NULL) {
+				data->location = g_mount_get_default_location (mount);
+			} else {
+				data->location = NULL;
+				data->volume = g_object_ref (volume);
+			}
 
 			item = create_picker_menu_item (name,
 			                                icon_name_str ? icon_name_str : "drive-harddisk",
@@ -1471,7 +1535,7 @@ show_bookmark_picker (NemoWindow *window,
 			g_free (name);
 			g_free (icon_name_str);
 			g_clear_object (&gicon);
-			g_object_unref (mount);
+			g_clear_object (&mount);
 		}
 	}
 	g_list_free_full (volumes, g_object_unref);
