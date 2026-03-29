@@ -459,6 +459,20 @@ process_system_theme (GtkSettings *gtk_settings)
     g_free (theme_name);
 }
 
+static gboolean
+nemo_force_mnemonics_visible_hook (GSignalInvocationHint *ihint,
+                                   guint                  n_param_values,
+                                   const GValue          *param_values,
+                                   gpointer               user_data)
+{
+    if (n_param_values > 0) {
+        GObject *obj = g_value_get_object (&param_values[0]);
+        if (GTK_IS_WINDOW (obj))
+            gtk_window_set_mnemonics_visible (GTK_WINDOW (obj), TRUE);
+    }
+    return TRUE; /* do not remove the hook */
+}
+
 static void
 init_icons_and_styles (void)
 {
@@ -492,18 +506,24 @@ init_icons_and_styles (void)
 
     process_system_theme (gtk_settings);
 
-    /* Always show mnemonic underlines (the underlined hotkey letter in menu items).
-     * gtk-auto-mnemonics=TRUE (the default) hides underlines until Alt is pressed;
-     * setting it to FALSE makes them permanently visible so users can see at a
-     * glance which letter activates each menu item.  This overrides whatever is in
-     * settings.ini / dconf, because GTK reads GtkSettings from the default object
-     * and this programmatic set always wins.
-     * NOTE: only set gtk-auto-mnemonics here — gtk-enable-mnemonics is not a valid
-     * GtkSettings property and passing it to g_object_set would abort the call
-     * before reaching gtk-auto-mnemonics. */
-    g_object_set (gtk_settings,
-                  "gtk-auto-mnemonics", FALSE,
-                  NULL);
+    /* Always show mnemonic underlines on every menu item from the first frame.
+     *
+     * Why g_object_set("gtk-auto-mnemonics") alone is not enough:
+     *   GTK only propagates this setting to windows that already exist when
+     *   the setting changes (via notify:: signal handlers).  Popup-menu windows
+     *   are created lazily by GtkUIManager long after startup, so they miss the
+     *   notification and start life with mnemonics_visible=FALSE.
+     *
+     * Fix: install a process-wide emission hook on the "map" signal.  Every
+     * GtkWindow (including GTK_WINDOW_POPUP menu windows) emits "map" the
+     * moment it first appears on screen.  We intercept that and immediately
+     * call gtk_window_set_mnemonics_visible(TRUE).  The GTK_IS_WINDOW guard
+     * makes the hot path trivially cheap for non-window widgets. */
+    g_signal_add_emission_hook (
+        g_signal_lookup ("map", GTK_TYPE_WIDGET),
+        0,
+        nemo_force_mnemonics_visible_hook,
+        NULL, NULL);
 }
 
 static gboolean
