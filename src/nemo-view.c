@@ -1280,7 +1280,7 @@ action_open_alternate_callback (GtkAction *action,
 {
 	NemoView *view;
 	GList *selection;
-	GtkWindow *window;
+	G_GNUC_UNUSED GtkWindow *window;
 
 	view = NEMO_VIEW (callback_data);
 	selection = nemo_view_get_selection (view);
@@ -1300,7 +1300,7 @@ action_open_new_tab_callback (GtkAction *action,
 {
 	NemoView *view;
 	GList *selection;
-	GtkWindow *window;
+	G_GNUC_UNUSED GtkWindow *window;
 
 	view = NEMO_VIEW (callback_data);
 	selection = nemo_view_get_selection (view);
@@ -4006,7 +4006,7 @@ files_added_callback (NemoDirectory *directory,
 		      gpointer callback_data)
 {
 	NemoView *view;
-	GtkWindow *window;
+	G_GNUC_UNUSED GtkWindow *window;
 	char *uri;
 
 	view = NEMO_VIEW (callback_data);
@@ -4031,7 +4031,7 @@ files_changed_callback (NemoDirectory *directory,
 			gpointer callback_data)
 {
 	NemoView *view;
-	GtkWindow *window;
+	G_GNUC_UNUSED GtkWindow *window;
 	char *uri;
 
 	view = NEMO_VIEW (callback_data);
@@ -10466,7 +10466,7 @@ schedule_update_status (NemoView *view)
 void
 nemo_view_notify_selection_changed (NemoView *view)
 {
-	GtkWindow *window;
+	G_GNUC_UNUSED GtkWindow *window;
 	GList *selection;
 
 	g_return_if_fail (NEMO_IS_VIEW (view));
