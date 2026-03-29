@@ -491,6 +491,17 @@ init_icons_and_styles (void)
     g_signal_connect_swapped (gtk_settings, "notify::gtk-theme-name", G_CALLBACK (process_system_theme), gtk_settings);
 
     process_system_theme (gtk_settings);
+
+    /* Always show mnemonic underlines (the underlined hotkey letter in menu items).
+     * gtk-auto-mnemonics=TRUE (the default) hides underlines until Alt is pressed;
+     * setting it to FALSE makes them permanently visible so users can see at a
+     * glance which letter activates each menu item.  This overrides whatever is in
+     * settings.ini / dconf, because GTK reads GtkSettings from the default object
+     * and this programmatic set always wins. */
+    g_object_set (gtk_settings,
+                  "gtk-enable-mnemonics", TRUE,
+                  "gtk-auto-mnemonics",   FALSE,
+                  NULL);
 }
 
 static gboolean
