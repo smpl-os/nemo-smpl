@@ -1059,6 +1059,20 @@
       <summary>Same location as other pane</summary>
     </key>
 
+    <!-- Quick Preview internal keys (handled by the preview window's key-press-event) -->
+    <key name="quick-preview-search" type="s">
+      <default>'&lt;Primary&gt;f'</default>
+      <summary>Open search bar in Quick Preview</summary>
+    </key>
+    <key name="quick-preview-search-next" type="s">
+      <default>'F3'</default>
+      <summary>Next search match in Quick Preview</summary>
+    </key>
+    <key name="quick-preview-search-prev" type="s">
+      <default>'&lt;Shift&gt;F3'</default>
+      <summary>Previous search match in Quick Preview</summary>
+    </key>
+
     <!-- Tabs -->
     <key name="new-tab" type="s">
       <default>'&lt;Control&gt;t'</default>

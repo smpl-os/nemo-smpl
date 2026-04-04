@@ -103,6 +103,12 @@ struct _NemoPagedViewer {
 
 	/* Smooth scroll accumulator */
 	gdouble          scroll_accum;
+
+	/* Search state (case-insensitive ASCII) */
+	gchar           *search_needle;         /* g_ascii_strdown'd needle, NULL if inactive */
+	gsize            search_needle_len;     /* byte length */
+	gint64           search_match_offset;   /* absolute file offset of current match, -1 = none */
+	gboolean         search_active;         /* TRUE while a needle is set */
 };
 
 G_DEFINE_TYPE (NemoPagedViewer, nemo_paged_viewer, GTK_TYPE_BOX)
@@ -113,6 +119,162 @@ G_DEFINE_TYPE (NemoPagedViewer, nemo_paged_viewer, GTK_TYPE_BOX)
 
 static void     update_scrollbar       (NemoPagedViewer *self);
 static void     scroll_by_lines        (NemoPagedViewer *self, int delta);
+static gssize   cache_read             (NemoPagedViewer *self, gint64 off, void *buf, gsize count);
+
+/* ------------------------------------------------------------------ */
+/* Search helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Case-insensitive ASCII byte search.
+ * needle must already be g_ascii_strdown'd.
+ * Returns pointer to first match in [hay, hay+hlen) or NULL.
+ */
+static const guint8 *
+mem_icasefind (const guint8 *hay, gsize hlen,
+               const guint8 *ndl, gsize nlen)
+{
+	if (nlen == 0) return hay;
+	if (nlen > hlen) return NULL;
+	for (gsize i = 0; i <= hlen - nlen; i++) {
+		gboolean ok = TRUE;
+		for (gsize j = 0; j < nlen; j++) {
+			if (g_ascii_tolower (hay[i + j]) != ndl[j]) {
+				ok = FALSE;
+				break;
+			}
+		}
+		if (ok) return hay + i;
+	}
+	return NULL;
+}
+
+/* Scan forward from start_offset; return absolute file offset of next match
+ * or -1 if none found.  Reads in READ_CHUNK blocks with needle-1 byte overlap
+ * so matches spanning chunk boundaries are found. */
+static gint64
+search_scan_forward (NemoPagedViewer *self, gint64 start_offset)
+{
+	const guint8 *ndl = (const guint8 *) self->search_needle;
+	gsize nlen = self->search_needle_len;
+	gsize overlap = (nlen > 1) ? nlen - 1 : 0;
+	gsize chunk_size = (gsize) MIN ((gint64) READ_CHUNK, self->file_size);
+	guint8 *chunk;
+	gint64 pos;
+
+	if (nlen == 0 || self->fd < 0 || self->file_size == 0)
+		return -1;
+
+	chunk = g_malloc (chunk_size);
+	pos = start_offset;
+
+	while (pos < self->file_size) {
+		gssize nread = cache_read (self, pos, chunk, chunk_size);
+		if (nread <= 0) break;
+
+		const guint8 *found = mem_icasefind (chunk, (gsize) nread, ndl, nlen);
+		if (found) {
+			gint64 match = pos + (gint64) (found - chunk);
+			g_free (chunk);
+			return match;
+		}
+
+		/* Advance, keeping an overlap window to catch cross-boundary matches */
+		gsize advance = ((gsize) nread > overlap) ? (gsize) nread - overlap : 1;
+		pos += (gint64) advance;
+	}
+
+	g_free (chunk);
+	return -1;
+}
+
+/* Scan backward before before_offset; return the last match offset or -1.
+ * Strategy: scan forward from 0 collecting all matches < before_offset,
+ * returning the highest one. */
+static gint64
+search_scan_backward (NemoPagedViewer *self, gint64 before_offset)
+{
+	const guint8 *ndl = (const guint8 *) self->search_needle;
+	gsize nlen = self->search_needle_len;
+	gsize overlap = (nlen > 1) ? nlen - 1 : 0;
+	gsize chunk_size = (gsize) MIN ((gint64) READ_CHUNK, self->file_size);
+	guint8 *chunk;
+	gint64 pos;
+	gint64 last;
+
+	if (nlen == 0 || before_offset <= 0 || self->fd < 0)
+		return -1;
+
+	chunk = g_malloc (chunk_size);
+	pos = 0;
+	last = -1;
+
+	while (pos < before_offset) {
+		gsize max_read = MIN (chunk_size, (gsize)(before_offset - pos) + overlap);
+		gssize nread = cache_read (self, pos, chunk, max_read);
+		if (nread <= 0) break;
+
+		/* Collect all occurrences in this chunk that start before before_offset */
+		const guint8 *p = chunk;
+		gsize remaining = (gsize) nread;
+		while (remaining >= nlen) {
+			const guint8 *found = mem_icasefind (p, remaining, ndl, nlen);
+			if (!found) break;
+			gint64 abs = pos + (gint64) (found - chunk);
+			if (abs < before_offset)
+				last = abs;
+			p = found + 1;
+			remaining = (gsize) ((chunk + nread) - p);
+		}
+
+		gsize advance = ((gsize) nread > overlap) ? (gsize) nread - overlap : 1;
+		pos += (gint64) advance;
+	}
+
+	g_free (chunk);
+	return last;
+}
+
+/* Scroll top_offset so the match is near the top of the viewport. */
+static void
+scroll_to_match (NemoPagedViewer *self)
+{
+	if (self->search_match_offset < 0)
+		return;
+
+	if (self->mode == NEMO_VIEWER_MODE_HEX) {
+		gint64 match_row = self->search_match_offset / HEX_BPL;
+		gint64 top_row   = MAX (0, match_row - 2);
+		self->top_offset = top_row * HEX_BPL;
+	} else {
+		/* Scan back through the file to find a line ~3 above the match,
+		 * so the matched line appears with a couple of lines of context. */
+		gint64 pos = self->search_match_offset;
+		gsize scan_back = (gsize) MIN (pos, (gint64) SCAN_BUF);
+		gint64 new_top = 0;
+
+		if (scan_back > 0) {
+			guint8 *buf = g_malloc (scan_back);
+			gssize nread = cache_read (self, pos - (gint64) scan_back, buf, scan_back);
+			if (nread > 0) {
+				const guint8 *p = (const guint8 *) buf + nread - 1;
+				int nl = 0;
+				while (p >= buf) {
+					if (*p == '\n' && ++nl >= 3) break;
+					p--;
+				}
+				new_top = (nl >= 3)
+					? pos - (gint64) scan_back + (gint64) (p - buf) + 1
+					: 0;
+			}
+			g_free (buf);
+		}
+		self->top_offset = MAX (0, new_top);
+	}
+
+	update_scrollbar (self);
+	gtk_widget_queue_draw (self->drawing_area);
+}
 
 /* ================================================================== */
 /*                          PAGE CACHE                                */
@@ -329,6 +491,7 @@ draw_text_mode (NemoPagedViewer *self, cairo_t *cr, PangoLayout *layout,
 	int y = MARGIN_V;
 	int lines_drawn = 0;
 	gsize pos = 0;
+	gint64 line_byte_offset;      /* absolute file offset of current line start */
 
 	gsize chunk_size = (gsize) MIN ((gint64) READ_CHUNK,
 	                                self->file_size - self->top_offset);
@@ -340,6 +503,8 @@ draw_text_mode (NemoPagedViewer *self, cairo_t *cr, PangoLayout *layout,
 		g_free (chunk);
 		return;
 	}
+
+	line_byte_offset = self->top_offset;
 
 	while (lines_drawn < self->vis_lines && pos < (gsize) nread) {
 		/* Find end of line */
@@ -354,12 +519,43 @@ draw_text_mode (NemoPagedViewer *self, cairo_t *cr, PangoLayout *layout,
 		                                 (gssize) line_len);
 
 		pango_layout_set_text (layout, safe, -1);
+
+		/* Highlight the search match if it falls on this line */
+		if (self->search_active && self->search_match_offset >= 0 &&
+		    self->search_match_offset >= line_byte_offset &&
+		    self->search_match_offset < line_byte_offset + (gint64) line_len) {
+			gsize match_in_line = (gsize)(self->search_match_offset - line_byte_offset);
+			gsize match_end = MIN (match_in_line + self->search_needle_len,
+			                      strlen (safe));
+
+			PangoAttrList *attrs = pango_attr_list_new ();
+
+			/* Yellow background (#FFD700 in 16-bit: 0xFFFF, 0xD700, 0x0000) */
+			PangoAttribute *bg = pango_attr_background_new (0xFFFF, 0xD700, 0x0000);
+			bg->start_index = (guint) match_in_line;
+			bg->end_index   = (guint) match_end;
+			pango_attr_list_insert (attrs, bg);
+
+			/* Black foreground on yellow */
+			PangoAttribute *fg_attr = pango_attr_foreground_new (0, 0, 0);
+			fg_attr->start_index = (guint) match_in_line;
+			fg_attr->end_index   = (guint) match_end;
+			pango_attr_list_insert (attrs, fg_attr);
+
+			pango_layout_set_attributes (layout, attrs);
+			pango_attr_list_unref (attrs);
+		}
+
 		cairo_move_to (cr, MARGIN_H, y);
 		pango_cairo_show_layout (cr, layout);
+
+		/* Always reset attributes so the next line starts clean */
+		pango_layout_set_attributes (layout, NULL);
 
 		g_free (safe);
 
 		y += self->char_h;
+		line_byte_offset += (gint64)(line_len + 1);  /* +1 for the '\n' */
 		pos = line_end + 1;    /* skip '\n' */
 		lines_drawn++;
 	}
@@ -421,6 +617,21 @@ draw_hex_mode (NemoPagedViewer *self, cairo_t *cr, PangoLayout *layout,
 		line_buf[off] = '\0';
 
 		pango_layout_set_text (layout, line_buf, off);
+
+		/* Search match highlight: draw a yellow tint behind the matched row */
+		if (self->search_active && self->search_match_offset >= 0) {
+			gint64 row_abs = self->top_offset + (gint64) pos;
+			if (self->search_match_offset >= row_abs &&
+			    self->search_match_offset < row_abs + (gint64) row_len) {
+				cairo_save (cr);
+				cairo_set_source_rgba (cr, 1.0, 0.85, 0.0, 0.35);
+				cairo_rectangle (cr, 0.0, (double) y,
+				                 (double) width, (double) self->char_h);
+				cairo_fill (cr);
+				cairo_restore (cr);
+			}
+		}
+
 		cairo_move_to (cr, MARGIN_H, y);
 		pango_cairo_show_layout (cr, layout);
 
@@ -701,6 +912,12 @@ nemo_paged_viewer_init (NemoPagedViewer *self)
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (self),
 	                                GTK_ORIENTATION_HORIZONTAL);
 
+	/* Search state */
+	self->search_needle = NULL;
+	self->search_needle_len = 0;
+	self->search_match_offset = -1;
+	self->search_active = FALSE;
+
 	/* Monospace font */
 	self->font_desc = pango_font_description_from_string ("Monospace 10");
 
@@ -747,6 +964,9 @@ nemo_paged_viewer_finalize (GObject *object)
 	NemoPagedViewer *self = NEMO_PAGED_VIEWER (object);
 
 	nemo_paged_viewer_close_file (self);
+
+	g_free (self->search_needle);
+	self->search_needle = NULL;
 
 	if (self->font_desc != NULL)
 		pango_font_description_free (self->font_desc);
@@ -828,6 +1048,7 @@ nemo_paged_viewer_close_file (NemoPagedViewer *self)
 
 	self->file_size = 0;
 	self->top_offset = 0;
+	self->search_match_offset = -1;   /* reset match but keep needle for auto-search */
 
 	update_scrollbar (self);
 	gtk_widget_queue_draw (self->drawing_area);
@@ -848,4 +1069,113 @@ nemo_paged_viewer_set_mode (NemoPagedViewer *self,
 
 	update_scrollbar (self);
 	gtk_widget_queue_draw (self->drawing_area);
+}
+
+/* ================================================================== */
+/*                       SEARCH PUBLIC API                            */
+/* ================================================================== */
+
+void
+nemo_paged_viewer_search_set_needle (NemoPagedViewer *self,
+                                      const gchar     *needle)
+{
+	g_return_if_fail (NEMO_IS_PAGED_VIEWER (self));
+
+	g_free (self->search_needle);
+	self->search_needle = NULL;
+	self->search_needle_len = 0;
+	self->search_match_offset = -1;
+	self->search_active = FALSE;
+
+	if (needle != NULL && needle[0] != '\0') {
+		self->search_needle       = g_ascii_strdown (needle, -1);
+		self->search_needle_len   = strlen (self->search_needle);
+		self->search_active       = TRUE;
+	}
+
+	gtk_widget_queue_draw (self->drawing_area);
+}
+
+gboolean
+nemo_paged_viewer_search_find_next (NemoPagedViewer *self)
+{
+	gint64 start_from;
+	gint64 found;
+
+	g_return_val_if_fail (NEMO_IS_PAGED_VIEWER (self), FALSE);
+
+	if (!self->search_active || self->fd < 0)
+		return FALSE;
+
+	/* Start just after the current match, or from the current top if no match */
+	start_from = (self->search_match_offset >= 0)
+		? self->search_match_offset + 1
+		: self->top_offset;
+
+	found = search_scan_forward (self, start_from);
+
+	if (found < 0 && start_from > 0) {
+		/* Wrap around from the beginning */
+		found = search_scan_forward (self, 0);
+	}
+
+	if (found >= 0) {
+		self->search_match_offset = found;
+		scroll_to_match (self);
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+gboolean
+nemo_paged_viewer_search_find_prev (NemoPagedViewer *self)
+{
+	gint64 before;
+	gint64 found;
+
+	g_return_val_if_fail (NEMO_IS_PAGED_VIEWER (self), FALSE);
+
+	if (!self->search_active || self->fd < 0)
+		return FALSE;
+
+	before = (self->search_match_offset >= 0)
+		? self->search_match_offset
+		: self->top_offset;
+
+	found = search_scan_backward (self, before);
+
+	if (found < 0) {
+		/* Wrap around from the end */
+		found = search_scan_backward (self, self->file_size);
+	}
+
+	if (found >= 0) {
+		self->search_match_offset = found;
+		scroll_to_match (self);
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+void
+nemo_paged_viewer_search_clear (NemoPagedViewer *self)
+{
+	g_return_if_fail (NEMO_IS_PAGED_VIEWER (self));
+
+	g_free (self->search_needle);
+	self->search_needle      = NULL;
+	self->search_needle_len  = 0;
+	self->search_match_offset = -1;
+	self->search_active      = FALSE;
+
+	gtk_widget_queue_draw (self->drawing_area);
+}
+
+gboolean
+nemo_paged_viewer_search_has_match (NemoPagedViewer *self)
+{
+	g_return_val_if_fail (NEMO_IS_PAGED_VIEWER (self), FALSE);
+	return self->search_active && (self->search_match_offset >= 0);
 }

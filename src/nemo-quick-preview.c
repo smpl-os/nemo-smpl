@@ -27,6 +27,7 @@
 #include "nemo-image-viewer.h"
 #include "nemo-preview-utils.h"
 #include "nemo-dir-analyzer.h"
+#include "nemo-keybindings.h"
 
 #include <glib/gi18n.h>
 #include <string.h>
@@ -111,6 +112,14 @@ struct _NemoQuickPreview {
 	GtkWidget   *prev_button;
 	GtkWidget   *next_button;
 	GtkWidget   *counter_label;
+
+	/* In-window search bar (text/hex modes) */
+	GtkWidget   *search_bar;
+	GtkWidget   *search_entry;
+	GtkWidget   *search_prev_button;
+	GtkWidget   *search_next_button;
+	GtkWidget   *search_match_label;
+	GtkWidget   *search_header_btn;  /* header-bar shortcut button */
 };
 
 G_DEFINE_TYPE (NemoQuickPreview, nemo_quick_preview, GTK_TYPE_WINDOW)
@@ -125,6 +134,100 @@ static NemoQuickPreview *_instance = NULL;
 static void     preview_clear          (NemoQuickPreview *self);
 static void     preview_show_paged     (NemoQuickPreview *self, GFile *file, NemoViewerMode mode);
 static void     preview_show_image     (NemoQuickPreview *self, GFile *file);
+
+/* ------------------------------------------------------------------ */
+/* Search helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Returns TRUE if the given key event matches the GSettings accelerator
+ * stored under settings_key in org.nemo.keybindings.
+ */
+static gboolean
+key_matches (const GdkEventKey *event, const gchar *settings_key)
+{
+	g_autofree gchar *accel = NULL;
+	guint key;
+	GdkModifierType mods, state;
+
+	if (nemo_keybinding_settings == NULL)
+		return FALSE;
+
+	accel = g_settings_get_string (nemo_keybinding_settings, settings_key);
+	if (accel == NULL || accel[0] == '\0')
+		return FALSE;
+
+	gtk_accelerator_parse (accel, &key, &mods);
+	if (key == 0)
+		return FALSE;
+
+	state = event->state & gtk_accelerator_get_default_mod_mask ();
+	return event->keyval == key && state == mods;
+}
+
+static void
+update_search_match_label (NemoQuickPreview *self, gboolean found)
+{
+	const gchar *needle;
+	GtkStyleContext *ctx;
+
+	ctx = gtk_widget_get_style_context (self->search_match_label);
+	needle = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
+
+	if (!needle || needle[0] == '\0' || found) {
+		gtk_label_set_text (GTK_LABEL (self->search_match_label), "");
+		gtk_style_context_remove_class (ctx, "search-no-match");
+	} else {
+		gtk_label_set_text (GTK_LABEL (self->search_match_label),
+		                    _("No matches"));
+		gtk_style_context_add_class (ctx, "search-no-match");
+	}
+}
+
+static void
+on_search_changed (GtkSearchEntry *entry, gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+	const gchar *text;
+	gboolean found;
+
+	if (self->mode != PREVIEW_TEXT && self->mode != PREVIEW_HEX)
+		return;
+
+	text = gtk_entry_get_text (GTK_ENTRY (entry));
+	nemo_paged_viewer_search_set_needle (self->paged_viewer, text);
+
+	if (text && text[0] != '\0') {
+		found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+		update_search_match_label (self, found);
+	} else {
+		gtk_label_set_text (GTK_LABEL (self->search_match_label), "");
+	}
+}
+
+static void
+on_search_prev_clicked (GtkButton *button, gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+	gboolean found = nemo_paged_viewer_search_find_prev (self->paged_viewer);
+	update_search_match_label (self, found);
+}
+
+static void
+on_search_next_clicked (GtkButton *button, gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+	gboolean found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+	update_search_match_label (self, found);
+}
+
+static void
+on_search_header_btn_clicked (GtkButton *button, gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), TRUE);
+	gtk_widget_grab_focus (self->search_entry);
+}
 
 #ifdef HAVE_GSTREAMER
 static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
@@ -144,7 +247,7 @@ static void     navigate_to_offset     (NemoQuickPreview *self, gint offset);
 static void     update_navigation_ui   (NemoQuickPreview *self);
 
 /* ------------------------------------------------------------------ */
-/* Key press — Esc dismisses                                          */
+/* Key press — search bindings, navigation, media controls            */
 /* ------------------------------------------------------------------ */
 
 static gboolean
@@ -152,9 +255,35 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (widget);
 
+	/* ── Search key bindings (text/hex modes only) ── */
+	if (self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX) {
+		if (key_matches (event, "quick-preview-search")) {
+			gtk_search_bar_set_search_mode (
+				GTK_SEARCH_BAR (self->search_bar), TRUE);
+			gtk_widget_grab_focus (self->search_entry);
+			return GDK_EVENT_STOP;
+		}
+		if (key_matches (event, "quick-preview-search-next")) {
+			gboolean found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+			update_search_match_label (self, found);
+			return GDK_EVENT_STOP;
+		}
+		if (key_matches (event, "quick-preview-search-prev")) {
+			gboolean found = nemo_paged_viewer_search_find_prev (self->paged_viewer);
+			update_search_match_label (self, found);
+			return GDK_EVENT_STOP;
+		}
+	}
+
 	switch (event->keyval) {
 	case GDK_KEY_Escape:
-		nemo_quick_preview_dismiss (self);
+		if (gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
+			gtk_search_bar_set_search_mode (
+				GTK_SEARCH_BAR (self->search_bar), FALSE);
+			gtk_label_set_text (GTK_LABEL (self->search_match_label), "");
+		} else {
+			nemo_quick_preview_dismiss (self);
+		}
 		return GDK_EVENT_STOP;
 	case GDK_KEY_Left:
 		navigate_to_offset (self, -1);
@@ -175,10 +304,13 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		return GDK_EVENT_STOP;
 	case GDK_KEY_f:
 	case GDK_KEY_F:
-		if (gdk_window_get_state (gtk_widget_get_window (widget)) & GDK_WINDOW_STATE_FULLSCREEN)
-			gtk_window_unfullscreen (GTK_WINDOW (self));
-		else
-			gtk_window_fullscreen (GTK_WINDOW (self));
+		/* Only toggle fullscreen when Ctrl is NOT held (Ctrl+F triggers search) */
+		if (!(event->state & GDK_CONTROL_MASK)) {
+			if (gdk_window_get_state (gtk_widget_get_window (widget)) & GDK_WINDOW_STATE_FULLSCREEN)
+				gtk_window_unfullscreen (GTK_WINDOW (self));
+			else
+				gtk_window_fullscreen (GTK_WINDOW (self));
+		}
 		return GDK_EVENT_STOP;
 #ifdef HAVE_GSTREAMER
 	case GDK_KEY_comma:   /* < — previous frame */
@@ -360,12 +492,76 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 		gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), fs_button);
 	}
 
+	/* Search button in header bar — shown only for text/hex modes */
+	self->search_header_btn = gtk_button_new_from_icon_name (
+		"edit-find-symbolic", GTK_ICON_SIZE_BUTTON);
+	gtk_widget_set_tooltip_text (self->search_header_btn, _("Search in file (Ctrl+F)"));
+	g_signal_connect (self->search_header_btn, "clicked",
+	                  G_CALLBACK (on_search_header_btn_clicked), self);
+	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->search_header_btn);
+	gtk_widget_hide (self->search_header_btn);
+
 	/* Stack for switching between views */
 	self->stack = gtk_stack_new ();
 	gtk_stack_set_transition_type (GTK_STACK (self->stack),
 	                               GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_set_transition_duration (GTK_STACK (self->stack), 100);
-	gtk_container_add (GTK_CONTAINER (self), self->stack);
+	/* Outer box: stack fills top, search bar pinned to bottom */
+	{
+		GtkWidget *outer_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+		gtk_container_add (GTK_CONTAINER (self), outer_box);
+		gtk_box_pack_start (GTK_BOX (outer_box), self->stack, TRUE, TRUE, 0);
+
+		/* Search bar */
+		self->search_bar = gtk_search_bar_new ();
+		gtk_search_bar_set_show_close_button (
+			GTK_SEARCH_BAR (self->search_bar), FALSE);
+
+		{
+			GtkWidget *hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+
+			self->search_entry = gtk_search_entry_new ();
+			gtk_widget_set_size_request (self->search_entry, 240, -1);
+			gtk_widget_set_tooltip_text (self->search_entry, _("Search in file"));
+			g_signal_connect (self->search_entry, "search-changed",
+			                  G_CALLBACK (on_search_changed), self);
+			gtk_box_pack_start (GTK_BOX (hbox), self->search_entry, FALSE, FALSE, 0);
+			gtk_widget_show (self->search_entry);
+
+			self->search_prev_button = gtk_button_new_from_icon_name (
+				"go-up-symbolic", GTK_ICON_SIZE_SMALL_TOOLBAR);
+			gtk_button_set_relief (GTK_BUTTON (self->search_prev_button), GTK_RELIEF_NONE);
+			gtk_widget_set_tooltip_text (self->search_prev_button, _("Previous match (Shift+F3)"));
+			g_signal_connect (self->search_prev_button, "clicked",
+			                  G_CALLBACK (on_search_prev_clicked), self);
+			gtk_box_pack_start (GTK_BOX (hbox), self->search_prev_button, FALSE, FALSE, 0);
+			gtk_widget_show (self->search_prev_button);
+
+			self->search_next_button = gtk_button_new_from_icon_name (
+				"go-down-symbolic", GTK_ICON_SIZE_SMALL_TOOLBAR);
+			gtk_button_set_relief (GTK_BUTTON (self->search_next_button), GTK_RELIEF_NONE);
+			gtk_widget_set_tooltip_text (self->search_next_button, _("Next match (F3)"));
+			g_signal_connect (self->search_next_button, "clicked",
+			                  G_CALLBACK (on_search_next_clicked), self);
+			gtk_box_pack_start (GTK_BOX (hbox), self->search_next_button, FALSE, FALSE, 0);
+			gtk_widget_show (self->search_next_button);
+
+			self->search_match_label = gtk_label_new ("");
+			gtk_widget_set_margin_start (self->search_match_label, 6);
+			gtk_box_pack_start (GTK_BOX (hbox), self->search_match_label, FALSE, FALSE, 0);
+			gtk_widget_show (self->search_match_label);
+
+			gtk_widget_show (hbox);
+			gtk_container_add (GTK_CONTAINER (self->search_bar), hbox);
+		}
+
+		gtk_search_bar_connect_entry (GTK_SEARCH_BAR (self->search_bar),
+		                              GTK_ENTRY (self->search_entry));
+		gtk_box_pack_end (GTK_BOX (outer_box), self->search_bar, FALSE, FALSE, 0);
+		/* search_bar is hidden until a text/hex file is loaded */
+
+		gtk_widget_show (outer_box);
+	}
 
 	/* --- Paged viewer (text + hex, handles files of any size) --- */
 	self->paged_viewer = nemo_paged_viewer_new ();
@@ -672,6 +868,9 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 
 	preview_clear (self);
 
+	/* Hide search button; preview_show_paged() re-shows it for text/hex */
+	gtk_widget_hide (self->search_header_btn);
+
 	/* Query file info */
 	info = g_file_query_info (file,
 	                          G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
@@ -707,6 +906,7 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 		self->mode = PREVIEW_DIR;
 		gtk_stack_set_visible_child_name (
 			GTK_STACK (self->stack), "directory");
+		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 
 		g_free (path);
 		g_object_unref (info);
@@ -723,10 +923,12 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 
 	/* Decide which view to use */
 	if (nemo_preview_mime_is_image (content_type)) {
+		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 		preview_show_image (self, file);
 	}
 #ifdef HAVE_GSTREAMER
 	else if (nemo_preview_mime_is_media (content_type)) {
+		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 		preview_show_media (self, file);
 	}
 #endif
@@ -788,6 +990,19 @@ preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 
 	self->mode = (mode == NEMO_VIEWER_MODE_TEXT) ? PREVIEW_TEXT : PREVIEW_HEX;
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "paged");
+
+	/* Show the search header button now that we have a searchable file */
+	gtk_widget_show (self->search_header_btn);
+
+	/* If a search is already active, re-run it on the new file */
+	if (gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
+		const gchar *text = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
+		if (text && text[0] != '\0') {
+			nemo_paged_viewer_search_set_needle (self->paged_viewer, text);
+			gboolean found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+			update_search_match_label (self, found);
+		}
+	}
 }
 
 /* ------------------------------------------------------------------ */

@@ -66,6 +66,14 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "switch-pane",           "<Actions>/ShellActions/SplitViewNextPane",  N_("Switch to Other Pane"),       N_("Window"), "F6",                        NULL, NULL },
 	{ "same-location-pane",    "<Actions>/ShellActions/SplitViewSameLocation", N_("Same Location as Other Pane"), N_("Window"), "<Alt>s",                NULL, NULL },
 
+	/* Quick Preview — internal keys handled directly by the preview window's
+	 * key-press-event handler.  accel_path and binding_set are both NULL so
+	 * apply_keybinding() skips them; the values are read at runtime via
+	 * nemo_keybinding_settings from within nemo-quick-preview.c. */
+	{ "quick-preview-search",      NULL, N_("Open Search in Quick Preview"), N_("Quick Preview"), "<Primary>f", NULL, NULL },
+	{ "quick-preview-search-next", NULL, N_("Next Search Match"),            N_("Quick Preview"), "F3",          NULL, NULL },
+	{ "quick-preview-search-prev", NULL, N_("Previous Search Match"),        N_("Quick Preview"), "<Shift>F3",   NULL, NULL },
+
 	/* Tabs */
 	{ "new-tab",               "<Actions>/ShellActions/New Tab",            N_("New Tab"),                    N_("Tabs"), "<Control>t",                   NULL, NULL },
 	{ "previous-tab",          "<Actions>/ShellActions/TabsPrevious",       N_("Previous Tab"),               N_("Tabs"), "<Control>Page_Up",             NULL, NULL },
