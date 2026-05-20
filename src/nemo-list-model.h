@@ -147,4 +147,9 @@ void              nemo_list_model_add_parent_entry             (NemoListModel *m
 void              nemo_list_model_remove_parent_entry          (NemoListModel *model);
 gboolean          nemo_list_model_is_parent_entry              (NemoListModel *model, GtkTreeIter *iter);
 #endif /* NEMO_SMPL */
+
+void              nemo_list_model_set_filter_active           (NemoListModel *model,
+                                                               gboolean       active);
+gboolean          nemo_list_model_get_filter_active           (NemoListModel *model);
+
 #endif /* NEMO_LIST_MODEL_H */

@@ -71,6 +71,11 @@ struct NemoWindowSlot {
     GtkWidget *cache_bar;
     GtkWidget *no_search_results_box;
     GtkWidget *mtp_unlock_box;
+    GtkWidget *no_results_label;
+
+    GtkWidget *filter_bar;
+    GtkWidget *filter_bar_revealer;
+    gulong filter_activate_handler_id;
 
 	guint set_status_timeout_id;
 	guint loading_timeout_id;
@@ -193,4 +198,7 @@ void nemo_window_slot_check_bad_cache_bar (NemoWindowSlot *slot);
 
 void nemo_window_slot_set_show_thumbnails (NemoWindowSlot *slot,
                                            gboolean show_thumbnails);
+
+void nemo_window_slot_hide_filter_bar (NemoWindowSlot *slot);
+
 #endif /* NEMO_WINDOW_SLOT_H */
