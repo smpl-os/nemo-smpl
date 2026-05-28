@@ -75,6 +75,7 @@
 #include <libnemo-private/nemo-file-dnd.h>
 #include <libnemo-private/nemo-file-operations.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-malloc-utils.h>
 #include <libnemo-private/nemo-file-private.h>
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-link.h>
@@ -4071,6 +4072,8 @@ done_loading_callback (NemoDirectory *directory,
 		unschedule_display_of_pending_files (view);
 		schedule_timeout_display_of_pending_files (view, UPDATE_INTERVAL_MIN);
 	}
+
+	nemo_schedule_heap_trim ();
 }
 
 static void
