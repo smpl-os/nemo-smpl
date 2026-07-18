@@ -84,6 +84,18 @@ typedef enum
 /* Quick renames with two single clicks and pause in-between*/
 #define NEMO_PREFERENCES_CLICK_TO_RENAME "quick-renames-with-pause-in-between"
 
+#ifdef NEMO_SMPL
+/* smplOS: interactive-search / type-ahead mode */
+#define NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE "interactive-search-mode"
+
+typedef enum
+{
+	NEMO_INTERACTIVE_SEARCH_MODE_PREFIX    = 0,
+	NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING = 1,
+	NEMO_INTERACTIVE_SEARCH_MODE_FILTER    = 2
+} NemoInteractiveSearchMode;
+#endif /* NEMO_SMPL */
+
 /* Activating executable text files */
 #define NEMO_PREFERENCES_EXECUTABLE_TEXT_ACTIVATION		"executable-text-activation"
 

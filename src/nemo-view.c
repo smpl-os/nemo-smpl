@@ -11077,6 +11077,22 @@ nemo_view_activate_filter (NemoView *view, GdkEventKey *event)
         return FALSE;
     }
 
+#ifdef NEMO_SMPL
+    /* Only the "filter" mode should trigger the fzy filter bar.
+     * In "prefix" or "substring" modes, return FALSE so the caller falls
+     * back to GTK's built-in interactive search (list view) or the icon
+     * container's own search-iter (icon view). Both honor the same pref
+     * for match strategy. */
+    {
+        NemoInteractiveSearchMode mode =
+            g_settings_get_enum (nemo_preferences,
+                                 NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
+        if (mode != NEMO_INTERACTIVE_SEARCH_MODE_FILTER) {
+            return FALSE;
+        }
+    }
+#endif /* NEMO_SMPL */
+
     if ((event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK)) != 0) {
         return FALSE;
     }

@@ -225,7 +225,20 @@ list_view_search_equal_func (GtkTreeModel *model,
 		case_normalized_name = g_utf8_casefold (normalized_name, -1);
 
 		if (case_normalized_key != NULL && case_normalized_name != NULL) {
+#ifdef NEMO_SMPL
+			NemoInteractiveSearchMode mode =
+				g_settings_get_enum (nemo_preferences,
+						     NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
+
+			if (mode == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
+				is_match = strstr (case_normalized_name, case_normalized_key) != NULL;
+			} else {
+				/* prefix mode (vanilla). filter mode short-circuits before we get here. */
+				is_match = g_str_has_prefix (case_normalized_name, case_normalized_key);
+			}
+#else
 			is_match = strstr (case_normalized_name, case_normalized_key) != NULL;
+#endif /* NEMO_SMPL */
 		}
 	}
 

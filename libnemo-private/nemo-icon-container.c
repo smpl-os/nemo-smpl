@@ -3877,9 +3877,30 @@ nemo_icon_container_search_iter (NemoIconContainer *container,
 			continue;
 		}
 
+#ifdef NEMO_SMPL
+		{
+			NemoInteractiveSearchMode mode =
+				g_settings_get_enum (nemo_preferences,
+						     NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
+			gboolean matched;
+
+			if (mode == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
+				matched = (strstr (case_normalized_name, case_normalized_key) != NULL);
+			} else {
+				/* prefix (vanilla) or filter (this path shouldn't fire in filter mode) */
+				matched = (strncmp (case_normalized_key, case_normalized_name,
+						    strlen (case_normalized_key)) == 0);
+			}
+
+			if (matched) {
+				count++;
+			}
+		}
+#else
 		if (strstr (case_normalized_name, case_normalized_key) != NULL) {
 			count++;
 		}
+#endif /* NEMO_SMPL */
 
 		g_free (case_normalized_name);
 		g_free (name);
@@ -4341,8 +4362,13 @@ key_press_event (GtkWidget *widget,
 
 	    if (!nemo_icon_container_get_is_desktop (container)) {
 	        g_signal_emit (container, signals[CHECK_FILTER_EVENT], 0, (GdkEvent *) event, &handled);
-	    } else {
-	        /* Desktop: old interactive search behavior */
+	    }
+
+	    /* If the filter check didn't handle the key (e.g. NEMO_SMPL prefix or
+	     * substring mode, or desktop container), fall through to the old
+	     * interactive-search behavior below. */
+	    if (!handled) {
+	        /* Old interactive search behavior (also used by desktop). */
 	        GdkEvent *new_event;
 	        GdkWindow *window;
 	        char *old_text;
