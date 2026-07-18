@@ -75,6 +75,7 @@
 #include <libnemo-private/nemo-file-dnd.h>
 #include <libnemo-private/nemo-file-operations.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-malloc-utils.h>
 #include <libnemo-private/nemo-file-private.h>
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-link.h>
@@ -169,7 +170,6 @@ enum {
 	SELECTION_CHANGED,
 	TRASH,
 	DELETE,
-    SHOW_DROP_BAR,
 	LAST_SIGNAL
 };
 
@@ -4072,6 +4072,8 @@ done_loading_callback (NemoDirectory *directory,
 		unschedule_display_of_pending_files (view);
 		schedule_timeout_display_of_pending_files (view, UPDATE_INTERVAL_MIN);
 	}
+
+	nemo_schedule_heap_trim ();
 }
 
 static void
@@ -8452,8 +8454,8 @@ static const GtkActionEntry directory_view_entries[] = {
   /* label, accelerator */       N_("_Delete"), NULL,
   /* tooltip */                  N_("Delete each selected item, without moving to the Trash"),
 				 G_CALLBACK (action_delete_callback) },
-  /* name, stock id */         { "Restore From Trash", NULL,
-  /* label, accelerator */       N_("_Restore"), NULL,
+  /* name, stock id */         { NEMO_ACTION_RESTORE_FROM_TRASH, NULL,
+  /* label, accelerator */       N_("_Restore to original location"), NULL,
 				 NULL,
                  G_CALLBACK (action_restore_from_trash_callback) },
  /* name, stock id */          { "Undo", "xsi-edit-undo-symbolic",
@@ -8558,7 +8560,7 @@ static const GtkActionEntry directory_view_entries[] = {
   /* tooltip */                  N_("Delete this folder, without moving to the Trash"),
 				 G_CALLBACK (action_location_delete_callback) },
   /* name, stock id */         { NEMO_ACTION_LOCATION_RESTORE_FROM_TRASH, NULL,
-  /* label, accelerator */       N_("_Restore"), NULL, NULL,
+  /* label, accelerator */       N_("_Restore to original location"), NULL, NULL,
 				 G_CALLBACK (action_location_restore_from_trash_callback) },
 
   /* name, stock id */         { "Location Mount Volume", "xsi-media-mount-symbolic",
@@ -11318,14 +11320,6 @@ nemo_view_class_init (NemoViewClass *klass)
 			      g_signal_accumulator_true_handled, NULL,
 			      g_cclosure_marshal_generic,
 			      G_TYPE_BOOLEAN, 0);
-    signals[SHOW_DROP_BAR] =
-        g_signal_new ("show-drop-bar",
-                  G_TYPE_FROM_CLASS (klass),
-                  G_SIGNAL_RUN_LAST,
-                  0,
-                  NULL, NULL,
-                  g_cclosure_marshal_VOID__VOID,
-                  G_TYPE_NONE, 0);
 
 	klass->get_selected_icon_locations = real_get_selected_icon_locations;
 	klass->is_read_only = real_is_read_only;
