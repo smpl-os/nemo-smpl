@@ -104,11 +104,11 @@ static gboolean save_of_accel_map_requested = FALSE;
 
 static GtkCssProvider *mandatory_css_provider = NULL;
 
-#ifdef SMPLOS
+#ifdef NEMO_SMPL
 /* smplOS: per-theme CSS override loaded from ~/.config/smplos/nemo-theme.css */
 static GtkCssProvider *smplos_css_provider    = NULL;
 static GFileMonitor   *smplos_css_monitor     = NULL;
-#endif /* SMPLOS */
+#endif /* NEMO_SMPL */
 
 static gboolean
 css_provider_load_from_resource (GtkCssProvider *provider,
@@ -153,7 +153,7 @@ load_file_contents_from_resource (const char     *resource_path,
    return retval;
 }
 
-#ifdef SMPLOS
+#ifdef NEMO_SMPL
 /* smplOS theme loader ------------------------------------------------
  * Loads ~/.config/smplos/nemo-theme.css at GTK_STYLE_PROVIDER_PRIORITY_USER
  * (800), which overrides everything including Adwaita and nemo's own CSS.
@@ -297,7 +297,7 @@ load_smplos_theme (void)
     g_object_unref (css_file);
     g_free (css_path);
 }
-#endif /* SMPLOS */
+#endif /* NEMO_SMPL */
 
 /* ------------------------------------------------------------------ */
 
@@ -476,12 +476,12 @@ init_icons_and_styles (void)
     add_css_provider_at_priority ("/org/nemo/nemo-style-application.css",
                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-#ifdef SMPLOS
+#ifdef NEMO_SMPL
     /* smplOS: load per-theme accent/color overrides at USER priority (800),
      * above Adwaita and nemo's own CSS.  Also installs a GFileMonitor for
      * live reload when theme-set rewrites the file. */
     load_smplos_theme ();
-#endif /* SMPLOS */
+#endif /* NEMO_SMPL */
 
     GtkSettings *gtk_settings = gtk_settings_get_default ();
     /* We create our own 'runtime theme' when we encounter one that doesn't
@@ -810,10 +810,10 @@ nemo_application_quit_mainloop (GApplication *app)
     save_accel_map (NULL);
     g_object_unref (NEMO_APPLICATION (app)->undo_manager);
     g_clear_object (&mandatory_css_provider);
-#ifdef SMPLOS
+#ifdef NEMO_SMPL
     g_clear_object (&smplos_css_monitor);
     g_clear_object (&smplos_css_provider);
-#endif /* SMPLOS */
+#endif /* NEMO_SMPL */
 
     nemo_application_notify_unmount_done (NEMO_APPLICATION (app), NULL);
 

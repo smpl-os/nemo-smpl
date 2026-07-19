@@ -42,12 +42,10 @@ endforeach
 
 conf.set10('HAVE_MALLOPT', cc.has_function('mallopt', prefix: '#include <malloc.h>'))
 
-# smplOS feature toggle. When on, `NEMO_SMPL` and `SMPLOS` are both defined so
-# smplOS-specific hunks compile in. When off, we build a near-vanilla Nemo,
-# which is useful for bisecting upstream regressions and for eyeballing what
-# our fork actually adds. New feature code should be guarded with
-# `#ifdef NEMO_SMPL`; the legacy `SMPLOS` symbol is kept in lockstep for now
-# and will be phased out.
+# smplOS feature toggle. When on, `NEMO_SMPL` is defined so smplOS-specific
+# hunks compile in. When off, we build a near-vanilla Nemo, which is useful
+# for bisecting upstream regressions and for eyeballing what our fork
+# actually adds. All fork code paths should be guarded with `#ifdef NEMO_SMPL`.
 smpl_features_enabled = get_option('smpl_features')
 if smpl_features_enabled
   conf.set('NEMO_SMPL', true)
@@ -58,14 +56,6 @@ add_global_arguments([
   ],
   language: 'c',
 )
-
-if smpl_features_enabled
-  add_global_arguments([
-      '-DSMPLOS',  # legacy smplOS feature flag; being migrated to NEMO_SMPL
-    ],
-    language: 'c',
-  )
-endif
 
 if not get_option('deprecated_warnings')
   add_global_arguments([
