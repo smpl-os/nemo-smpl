@@ -33,6 +33,9 @@
 #include "nemo-directory.h"
 #include "nemo-desktop-icon-file.h"
 #include "nemo-global-preferences.h"
+#ifdef NEMO_SMPL
+#include "nemo-smpl-prefs.h"
+#endif
 #include "nemo-icon-private.h"
 #include "nemo-lib-self-check-functions.h"
 #include "nemo-selection-canvas-item.h"
@@ -3879,12 +3882,9 @@ nemo_icon_container_search_iter (NemoIconContainer *container,
 
 #ifdef NEMO_SMPL
 		{
-			NemoInteractiveSearchMode mode =
-				g_settings_get_enum (nemo_preferences,
-						     NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
 			gboolean matched;
 
-			if (mode == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
+			if (nemo_smpl_interactive_search_mode () == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
 				matched = (strstr (case_normalized_name, case_normalized_key) != NULL);
 			} else {
 				/* prefix (vanilla) or filter (this path shouldn't fire in filter mode) */

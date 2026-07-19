@@ -80,6 +80,9 @@
 #include <libnemo-private/nemo-fzy-utils.h>
 #include <libnemo-private/nemo-file-private.h>
 #include <libnemo-private/nemo-global-preferences.h>
+#ifdef NEMO_SMPL
+#include <libnemo-private/nemo-smpl-prefs.h>
+#endif
 #include <libnemo-private/nemo-link.h>
 #include <libnemo-private/nemo-metadata.h>
 #include <libnemo-private/nemo-recent.h>
@@ -11083,13 +11086,8 @@ nemo_view_activate_filter (NemoView *view, GdkEventKey *event)
      * back to GTK's built-in interactive search (list view) or the icon
      * container's own search-iter (icon view). Both honor the same pref
      * for match strategy. */
-    {
-        NemoInteractiveSearchMode mode =
-            g_settings_get_enum (nemo_preferences,
-                                 NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
-        if (mode != NEMO_INTERACTIVE_SEARCH_MODE_FILTER) {
-            return FALSE;
-        }
+    if (nemo_smpl_interactive_search_mode () != NEMO_INTERACTIVE_SEARCH_MODE_FILTER) {
+        return FALSE;
     }
 #endif /* NEMO_SMPL */
 

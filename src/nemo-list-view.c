@@ -57,6 +57,9 @@
 #include <libnemo-private/nemo-file-utilities.h>
 #include <libnemo-private/nemo-ui-utilities.h>
 #include <libnemo-private/nemo-global-preferences.h>
+#ifdef NEMO_SMPL
+#include <libnemo-private/nemo-smpl-prefs.h>
+#endif
 #include <libnemo-private/nemo-icon-dnd.h>
 #include <libnemo-private/nemo-metadata.h>
 #include <libnemo-private/nemo-module.h>
@@ -226,11 +229,7 @@ list_view_search_equal_func (GtkTreeModel *model,
 
 		if (case_normalized_key != NULL && case_normalized_name != NULL) {
 #ifdef NEMO_SMPL
-			NemoInteractiveSearchMode mode =
-				g_settings_get_enum (nemo_preferences,
-						     NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
-
-			if (mode == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
+			if (nemo_smpl_interactive_search_mode () == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
 				is_match = strstr (case_normalized_name, case_normalized_key) != NULL;
 			} else {
 				/* prefix mode (vanilla). filter mode short-circuits before we get here. */
