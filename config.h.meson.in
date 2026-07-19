@@ -1,9 +1,11 @@
 #pragma once
 // config.h.in.  Generated from configure.ac by autoheader.
 
-// smplOS enhanced features (parent folder entry, media shortcuts, etc.)
-// Comment out or remove to build without smplOS additions.
-#define NEMO_SMPL 1
+// smplOS enhanced features (parent folder entry, media shortcuts, etc.).
+// Controlled by meson option `smpl_features`. When disabled, NEMO_SMPL is
+// left undefined so `#ifdef NEMO_SMPL` blocks compile out. Build a
+// near-vanilla Nemo with `meson setup -Dsmpl_features=false`.
+#mesondefine NEMO_SMPL
 
 // Define to the version of this package.
 #mesondefine VERSION

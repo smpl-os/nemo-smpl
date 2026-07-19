@@ -7,6 +7,8 @@
 
 #include "nemo-smpl-prefs.h"
 
+#ifdef NEMO_SMPL
+
 NemoInteractiveSearchMode
 nemo_smpl_interactive_search_mode (void)
 {
@@ -14,3 +16,5 @@ nemo_smpl_interactive_search_mode (void)
 		g_settings_get_enum (nemo_preferences,
 				     NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE);
 }
+
+#endif /* NEMO_SMPL */

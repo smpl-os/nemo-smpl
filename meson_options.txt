@@ -18,3 +18,5 @@ option('gstreamer', type : 'boolean', value : true,
        description: 'Video preview via GStreamer')
 option('libraw', type : 'boolean', value : true,
        description: 'RAW image preview support (DNG, ARW, CR2, NEF etc.)')
+option('smpl_features', type : 'boolean', value : true,
+       description: 'Enable smplOS-specific features (preview pane, overview, filter view, etc.). Disable to build a near-vanilla Nemo for upstream comparison / bisecting.')

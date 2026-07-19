@@ -12,6 +12,10 @@
 #ifndef NEMO_SMPL_PREFS_H
 #define NEMO_SMPL_PREFS_H
 
+#include <config.h>
+
+#ifdef NEMO_SMPL
+
 #include <glib.h>
 
 #include "nemo-global-preferences.h"
@@ -23,5 +27,7 @@ G_BEGIN_DECLS
 NemoInteractiveSearchMode nemo_smpl_interactive_search_mode (void);
 
 G_END_DECLS
+
+#endif /* NEMO_SMPL */
 
 #endif /* NEMO_SMPL_PREFS_H */
