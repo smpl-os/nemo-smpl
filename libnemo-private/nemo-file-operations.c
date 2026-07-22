@@ -67,6 +67,9 @@
 #include "nemo-desktop-icon-file.h"
 #include "nemo-desktop-link-monitor.h"
 #include "nemo-global-preferences.h"
+#ifdef NEMO_SMPL
+#include "nemo-smpl-prefs.h"
+#endif
 #include "nemo-link.h"
 #include "nemo-desktop-utils.h"
 #include "nemo-trash-monitor.h"
@@ -4637,6 +4640,44 @@ get_target_file_for_display_name (GFile *dir,
 	return dest;
 }
 
+#ifdef NEMO_SMPL
+/* smplOS safe cross-fs copy: build a visible staging file name for `dest`.
+ *
+ * Shape:   "<real basename>.nemo-partial-XXXXXXXX"
+ *          where XXXXXXXX is 8 hex chars of randomness.
+ *
+ * The staging name is visible (no leading dot) and self-describing so that
+ * a user who yanks a USB drive mid-copy or closes Nemo mid-copy sees a file
+ * with an obviously-wrong name and knows not to trust it. The 8 hex chars
+ * make collisions between concurrent copies effectively impossible.
+ *
+ * Returns a newly-owned GFile (caller must g_object_unref), or NULL if the
+ * parent directory cannot be determined.
+ */
+static GFile *
+make_safe_copy_staging_file (GFile *dest)
+{
+	GFile *parent, *staging;
+	char  *basename, *staging_name;
+
+	parent = g_file_get_parent (dest);
+	if (parent == NULL) {
+		return NULL;
+	}
+
+	basename = g_file_get_basename (dest);
+	staging_name = g_strdup_printf ("%s.nemo-partial-%08x",
+	                                basename ? basename : "unnamed",
+	                                g_random_int ());
+	staging = g_file_get_child (parent, staging_name);
+
+	g_free (staging_name);
+	g_free (basename);
+	g_object_unref (parent);
+	return staging;
+}
+#endif /* NEMO_SMPL */
+
 /* Debuting files is non-NULL only for toplevel items */
 static void
 copy_move_file (CopyMoveJob *copy_job,
@@ -4666,6 +4707,16 @@ copy_move_file (CopyMoveJob *copy_job,
 	int unique_name_nr;
 	gboolean handled_invalid_filename;
     gboolean target_is_desktop, source_is_desktop;
+#ifdef NEMO_SMPL
+	/* smplOS safe cross-fs copy: write into staging_dest (visible
+	 * "<name>.nemo-partial-XXXXXXXX"), fsync, then atomically rename
+	 * to `dest`. See gschema org.nemo.preferences safe-cross-fs-copy. */
+	GFile   *write_dest      = NULL;   /* == staging_dest if active, else == dest */
+	GFile   *staging_dest    = NULL;   /* owned; NULL when not active */
+	gboolean safe_copy_active = FALSE;
+#else
+	GFile   *write_dest      = NULL;
+#endif
 
 	job = (CommonJob *)copy_job;
 
@@ -4795,9 +4846,27 @@ copy_move_file (CopyMoveJob *copy_job,
 	pdata.source_info = source_info;
 	pdata.transfer_info = transfer_info;
 
+#ifdef NEMO_SMPL
+	/* Per-retry: decide whether to stage into ".nemo-partial-XXXXXXXX".
+	 * Cross-fs copies only (moves and same-fs renames are already atomic
+	 * / instant). If dest was rewritten by a retry, regenerate the
+	 * staging file so it lives next to the (possibly new) dest. */
+	g_clear_object (&staging_dest);
+	safe_copy_active = FALSE;
+	if (!copy_job->is_move && !same_fs && nemo_smpl_safe_cross_fs_copy ()) {
+		staging_dest = make_safe_copy_staging_file (dest);
+		if (staging_dest != NULL) {
+			safe_copy_active = TRUE;
+		}
+	}
+	write_dest = safe_copy_active ? staging_dest : dest;
+#else
+	write_dest = dest;
+#endif
+
 	/* Enable incremental page cache flushing for cross-filesystem copies
 	 * of regular files (not moves, which are same-fs renames). */
-	pdata.dest = (!copy_job->is_move && !same_fs) ? dest : NULL;
+	pdata.dest = (!copy_job->is_move && !same_fs) ? write_dest : NULL;
 	pdata.dest_fd = -1;
 	pdata.last_flush_offset = 0;
 
@@ -4809,7 +4878,7 @@ copy_move_file (CopyMoveJob *copy_job,
 				   &pdata,
 				   &error);
 	} else {
-		res = g_file_copy (src, dest,
+		res = g_file_copy (src, write_dest,
 				   flags,
 				   job->cancellable,
 				   copy_file_progress_callback,
@@ -4830,6 +4899,60 @@ copy_move_file (CopyMoveJob *copy_job,
 		close (pdata.dest_fd);
 		pdata.dest_fd = -1;
 	}
+
+#ifdef NEMO_SMPL
+	/* smplOS safe cross-fs copy: block until the file is physically on
+	 * disk. sync_file_range(...WRITE) above only *starts* async writeback;
+	 * without this fsync the progress bar hits 100% while data can still
+	 * be sitting in the kernel page cache for tens of seconds on slow
+	 * removable media.
+	 *
+	 * For files smaller than FLUSH_CHUNK_SIZE the progress callback never
+	 * opened a fd on write_dest, so open one here. Any open fd works for
+	 * fsync(2) regardless of access mode. */
+	if (res && safe_copy_active) {
+		int fsync_fd = -1;
+		char *fsync_path = g_file_get_path (write_dest);
+		if (fsync_path != NULL) {
+			fsync_fd = open (fsync_path, O_RDONLY);
+			g_free (fsync_path);
+		}
+		if (fsync_fd >= 0) {
+			if (fsync (fsync_fd) != 0) {
+				int e = errno;
+				g_warning ("safe-copy: fsync of staging file failed: %s",
+				           g_strerror (e));
+				g_clear_error (&error);
+				error = g_error_new (G_IO_ERROR,
+				                     g_io_error_from_errno (e),
+				                     _("Could not flush the file to disk: %s"),
+				                     g_strerror (e));
+				res = FALSE;
+			}
+			close (fsync_fd);
+		}
+	}
+
+	/* smplOS safe cross-fs copy: atomic rename now that data is on disk.
+	 * If the rename fails (very rare on same-fs move), leave the visible
+	 * ".nemo-partial" file in place so the user can inspect it, and
+	 * synthesize a copy failure so the standard error dialog runs. */
+	if (res && safe_copy_active) {
+		GError *ren_err = NULL;
+		GFileCopyFlags ren_flags = overwrite ? G_FILE_COPY_OVERWRITE
+		                                     : G_FILE_COPY_NONE;
+		if (!g_file_move (write_dest, dest, ren_flags,
+		                  job->cancellable, NULL, NULL, &ren_err)) {
+			g_warning ("safe-copy: could not rename staging file into place: %s -> %s: %s",
+			           g_file_peek_path (write_dest),
+			           g_file_peek_path (dest),
+			           ren_err ? ren_err->message : "(no error)");
+			g_clear_error (&error);
+			error = ren_err;   /* transfers ownership to the retry/error path */
+			res = FALSE;
+		}
+	}
+#endif /* NEMO_SMPL */
 
 	if (res) {
 		/* Verify after copy: compare SHA-256 checksums, reading from disk
@@ -4907,6 +5030,9 @@ copy_move_file (CopyMoveJob *copy_job,
 									    src, dest);
 		}
 
+#ifdef NEMO_SMPL
+		g_clear_object (&staging_dest);
+#endif
 		g_object_unref (dest);
 		return;
 	}
@@ -5132,6 +5258,9 @@ copy_move_file (CopyMoveJob *copy_job,
 	}
  out:
 	*skipped_file = TRUE; /* Or aborted, but same-same */
+#ifdef NEMO_SMPL
+	g_clear_object (&staging_dest);
+#endif
 	g_object_unref (dest);
 }
 

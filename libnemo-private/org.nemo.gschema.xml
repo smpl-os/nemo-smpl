@@ -117,6 +117,12 @@
       <summary>Behavior when typing letters inside a folder view</summary>
       <description>Selects how "type-to-find" works in icon and list views. "prefix" is the historical Nemo behavior (select files whose name starts with the typed text). "substring" (smplOS default) selects files whose name contains the typed text anywhere. "filter" uses the upstream 6.7 filter bar with fuzzy (fzy) matching that hides non-matching files.</description>
     </key>
+    <!-- smplOS: safe cross-filesystem copy (removable / slow media) -->
+    <key name="safe-cross-fs-copy" type="b">
+      <default>true</default>
+      <summary>Protect files copied to removable / slow media from cache-loss corruption</summary>
+      <description>When on, cross-filesystem file copies (e.g. to USB drives) are (1) written to a visible staging name ("&lt;filename&gt;.nemo-partial-XXXXXXXX") and only renamed to the real name after the copy has been flushed to physical storage, and (2) fsync()'d before the progress bar reports "done". This prevents two classes of corruption: files with the real name left partially written after nemo is closed or the drive is yanked mid-copy, and files that Nemo reports as "done" while their data is still sitting in the kernel page cache. Turning this off restores the previous behavior and is slightly faster for very large files.</description>
+    </key>
     <key name="expand-row-on-dnd-dwell" type="b">
       <default>true</default>
       <summary>During drag-and-drop operations, automatically expand rows when hovering them briefly</summary>

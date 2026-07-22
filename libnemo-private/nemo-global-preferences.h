@@ -94,6 +94,9 @@ typedef enum
 	NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING = 1,
 	NEMO_INTERACTIVE_SEARCH_MODE_FILTER    = 2
 } NemoInteractiveSearchMode;
+
+/* smplOS: safe cross-filesystem copy (staging + fsync). See gschema. */
+#define NEMO_PREFERENCES_SAFE_CROSS_FS_COPY "safe-cross-fs-copy"
 #endif /* NEMO_SMPL */
 
 /* Activating executable text files */
