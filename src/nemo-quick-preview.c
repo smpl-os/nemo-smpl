@@ -291,9 +291,45 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		}
 		return GDK_EVENT_STOP;
 	case GDK_KEY_Left:
+	case GDK_KEY_Right: {
+#ifdef HAVE_GSTREAMER
+		/* In video preview: Left/Right seek ±20s, clamped to [0, duration]. */
+		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
+			gint64 pos = 0, dur = -1;
+			gint64 delta = (event->keyval == GDK_KEY_Right)
+			                 ? (gint64) 20 * GST_SECOND
+			                 : -(gint64) 20 * GST_SECOND;
+			if (gst_element_query_position (self->pipeline,
+			                                GST_FORMAT_TIME, &pos)) {
+				gint64 new_pos = pos + delta;
+				if (new_pos < 0)
+					new_pos = 0;
+				if (gst_element_query_duration (self->pipeline,
+				                                GST_FORMAT_TIME, &dur) &&
+				    dur > 0 && new_pos > dur - GST_SECOND / 4) {
+					/* Clamp near the end to avoid a premature EOS
+					 * that would drop us to the next file. */
+					new_pos = dur - GST_SECOND / 4;
+					if (new_pos < 0)
+						new_pos = 0;
+				}
+				gst_element_seek_simple (self->pipeline,
+					GST_FORMAT_TIME,
+					GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+					new_pos);
+			}
+			return GDK_EVENT_STOP;
+		}
+#endif
+		navigate_to_offset (self, (event->keyval == GDK_KEY_Right) ? 1 : -1);
+		return GDK_EVENT_STOP;
+	}
+	case GDK_KEY_Page_Up:
+	case GDK_KEY_KP_Page_Up:
 		navigate_to_offset (self, -1);
 		return GDK_EVENT_STOP;
-	case GDK_KEY_Right:
+	case GDK_KEY_Page_Down:
+	case GDK_KEY_KP_Page_Down:
 		navigate_to_offset (self, 1);
 		return GDK_EVENT_STOP;
 	case GDK_KEY_space:
@@ -318,12 +354,16 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		}
 		return GDK_EVENT_STOP;
 #ifdef HAVE_GSTREAMER
-	case GDK_KEY_comma:   /* < — previous frame */
-	case GDK_KEY_period:  /* > — next frame */
+	case GDK_KEY_comma:        /* < — previous frame */
+	case GDK_KEY_period:       /* > — next frame */
+	case GDK_KEY_bracketleft:  /* [ — previous frame */
+	case GDK_KEY_bracketright: /* ] — next frame */
 		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
 			GstState state;
 			gint64 pos;
 			gint64 step;
+			gboolean forward = (event->keyval == GDK_KEY_period ||
+			                    event->keyval == GDK_KEY_bracketright);
 
 			/* Pause first if playing */
 			gst_element_get_state (self->pipeline, &state, NULL, 0);
@@ -338,8 +378,7 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			step = (gint64)(GST_SECOND / self->video_fps);
 			if (gst_element_query_position (self->pipeline,
 			                                GST_FORMAT_TIME, &pos)) {
-				gint64 new_pos = (event->keyval == GDK_KEY_period)
-					? pos + step : pos - step;
+				gint64 new_pos = forward ? pos + step : pos - step;
 				if (new_pos < 0) new_pos = 0;
 				gst_element_seek_simple (self->pipeline,
 					GST_FORMAT_TIME,
