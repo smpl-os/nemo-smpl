@@ -238,6 +238,7 @@ static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
 static void     media_stop             (NemoQuickPreview *self);
 static gboolean video_area_draw_cb     (GtkWidget *widget, cairo_t *cr, gpointer data);
 static GstFlowReturn new_sample_cb     (GstAppSink *sink, gpointer data);
+static GstFlowReturn new_preroll_cb    (GstAppSink *sink, gpointer data);
 static gboolean redraw_idle_cb         (gpointer data);
 static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
@@ -1117,12 +1118,15 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 	return TRUE;
 }
 
-/* ---- appsink new-sample callback (called on streaming thread) ---- */
-static GstFlowReturn
-new_sample_cb (GstAppSink *sink, gpointer data)
+/* ---- appsink new-sample / new-preroll callbacks (streaming thread) ----
+ *
+ * new-sample fires while the pipeline is PLAYING. new-preroll fires when a
+ * frame becomes available in PAUSED (e.g. after a flushing seek while
+ * paused). Both feed into a single shared renderer so frame-stepping and
+ * scrubbing update the visible image, not just the clock. */
+static void
+process_video_sample (NemoQuickPreview *self, GstSample *sample)
 {
-	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
-	GstSample *sample;
 	GstBuffer *buffer;
 	GstCaps *caps;
 	GstVideoInfo vinfo;
@@ -1133,20 +1137,19 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 	guint8 *dst;
 	int i;
 
-	sample = gst_app_sink_pull_sample (sink);
 	if (sample == NULL)
-		return GST_FLOW_OK;
+		return;
 
 	buffer = gst_sample_get_buffer (sample);
 	caps = gst_sample_get_caps (sample);
 	if (buffer == NULL || caps == NULL) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	if (!gst_video_info_from_caps (&vinfo, caps)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	w = GST_VIDEO_INFO_WIDTH (&vinfo);
@@ -1154,7 +1157,7 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, w, h);
@@ -1192,7 +1195,21 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 		                                        g_object_unref);
 	}
 	g_mutex_unlock (&self->frame_mutex);
+}
 
+static GstFlowReturn
+new_sample_cb (GstAppSink *sink, gpointer data)
+{
+	process_video_sample (NEMO_QUICK_PREVIEW (data),
+	                      gst_app_sink_pull_sample (sink));
+	return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+new_preroll_cb (GstAppSink *sink, gpointer data)
+{
+	process_video_sample (NEMO_QUICK_PREVIEW (data),
+	                      gst_app_sink_pull_preroll (sink));
 	return GST_FLOW_OK;
 }
 
@@ -1417,6 +1434,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 
 	g_signal_connect (appsink, "new-sample",
 	                  G_CALLBACK (new_sample_cb), self);
+	g_signal_connect (appsink, "new-preroll",
+	                  G_CALLBACK (new_preroll_cb), self);
 
 	g_object_set (self->pipeline, "video-sink", appsink, NULL);
 
