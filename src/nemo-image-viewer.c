@@ -143,15 +143,22 @@ start_animation (NemoImageViewer *self)
 /* ------------------------------------------------------------------ */
 
 static double
-compute_fit_zoom (NemoImageViewer *self, int image_width)
+compute_fit_zoom (NemoImageViewer *self, int image_width, int image_height)
 {
-	int avail;
+	int avail_w, avail_h;
+	double zw = 1.0, zh = 1.0, z;
 
-	avail = gtk_widget_get_allocated_width (self->scroll);
-	if (avail > 20 && image_width > avail - 20)
-		return (double) (avail - 20) / image_width;
+	avail_w = gtk_widget_get_allocated_width  (self->scroll);
+	avail_h = gtk_widget_get_allocated_height (self->scroll);
 
-	return 1.0;
+	if (avail_w > 20 && image_width  > avail_w - 20)
+		zw = (double) (avail_w - 20) / image_width;
+	if (avail_h > 20 && image_height > avail_h - 20)
+		zh = (double) (avail_h - 20) / image_height;
+
+	z = (zw < zh) ? zw : zh;
+	if (z > 1.0) z = 1.0;
+	return z;
 }
 
 static void
@@ -168,7 +175,7 @@ static void
 apply_zoom (NemoImageViewer *self)
 {
 	GdkPixbuf *base, *scaled;
-	int pw, ph, nw, nh, avail;
+	int pw, ph, nw, nh, avail_w, avail_h;
 	double z;
 
 	base = get_base_pixbuf (self);
@@ -180,12 +187,22 @@ apply_zoom (NemoImageViewer *self)
 	z  = self->zoom_level;
 
 	if (self->fit_to_container) {
-		avail = gtk_widget_get_allocated_width (self->scroll);
-		if (avail > 20) {
-			z = (double) (avail - 20) / pw;
-			if (z > 4.0) z = 4.0;
-			if (z < 0.01) z = 0.01;
-		}
+		double zw = 1.0, zh = 1.0;
+
+		avail_w = gtk_widget_get_allocated_width  (self->scroll);
+		avail_h = gtk_widget_get_allocated_height (self->scroll);
+
+		/* Fit while preserving aspect ratio: use the more restrictive
+		 * of the two axes so the entire image is visible inside the
+		 * container, matching whichever edge fills first. */
+		if (avail_w > 20)
+			zw = (double) (avail_w - 20) / pw;
+		if (avail_h > 20)
+			zh = (double) (avail_h - 20) / ph;
+
+		z = (zw < zh) ? zw : zh;
+		if (z > 4.0)  z = 4.0;
+		if (z < 0.01) z = 0.01;
 	}
 
 	nw = MAX ((int) (pw * z), 1);
@@ -245,7 +262,7 @@ static void
 set_animation (NemoImageViewer *self, GdkPixbufAnimation *anim)
 {
 	GdkPixbuf *first;
-	int pw;
+	int pw, ph;
 
 	clear_image_data (self);
 
@@ -258,12 +275,13 @@ set_animation (NemoImageViewer *self, GdkPixbufAnimation *anim)
 		self->is_animated = FALSE;
 		g_object_unref (anim);
 
-		pw = gdk_pixbuf_get_width (self->original_pixbuf);
+		pw = gdk_pixbuf_get_width  (self->original_pixbuf);
+		ph = gdk_pixbuf_get_height (self->original_pixbuf);
 
 		if (self->fit_to_container) {
 			apply_zoom (self);
 		} else {
-			self->zoom_level = compute_fit_zoom (self, pw);
+			self->zoom_level = compute_fit_zoom (self, pw, ph);
 			update_zoom_scale_quietly (self, self->zoom_level);
 			apply_zoom (self);
 		}
@@ -273,9 +291,10 @@ set_animation (NemoImageViewer *self, GdkPixbufAnimation *anim)
 
 		first = gdk_pixbuf_animation_get_static_image (anim);
 		if (first != NULL) {
-			pw = gdk_pixbuf_get_width (first);
+			pw = gdk_pixbuf_get_width  (first);
+			ph = gdk_pixbuf_get_height (first);
 			if (!self->fit_to_container)
-				self->zoom_level = compute_fit_zoom (self, pw);
+				self->zoom_level = compute_fit_zoom (self, pw, ph);
 			update_zoom_scale_quietly (self, self->zoom_level);
 		}
 
