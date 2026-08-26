@@ -94,6 +94,10 @@ struct _NemoQuickPreview {
 	GMutex       frame_mutex;
 	gint         video_width;
 	gint         video_height;
+	guint        redraw_idle_id;   /* main-thread idle used to marshal
+	                                * gtk_widget_queue_draw() out of the
+	                                * GStreamer streaming thread. Guarded
+	                                * by frame_mutex. */
 #endif
 
 	/* Directory analyzer (F3 on folders) */
@@ -234,6 +238,7 @@ static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
 static void     media_stop             (NemoQuickPreview *self);
 static gboolean video_area_draw_cb     (GtkWidget *widget, cairo_t *cr, gpointer data);
 static GstFlowReturn new_sample_cb     (GstAppSink *sink, gpointer data);
+static gboolean redraw_idle_cb         (gpointer data);
 static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
 static gboolean seek_press_cb          (GtkWidget *widget, GdkEventButton *event, gpointer data);
@@ -1135,13 +1140,38 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 	self->frame_surface = surface;
 	self->video_width = w;
 	self->video_height = h;
+
+	/* Marshal the redraw to the main thread. GTK/GDK is NOT thread-safe
+	 * and calling gtk_widget_queue_draw() directly from the GStreamer
+	 * streaming thread races with GDK's window invalidation region on
+	 * the main thread, causing heap corruption inside cairo_region_*.
+	 * Coalesce multiple pending frames into a single idle callback. */
+	if (self->redraw_idle_id == 0 && self->video_area != NULL) {
+		self->redraw_idle_id = g_idle_add_full (G_PRIORITY_DEFAULT_IDLE,
+		                                        redraw_idle_cb,
+		                                        g_object_ref (self),
+		                                        g_object_unref);
+	}
 	g_mutex_unlock (&self->frame_mutex);
 
-	/* Schedule a redraw on the main/GUI thread */
-	if (self->video_area != NULL)
-		gtk_widget_queue_draw (self->video_area);
-
 	return GST_FLOW_OK;
+}
+
+static gboolean
+redraw_idle_cb (gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+	GtkWidget *area;
+
+	g_mutex_lock (&self->frame_mutex);
+	self->redraw_idle_id = 0;
+	area = self->video_area;
+	g_mutex_unlock (&self->frame_mutex);
+
+	if (area != NULL)
+		gtk_widget_queue_draw (area);
+
+	return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1434,6 +1464,10 @@ media_stop (NemoQuickPreview *self)
 	}
 
 	g_mutex_lock (&self->frame_mutex);
+	if (self->redraw_idle_id > 0) {
+		g_source_remove (self->redraw_idle_id);
+		self->redraw_idle_id = 0;
+	}
 	if (self->frame_surface != NULL) {
 		cairo_surface_destroy (self->frame_surface);
 		self->frame_surface = NULL;
