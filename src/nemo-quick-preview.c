@@ -238,6 +238,7 @@ static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
 static void     media_stop             (NemoQuickPreview *self);
 static gboolean video_area_draw_cb     (GtkWidget *widget, cairo_t *cr, gpointer data);
 static GstFlowReturn new_sample_cb     (GstAppSink *sink, gpointer data);
+static GstFlowReturn new_preroll_cb    (GstAppSink *sink, gpointer data);
 static gboolean redraw_idle_cb         (gpointer data);
 static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
@@ -291,9 +292,45 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		}
 		return GDK_EVENT_STOP;
 	case GDK_KEY_Left:
+	case GDK_KEY_Right: {
+#ifdef HAVE_GSTREAMER
+		/* In video preview: Left/Right seek ±20s, clamped to [0, duration]. */
+		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
+			gint64 pos = 0, dur = -1;
+			gint64 delta = (event->keyval == GDK_KEY_Right)
+			                 ? (gint64) 20 * GST_SECOND
+			                 : -(gint64) 20 * GST_SECOND;
+			if (gst_element_query_position (self->pipeline,
+			                                GST_FORMAT_TIME, &pos)) {
+				gint64 new_pos = pos + delta;
+				if (new_pos < 0)
+					new_pos = 0;
+				if (gst_element_query_duration (self->pipeline,
+				                                GST_FORMAT_TIME, &dur) &&
+				    dur > 0 && new_pos > dur - GST_SECOND / 4) {
+					/* Clamp near the end to avoid a premature EOS
+					 * that would drop us to the next file. */
+					new_pos = dur - GST_SECOND / 4;
+					if (new_pos < 0)
+						new_pos = 0;
+				}
+				gst_element_seek_simple (self->pipeline,
+					GST_FORMAT_TIME,
+					GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+					new_pos);
+			}
+			return GDK_EVENT_STOP;
+		}
+#endif
+		navigate_to_offset (self, (event->keyval == GDK_KEY_Right) ? 1 : -1);
+		return GDK_EVENT_STOP;
+	}
+	case GDK_KEY_Page_Up:
+	case GDK_KEY_KP_Page_Up:
 		navigate_to_offset (self, -1);
 		return GDK_EVENT_STOP;
-	case GDK_KEY_Right:
+	case GDK_KEY_Page_Down:
+	case GDK_KEY_KP_Page_Down:
 		navigate_to_offset (self, 1);
 		return GDK_EVENT_STOP;
 	case GDK_KEY_space:
@@ -318,12 +355,16 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		}
 		return GDK_EVENT_STOP;
 #ifdef HAVE_GSTREAMER
-	case GDK_KEY_comma:   /* < — previous frame */
-	case GDK_KEY_period:  /* > — next frame */
+	case GDK_KEY_comma:        /* < — previous frame */
+	case GDK_KEY_period:       /* > — next frame */
+	case GDK_KEY_bracketleft:  /* [ — previous frame */
+	case GDK_KEY_bracketright: /* ] — next frame */
 		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
 			GstState state;
 			gint64 pos;
 			gint64 step;
+			gboolean forward = (event->keyval == GDK_KEY_period ||
+			                    event->keyval == GDK_KEY_bracketright);
 
 			/* Pause first if playing */
 			gst_element_get_state (self->pipeline, &state, NULL, 0);
@@ -338,8 +379,7 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			step = (gint64)(GST_SECOND / self->video_fps);
 			if (gst_element_query_position (self->pipeline,
 			                                GST_FORMAT_TIME, &pos)) {
-				gint64 new_pos = (event->keyval == GDK_KEY_period)
-					? pos + step : pos - step;
+				gint64 new_pos = forward ? pos + step : pos - step;
 				if (new_pos < 0) new_pos = 0;
 				gst_element_seek_simple (self->pipeline,
 					GST_FORMAT_TIME,
@@ -1078,12 +1118,15 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 	return TRUE;
 }
 
-/* ---- appsink new-sample callback (called on streaming thread) ---- */
-static GstFlowReturn
-new_sample_cb (GstAppSink *sink, gpointer data)
+/* ---- appsink new-sample / new-preroll callbacks (streaming thread) ----
+ *
+ * new-sample fires while the pipeline is PLAYING. new-preroll fires when a
+ * frame becomes available in PAUSED (e.g. after a flushing seek while
+ * paused). Both feed into a single shared renderer so frame-stepping and
+ * scrubbing update the visible image, not just the clock. */
+static void
+process_video_sample (NemoQuickPreview *self, GstSample *sample)
 {
-	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
-	GstSample *sample;
 	GstBuffer *buffer;
 	GstCaps *caps;
 	GstVideoInfo vinfo;
@@ -1094,20 +1137,19 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 	guint8 *dst;
 	int i;
 
-	sample = gst_app_sink_pull_sample (sink);
 	if (sample == NULL)
-		return GST_FLOW_OK;
+		return;
 
 	buffer = gst_sample_get_buffer (sample);
 	caps = gst_sample_get_caps (sample);
 	if (buffer == NULL || caps == NULL) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	if (!gst_video_info_from_caps (&vinfo, caps)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	w = GST_VIDEO_INFO_WIDTH (&vinfo);
@@ -1115,7 +1157,7 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, w, h);
@@ -1153,7 +1195,21 @@ new_sample_cb (GstAppSink *sink, gpointer data)
 		                                        g_object_unref);
 	}
 	g_mutex_unlock (&self->frame_mutex);
+}
 
+static GstFlowReturn
+new_sample_cb (GstAppSink *sink, gpointer data)
+{
+	process_video_sample (NEMO_QUICK_PREVIEW (data),
+	                      gst_app_sink_pull_sample (sink));
+	return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+new_preroll_cb (GstAppSink *sink, gpointer data)
+{
+	process_video_sample (NEMO_QUICK_PREVIEW (data),
+	                      gst_app_sink_pull_preroll (sink));
 	return GST_FLOW_OK;
 }
 
@@ -1378,6 +1434,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 
 	g_signal_connect (appsink, "new-sample",
 	                  G_CALLBACK (new_sample_cb), self);
+	g_signal_connect (appsink, "new-preroll",
+	                  G_CALLBACK (new_preroll_cb), self);
 
 	g_object_set (self->pipeline, "video-sink", appsink, NULL);
 
