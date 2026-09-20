@@ -686,9 +686,7 @@ static void
 operation_finished (NemoProgressInfo *info, OperationWatch *watch)
 {
     NemoProgressUIHandler *self = watch->self;
-    g_autofree char *result = nemo_progress_info_get_completion_text (info);
-    g_autofree char *context = nemo_progress_info_get_initial_details (info);
-    g_autofree char *text = g_strdup_printf ("%s\n%s", context, result);
+    g_autofree char *text = nemo_progress_info_get_completion_text (info);
     gboolean visible = progress_window_is_visible (self);
     GtkWidget *label;
 

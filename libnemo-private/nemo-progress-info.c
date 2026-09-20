@@ -65,6 +65,7 @@ struct _NemoProgressInfo
 	NemoProgressResult result;
 	gboolean result_set;
 	gboolean finished_cancelled;
+	char *completion_details;
 #endif
 	
 	GSource *idle_source;
@@ -97,6 +98,7 @@ nemo_progress_info_finalize (GObject *object)
 	g_object_unref (info->cancellable);
     g_timer_destroy (info->time);
 #ifdef NEMO_SMPL
+	g_free (info->completion_details);
 	g_cond_free (info->cond);
 	g_mutex_clear (&info->info_lock);
 #endif
@@ -208,6 +210,19 @@ nemo_progress_info_new (void)
 
 #ifdef NEMO_SMPL
 void
+nemo_progress_info_take_completion_details (NemoProgressInfo *info, char *details)
+{
+	g_mutex_lock (&info->info_lock);
+	if (!info->finished) {
+		g_free (info->completion_details);
+		info->completion_details = details;
+	} else {
+		g_free (details);
+	}
+	g_mutex_unlock (&info->info_lock);
+}
+
+void
 nemo_progress_info_set_result (NemoProgressInfo *info, const NemoProgressResult *result)
 {
 	g_return_if_fail (NEMO_IS_PROGRESS_INFO (info));
@@ -243,6 +258,7 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	gboolean cancelled;
 	GString *text;
 	const char *operation;
+	g_autofree char *context = NULL;
 
 	g_return_val_if_fail (NEMO_IS_PROGRESS_INFO (info), NULL);
 	g_mutex_lock (&info->info_lock);
@@ -251,6 +267,7 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	}
 	cancelled = info->finished ? info->finished_cancelled :
 	                            g_cancellable_is_cancelled (info->cancellable);
+	context = g_strdup (info->completion_details);
 	g_mutex_unlock (&info->info_lock);
 
 	if (cancelled) {
@@ -280,6 +297,9 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	default:
 		g_string_append_printf (text, _("%s finished. Success was not reported."), operation);
 		break;
+	}
+	if (context != NULL) {
+		g_string_append_printf (text, "\n%s", context);
 	}
 	g_string_append_printf (text, _("\nCompleted items: %" G_GUINT64_FORMAT), result.completed_items);
 	if (result.skipped_items > 0) {

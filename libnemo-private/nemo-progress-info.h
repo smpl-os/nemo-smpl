@@ -76,6 +76,8 @@ void          nemo_progress_info_set_result (NemoProgressInfo *info,
 gboolean      nemo_progress_info_get_result (NemoProgressInfo *info,
                                             NemoProgressResult *result);
 char *        nemo_progress_info_get_completion_text (NemoProgressInfo *info);
+void          nemo_progress_info_take_completion_details (NemoProgressInfo *info,
+                                                         char *details);
 #endif
 
 GType nemo_progress_info_get_type (void) G_GNUC_CONST;

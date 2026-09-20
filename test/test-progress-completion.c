@@ -166,7 +166,8 @@ static NemoProgressInfo *
 new_operation (void)
 {
     NemoProgressInfo *info = nemo_progress_info_new ();
-    nemo_progress_info_take_initial_details (info, g_strdup ("Copying test data"));
+    nemo_progress_info_take_initial_details (info, g_strdup ("Waiting to copy test data"));
+    nemo_progress_info_take_completion_details (info, g_strdup ("From: source\nTo: destination"));
     nemo_progress_info_queue (info);
     nemo_progress_info_start (info);
     return info;
@@ -225,6 +226,10 @@ test_quick_hidden (void)
     g_assert_nonnull (last_notification);
     g_assert_cmpstr (notification_body, ==, last_summary (handler));
     g_assert_cmpstr (notification_target, ==, notification_body);
+    g_assert_true (g_str_has_prefix (notification_body, "Copy completed.\n"));
+    g_assert_nonnull (strstr (notification_body, "From: source\nTo: destination"));
+    g_assert_null (strstr (notification_body, "Waiting"));
+    g_assert_null (strstr (notification_body, "Preparing"));
     g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
     g_assert_false (handler->priv->window_held);
     g_assert_cmpuint (holds, ==, 0);
@@ -401,8 +406,10 @@ test_model_snapshot (void)
                                   .verified_symlinks = 1 };
     NemoProgressResult snapshot;
     g_assert_false (nemo_progress_info_get_result (info, &snapshot));
+    nemo_progress_info_take_completion_details (info, g_strdup ("From: source\nTo: destination"));
     nemo_progress_info_set_result (info, &result);
     nemo_progress_info_finish (info);
+    nemo_progress_info_take_completion_details (info, g_strdup ("Changed context"));
     nemo_progress_info_cancel (info);
     result.outcome = NEMO_PROGRESS_OUTCOME_FAILED;
     nemo_progress_info_set_result (info, &result);
@@ -410,6 +417,8 @@ test_model_snapshot (void)
     g_assert_cmpint (snapshot.outcome, ==, NEMO_PROGRESS_OUTCOME_SUCCESS);
     g_autofree char *text = nemo_progress_info_get_completion_text (info);
     g_assert_nonnull (strstr (text, "Copy completed."));
+    g_assert_nonnull (strstr (text, "From: source\nTo: destination"));
+    g_assert_null (strstr (text, "Changed context"));
     g_assert_nonnull (strstr (text, "SHA-256 verified files (completed): 1"));
     g_assert_nonnull (strstr (text, "Link-text verified symbolic links (completed): 1"));
     drain ();

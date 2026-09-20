@@ -1494,7 +1494,17 @@ test_copy_integrity (void)
         fixture.test->fault == SCAN_READ)
         g_assert_cmpuint (fixture.result.failed_items, ==, 1);
     char *completion = nemo_progress_info_get_completion_text (fixture.progress);
-    g_assert_nonnull (strstr (completion, fixture.test->move ? "Move" : "Copy"));
+    g_assert_true (g_str_has_prefix (completion, fixture.test->move ? "Move " : "Copy "));
+    g_assert_null (strstr (completion, "Waiting"));
+    g_assert_null (strstr (completion, "Preparing"));
+    char *source_name = g_path_get_basename (fixture.source_dir);
+    char *destination_name = g_path_get_basename (fixture.dest_dir);
+    g_assert_nonnull (strstr (completion, "From: "));
+    g_assert_nonnull (strstr (completion, "To: "));
+    g_assert_nonnull (strstr (completion, source_name));
+    g_assert_nonnull (strstr (completion, destination_name));
+    g_free (source_name);
+    g_free (destination_name);
     if (!successful_case ())
         g_assert_null (strstr (completion, " completed."));
     if (fixture.result.checksum_verified_files == 0)

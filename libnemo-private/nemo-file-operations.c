@@ -1163,6 +1163,16 @@ generate_initial_job_details (NemoProgressInfo *info,
         default:
             break;
     }
+#ifdef NEMO_SMPL
+    if (kind == OP_KIND_COPY || kind == OP_KIND_MOVE || kind == OP_KIND_DUPE) {
+        if (src_name != NULL && dest_name != NULL) {
+            nemo_progress_info_take_completion_details (
+                info, f (_("From: %1$s\nTo: %2$s"), src_name, dest_name));
+        } else if (dest_name != NULL) {
+            nemo_progress_info_take_completion_details (info, f (_("To: %s"), dest_name));
+        }
+    }
+#endif
     g_free (dest_name);
     g_free (src_name);
 
