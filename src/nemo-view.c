@@ -7235,7 +7235,7 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 #endif
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (verify_check), copy_verify_checked);
 #ifdef NEMO_SMPL
-    gtk_widget_set_tooltip_text (verify_check, _("Compare files using SHA-256. Keep matching existing files; ask before replacing different contents. Verify newly copied data before publication. Unreadable files are reported, not overwritten."));
+    gtk_widget_set_tooltip_text (verify_check, _("Compare files using SHA-256. Keep matching existing files; ask before replacing different contents. Verify newly copied data before publication. Existing files that cannot be read or safely checked for changes are kept and reported incomplete."));
 #else
 	gtk_widget_set_tooltip_text (verify_check, _("Re-read files from disk and compare SHA-256 checksums to confirm a successful copy"));
 #endif

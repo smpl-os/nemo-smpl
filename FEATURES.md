@@ -50,7 +50,7 @@ Double Commander-style instant file viewer:
 
 ### Verify After Copy/Move
 
-- Checkbox in F5 (Copy) and F6 (Move) dialogs: "Verify after copy/move"
+- F5 offers "Verify copied and existing files"; F6 retains its separate move verification control
 - Streamed copies compute SHA-256 while reading the source, then flush and read back the unpublished destination to compare it; the source data is normally read only once
 - Verified copies also compare existing regular files against the source with SHA-256. Stable matching files count as already present, without rewriting them or adding undo actions for them. Both source and destination must remain unchanged during comparison.
 - Different existing contents are a conflict, not evidence of corruption: **Replace**, **Replace All**, rename, or skip. Replacement requires explicit approval and uses the same verified staging transaction; failed writes or verification preserve the old target. **Replace All** still checks each existing file and does not rewrite matches. Unreadable or changing files are not treated as mismatches.
@@ -73,6 +73,7 @@ Double Commander-style instant file viewer:
 - The non-modal File Operations window keeps completed results until **Close**. Closing it clears completed summaries and hides the window; active transfers continue.
 - Copy/move results distinguish success, incomplete/skipped work, failure and cancellation. SHA-256 file-content verification and symbolic-link target checks are reported separately. Atomic renames and empty folders are not described as checksum-verified.
 - Newly copied files, verified existing files, and existing files retained without verification have separate counters. With verification off, ordinary retained-file conflicts can finish neutrally as **existing files retained (not verified)**; this is not content-confirmed success. Known differences, unexamined skipped folders, failures, and cancellation remain incomplete. Successful copy callbacks require every source item to be actually copied or verified already present.
+- Fully successful copies clear the original source selection only if that view, location and selection stayed unchanged. F5/Copy To, same-process clipboard paste and internal drag-and-drop use explicit weak source tracking; changed selections, navigation, closed tabs, failures, unverified retention and external/unknown origins are left alone. Destination highlighting is preserved without overriding newer user selections.
 - Hidden-window completions, including short transfers, send a desktop notification without raising the window. The status icon or notification opens the results.
 - Nemo retains the latest 50 text summaries in memory, with an explicit notice when older results are omitted. Results are not written to disk. A visible summary keeps Nemo running until closed; hidden results do not. If Nemo exits, the desktop notification is the remaining record, subject to the desktop's notification-retention settings. Reopening a result after exit requires a desktop notification backend that supports restarting application actions; freedesktop notification backends can only reopen it while Nemo is running.
 
