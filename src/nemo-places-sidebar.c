@@ -154,6 +154,16 @@ typedef struct {
     /* uri -> DiskFullEntry. Caches sidebar free-space readings so they can be
      * refreshed asynchronously instead of blocking the main loop. */
     GHashTable *disk_full_cache;
+    guint64 disk_full_generation;
+    gboolean cache_only_redraw;
+    gboolean idle_cache_only;
+    guint64 discovery_generation;
+    GCancellable *discovery_cancellable;
+    guint discovery_timeout_id;
+    gint64 discovery_last_finished;
+    gboolean home_different_fs;
+    GList *portable_mounts;
+    struct _PlacesDiscovery *discovery_pending;
 #endif
 
 } NemoPlacesSidebar;
@@ -232,6 +242,9 @@ static void  check_unmount_and_eject                   (GMount *mount,
 
 static void update_places                              (NemoPlacesSidebar *sidebar);
 static void update_places_on_idle                      (NemoPlacesSidebar *sidebar);
+#ifdef NEMO_SMPL
+static void redraw_places_on_idle                      (NemoPlacesSidebar *sidebar);
+#endif
 static gboolean mtp_hint_refresh_cb                    (gpointer data);
 static void rebuild_menu                               (NemoPlacesSidebar *sidebar);
 static void actions_changed                            (gpointer user_data);
@@ -628,21 +641,15 @@ sidebar_update_restore_selection (NemoPlacesSidebar *sidebar,
 
 #ifdef NEMO_SMPL
 
-/* Sidebar free-space readings are gathered asynchronously.
- *
- * Every row in "Devices" wants a usage bar, which means one
- * query_filesystem_info per mount each time update_places() runs. Done
- * synchronously that is a blocking D-Bus round trip per gvfs mount, and an MTP
- * phone whose backend is saturated (or wedged) never answers at all - the main
- * loop then stops dead, which is what produced both the periodic "Nemo is not
- * responding" dialogs and windows that never appeared in the first place.
- *
- * Instead each URI keeps a cached reading that update_places() can return
- * instantly, refreshed in the background and re-rendered only when the value
- * actually changes. */
-
 #define DISK_FULL_QUERY_TIMEOUT_SECONDS 10
 #define DISK_FULL_REFRESH_INTERVAL_US   (2 * G_USEC_PER_SEC)
+#define DISK_FULL_MAX_QUERIES 8
+
+/* Main-context only. Keep slots until the worker actually exits, including
+ * after disposal/remount: cancellation cannot interrupt a blocked statfs. */
+static GList *disk_full_queries;
+static GList *disk_full_waiters;
+typedef struct _DiskFullQuery DiskFullQuery;
 
 typedef struct {
     gint          percent;       /* -1 when unknown */
@@ -651,18 +658,31 @@ typedef struct {
     GCancellable *cancellable;   /* owned while in flight */
     guint         timeout_id;
     gint64        last_finished; /* monotonic, 0 when never completed */
+    guint64       generation;
+    DiskFullQuery *pending;
 } DiskFullEntry;
 
-typedef struct {
+struct _DiskFullQuery {
     GWeakRef  sidebar_ref;
     gchar    *uri;
-} DiskFullQuery;
+    GFile    *location;
+    guint64   generation;
+};
+
+static void start_disk_full_query (NemoPlacesSidebar *sidebar, GFile *file,
+                                   const gchar *uri, DiskFullEntry *entry);
+static void disk_full_query_free (DiskFullQuery *query);
+static void dispatch_disk_full_waiters (void);
 
 static void
 disk_full_entry_free (gpointer data)
 {
     DiskFullEntry *entry = data;
 
+    if (entry->pending != NULL) {
+        disk_full_waiters = g_list_remove (disk_full_waiters, entry->pending);
+        disk_full_query_free (entry->pending);
+    }
     g_clear_handle_id (&entry->timeout_id, g_source_remove);
 
     if (entry->cancellable != NULL) {
@@ -679,6 +699,7 @@ disk_full_query_free (DiskFullQuery *query)
 {
     g_weak_ref_clear (&query->sidebar_ref);
     g_free (query->uri);
+    g_object_unref (query->location);
     g_free (query);
 }
 
@@ -689,8 +710,8 @@ disk_full_query_timeout_cb (gpointer data)
 
     entry->timeout_id = 0;
 
-    /* The backend never answered. Cancelling makes the completion callback run,
-     * which clears the in-flight flag so a later refresh can try again. */
+    /* This is a UI deadline, not a hard syscall timeout. Do not clear
+     * in_flight here or a repaint could enqueue more blocked workers. */
     if (entry->cancellable != NULL) {
         g_cancellable_cancel (entry->cancellable);
     }
@@ -711,7 +732,8 @@ disk_full_query_cb (GObject      *source,
     gint percent = -1;
     gchar *tooltip = NULL;
 
-    info = g_file_query_filesystem_info_finish (G_FILE (source), res, &error);
+    info = g_task_propagate_pointer (G_TASK (res), &error);
+    disk_full_queries = g_list_remove (disk_full_queries, query);
 
     sidebar = g_weak_ref_get (&query->sidebar_ref);
 
@@ -720,12 +742,17 @@ disk_full_query_cb (GObject      *source,
         g_clear_object (&info);
         g_clear_error (&error);
         disk_full_query_free (query);
+        dispatch_disk_full_waiters ();
         return;
     }
 
     entry = sidebar->disk_full_cache != NULL
             ? g_hash_table_lookup (sidebar->disk_full_cache, query->uri)
             : NULL;
+
+    if (entry != NULL && entry->generation != query->generation) {
+        entry = NULL;
+    }
 
     if (entry != NULL) {
         entry->in_flight = FALSE;
@@ -737,15 +764,25 @@ disk_full_query_cb (GObject      *source,
     if (info != NULL) {
         guint64 k_used, k_total, k_free;
 
-        k_used = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED);
-        k_total = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
-        k_free = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+        k_total = 0;
+        k_used = k_free = 0;
+        if (g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE) == G_FILE_ATTRIBUTE_TYPE_UINT64 &&
+            g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE) == G_FILE_ATTRIBUTE_TYPE_UINT64) {
+            k_total = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+            k_free = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+            k_used = k_free <= k_total ? k_total - k_free : 0;
+            if (g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED) == G_FILE_ATTRIBUTE_TYPE_UINT64) {
+                k_used = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED);
+            } else if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED)) {
+                k_total = 0;
+            }
+        }
 
-        if (k_total > 0) {
+        if (k_total > 0 && k_free <= k_total && k_used <= k_total) {
             gchar *size_string;
             int prefix;
 
-            percent = (gint) rintf (((float) k_used / (float) k_total) * 100.0);
+            percent = (gint) round (((double) k_used / (double) k_total) * 100.0);
 
             prefix = nemo_global_preferences_get_size_prefix_preference ();
             size_string = g_format_size_full (k_free, prefix);
@@ -766,9 +803,7 @@ disk_full_query_cb (GObject      *source,
             entry->tooltip = tooltip;
             tooltip = NULL;
 
-            /* Re-render with the fresh numbers. The rebuild is served from the
-             * cache, so this cannot recurse indefinitely. */
-            update_places_on_idle (sidebar);
+            redraw_places_on_idle (sidebar);
         }
     }
 
@@ -777,6 +812,63 @@ disk_full_query_cb (GObject      *source,
     g_free (tooltip);
     g_object_unref (sidebar);
     disk_full_query_free (query);
+    dispatch_disk_full_waiters ();
+}
+
+static gboolean
+disk_full_slot_available (const gchar *uri)
+{
+    if (g_list_length (disk_full_queries) >= DISK_FULL_MAX_QUERIES) {
+        return FALSE;
+    }
+    for (GList *l = disk_full_queries; l != NULL; l = l->next) {
+        if (g_str_equal (((DiskFullQuery *) l->data)->uri, uri)) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static void
+dispatch_disk_full_waiters (void)
+{
+    GList *l = disk_full_waiters;
+    while (l != NULL) {
+        GList *next = l->next;
+        DiskFullQuery *query = l->data;
+        NemoPlacesSidebar *sidebar = g_weak_ref_get (&query->sidebar_ref);
+        DiskFullEntry *entry = sidebar != NULL && sidebar->disk_full_cache != NULL
+                            ? g_hash_table_lookup (sidebar->disk_full_cache, query->uri) : NULL;
+        if (entry == NULL || disk_full_slot_available (query->uri)) {
+            disk_full_waiters = g_list_delete_link (disk_full_waiters, l);
+            if (entry != NULL) {
+                entry->pending = NULL;
+                if (entry->generation == query->generation) {
+                    start_disk_full_query (sidebar, query->location, query->uri, entry);
+                }
+            }
+            disk_full_query_free (query);
+        }
+        g_clear_object (&sidebar);
+        l = next;
+    }
+}
+
+static void
+disk_full_query_thread (GTask *task, gpointer source, gpointer task_data,
+                        GCancellable *cancellable)
+{
+    DiskFullQuery *query = task_data;
+    GError *error = NULL;
+    GFileInfo *info;
+
+    info = g_file_query_filesystem_info (query->location, "filesystem::*",
+                                         cancellable, &error);
+    if (info != NULL) {
+        g_task_return_pointer (task, info, g_object_unref);
+    } else {
+        g_task_return_error (task, error);
+    }
 }
 
 static void
@@ -786,8 +878,9 @@ start_disk_full_query (NemoPlacesSidebar *sidebar,
                        DiskFullEntry     *entry)
 {
     DiskFullQuery *query;
+    GTask *task;
 
-    if (entry->in_flight) {
+    if (sidebar->cache_only_redraw || entry->in_flight || entry->pending != NULL) {
         return;
     }
 
@@ -798,22 +891,29 @@ start_disk_full_query (NemoPlacesSidebar *sidebar,
         return;
     }
 
+    query = g_new0 (DiskFullQuery, 1);
+    g_weak_ref_init (&query->sidebar_ref, sidebar);
+    query->uri = g_strdup (uri);
+    query->location = g_object_ref (file);
+    query->generation = entry->generation;
+    if (!disk_full_slot_available (uri)) {
+        entry->pending = query;
+        disk_full_waiters = g_list_append (disk_full_waiters, query);
+        return;
+    }
+
     entry->in_flight = TRUE;
     entry->cancellable = g_cancellable_new ();
     entry->timeout_id = g_timeout_add_seconds (DISK_FULL_QUERY_TIMEOUT_SECONDS,
                                                disk_full_query_timeout_cb,
                                                entry);
 
-    query = g_new0 (DiskFullQuery, 1);
-    g_weak_ref_init (&query->sidebar_ref, sidebar);
-    query->uri = g_strdup (uri);
-
-    g_file_query_filesystem_info_async (file,
-                                        "filesystem::*",
-                                        G_PRIORITY_DEFAULT,
-                                        entry->cancellable,
-                                        disk_full_query_cb,
-                                        query);
+    disk_full_queries = g_list_prepend (disk_full_queries, query);
+    task = g_task_new (NULL, entry->cancellable, disk_full_query_cb, query);
+    g_task_set_task_data (task, query, NULL);
+    g_task_set_return_on_cancel (task, FALSE);
+    g_task_run_in_thread (task, disk_full_query_thread);
+    g_object_unref (task);
 }
 
 #endif /* NEMO_SMPL */
@@ -845,6 +945,7 @@ get_disk_full (NemoPlacesSidebar *sidebar, GFile *file, gchar **tooltip_info)
     if (entry == NULL) {
         entry = g_new0 (DiskFullEntry, 1);
         entry->percent = -1;
+        entry->generation = ++sidebar->disk_full_generation;
         g_hash_table_insert (sidebar->disk_full_cache, g_strdup (uri), entry);
     }
 
@@ -913,28 +1014,54 @@ get_disk_full (NemoPlacesSidebar *sidebar, GFile *file, gchar **tooltip_info)
 }
 
 static gboolean
-home_on_different_fs (const gchar *home_uri)
+home_on_different_fs (const gchar *home_uri
+#ifdef NEMO_SMPL
+                      , GCancellable *cancellable
+#endif
+                      )
 {
     GFile *home = g_file_new_for_uri (home_uri);
     GFile *root = g_file_new_for_uri ("file:///");
     GFileInfo *home_info, *root_info;
     const gchar *home_id, *root_id;
     gboolean res;
+#ifndef NEMO_SMPL
+    GCancellable *cancellable = NULL;
+#endif
 
     res = FALSE;
     home_info = g_file_query_info (home,
                                    G_FILE_ATTRIBUTE_ID_FILESYSTEM,
                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                   NULL, NULL);
+                                   cancellable, NULL);
+#ifdef NEMO_SMPL
+    if (g_cancellable_is_cancelled (cancellable)) {
+        g_clear_object (&home_info);
+        g_object_unref (home);
+        g_object_unref (root);
+        return FALSE;
+    }
+#endif
     root_info = g_file_query_info (root,
                                    G_FILE_ATTRIBUTE_ID_FILESYSTEM,
                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                   NULL, NULL);
+                                   cancellable, NULL);
 
     if (home_info && root_info) {
+#ifdef NEMO_SMPL
+        home_id = g_file_info_get_attribute_type (home_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM) == G_FILE_ATTRIBUTE_TYPE_STRING
+                ? g_file_info_get_attribute_string (home_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM) : NULL;
+        root_id = g_file_info_get_attribute_type (root_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM) == G_FILE_ATTRIBUTE_TYPE_STRING
+                ? g_file_info_get_attribute_string (root_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM) : NULL;
+#else
         home_id = g_file_info_get_attribute_string (home_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
         root_id = g_file_info_get_attribute_string (root_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
+#endif
+#ifdef NEMO_SMPL
+        res = home_id != NULL && root_id != NULL && g_strcmp0 (home_id, root_id) != 0;
+#else
         res = g_strcmp0 (home_id, root_id) != 0;
+#endif
         g_object_unref (home_info);
         g_object_unref (root_info);
     } else {
@@ -963,7 +1090,13 @@ get_icon_name (const gchar *uri)
 /* Scan /run/media for portable devices (phones, USB drives) that might not be 
  * exposed by GVolumeMonitor. This helps detect devices that GVFS hasn't enumerated yet. */
 static GList *
-get_portable_devices_from_media_dir (void)
+get_portable_devices_from_media_dir (
+#ifdef NEMO_SMPL
+                                    GCancellable *cancellable, GHashTable *mount_roots
+#else
+                                    void
+#endif
+                                    )
 {
     GList *portable_mounts = NULL;
     const gchar *media_dir = "/run/media";
@@ -990,12 +1123,39 @@ get_portable_devices_from_media_dir (void)
 
     const gchar *entry = NULL;
     while ((entry = g_dir_read_name (dir)) != NULL) {
+#ifdef NEMO_SMPL
+        if (g_cancellable_is_cancelled (cancellable)) {
+            break;
+        }
+#endif
         gchar *full_path = g_build_filename (user_media_dir, entry, NULL);
         
         /* Check if it's a directory and is actually mounted */
         if (g_file_test (full_path, G_FILE_TEST_IS_DIR)) {
             GFile *device_file = g_file_new_for_path (full_path);
+#ifdef NEMO_SMPL
+            GHashTableIter mounts;
+            gpointer mount_root, mount;
+            GFile *best_root = NULL;
+            GMount *existing_mount = NULL;
+
+            /* Only immutable GFile roots and retained mount identities cross
+             * threads. GVolumeMonitor's mount list belongs to the UI context. */
+            g_hash_table_iter_init (&mounts, mount_roots);
+            while (g_hash_table_iter_next (&mounts, &mount_root, &mount)) {
+                if ((g_file_equal (device_file, mount_root) ||
+                     g_file_has_prefix (device_file, mount_root)) &&
+                    (best_root == NULL || g_file_has_prefix (mount_root, best_root))) {
+                    best_root = mount_root;
+                    existing_mount = mount;
+                }
+            }
+            if (existing_mount != NULL) {
+                g_object_ref (existing_mount);
+            }
+#else
             GMount *existing_mount = g_file_find_enclosing_mount (device_file, NULL, NULL);
+#endif
             
             if (existing_mount != NULL) {
                 /* This is an actual mounted filesystem */
@@ -1013,6 +1173,235 @@ get_portable_devices_from_media_dir (void)
 
     return portable_mounts;
 }
+
+#ifdef NEMO_SMPL
+typedef struct _PlacesDiscovery {
+    GWeakRef sidebar_ref;
+    gchar *home_uri;
+    guint64 generation;
+    gboolean home_different_fs;
+    GList *mounts;
+    GHashTable *mount_roots;
+} PlacesDiscovery;
+
+static guint places_discovery_workers;
+static GList *places_discovery_waiters;
+static void dispatch_places_discovery (NemoPlacesSidebar *sidebar, PlacesDiscovery *query);
+
+static void
+places_discovery_free (PlacesDiscovery *query)
+{
+    g_weak_ref_clear (&query->sidebar_ref);
+    g_free (query->home_uri);
+    g_list_free_full (query->mounts, g_object_unref);
+    g_clear_pointer (&query->mount_roots, g_hash_table_unref);
+    g_free (query);
+}
+
+static void
+cancel_pending_discovery (NemoPlacesSidebar *sidebar)
+{
+    if (sidebar->discovery_pending != NULL) {
+        places_discovery_waiters = g_list_remove (places_discovery_waiters, sidebar->discovery_pending);
+        places_discovery_free (sidebar->discovery_pending);
+        sidebar->discovery_pending = NULL;
+    }
+}
+
+static void
+dispatch_discovery_waiters (void)
+{
+    GList *l = places_discovery_waiters;
+    while (l != NULL && places_discovery_workers < 2) {
+        GList *next = l->next;
+        PlacesDiscovery *query = l->data;
+        NemoPlacesSidebar *sidebar = g_weak_ref_get (&query->sidebar_ref);
+        if (sidebar == NULL || sidebar->discovery_cancellable == NULL) {
+            places_discovery_waiters = g_list_delete_link (places_discovery_waiters, l);
+            if (sidebar != NULL) {
+                sidebar->discovery_pending = NULL;
+            }
+            if (sidebar != NULL && sidebar->disk_full_cache != NULL &&
+                sidebar->discovery_generation == query->generation) {
+                dispatch_places_discovery (sidebar, query);
+            } else {
+                places_discovery_free (query);
+            }
+        }
+        g_clear_object (&sidebar);
+        l = next;
+    }
+}
+
+static gboolean
+places_discovery_timeout (gpointer data)
+{
+    NemoPlacesSidebar *sidebar = data;
+
+    sidebar->discovery_timeout_id = 0;
+    g_cancellable_cancel (sidebar->discovery_cancellable);
+    return G_SOURCE_REMOVE;
+}
+
+static void
+places_discovery_thread (GTask *task, gpointer source, gpointer task_data,
+                         GCancellable *cancellable)
+{
+    PlacesDiscovery *query = task_data;
+
+    query->home_different_fs = home_on_different_fs (query->home_uri, cancellable);
+    if (!g_cancellable_is_cancelled (cancellable)) {
+        query->mounts = get_portable_devices_from_media_dir (cancellable, query->mount_roots);
+    }
+    g_task_return_boolean (task, TRUE);
+}
+
+static void
+request_discovered_mount_usage (NemoPlacesSidebar *sidebar)
+{
+    for (GList *l = sidebar->portable_mounts; l != NULL; l = l->next) {
+        GMount *mount = l->data;
+        GVolume *volume = g_mount_get_volume (mount);
+        if (volume != NULL || g_mount_is_shadowed (mount)) {
+            g_clear_object (&volume);
+            continue;
+        }
+        GFile *root = g_mount_get_default_location (mount);
+        gchar *uri = g_file_get_uri (root);
+        DiskFullEntry *entry = g_hash_table_lookup (sidebar->disk_full_cache, uri);
+        if (g_file_is_native (root) &&
+            (entry == NULL || (entry->last_finished == 0 && !entry->in_flight && entry->pending == NULL))) {
+            gchar *tooltip;
+            /* Fulfil initial demand for rows discovered by this external
+             * refresh, not another refresh of already known mounts. */
+            get_disk_full (sidebar, root, &tooltip);
+            g_free (tooltip);
+        }
+        g_free (uri);
+        g_object_unref (root);
+    }
+}
+
+static void
+places_discovery_cb (GObject *source, GAsyncResult *res, gpointer data)
+{
+    PlacesDiscovery *query = data;
+    NemoPlacesSidebar *sidebar = g_weak_ref_get (&query->sidebar_ref);
+    GError *error = NULL;
+    gboolean success = g_task_propagate_boolean (G_TASK (res), &error);
+
+    places_discovery_workers--;
+    if (sidebar != NULL) {
+        g_clear_handle_id (&sidebar->discovery_timeout_id, g_source_remove);
+        g_clear_object (&sidebar->discovery_cancellable);
+        if (sidebar->disk_full_cache != NULL &&
+            sidebar->discovery_generation == query->generation) {
+            sidebar->discovery_last_finished = g_get_monotonic_time ();
+            if (success) {
+                sidebar->home_different_fs = query->home_different_fs;
+                g_list_free_full (sidebar->portable_mounts, g_object_unref);
+                sidebar->portable_mounts = g_steal_pointer (&query->mounts);
+                request_discovered_mount_usage (sidebar);
+                redraw_places_on_idle (sidebar);
+            }
+        }
+        g_object_unref (sidebar);
+    }
+    g_clear_error (&error);
+    places_discovery_free (query);
+    dispatch_discovery_waiters ();
+}
+
+static void
+dispatch_places_discovery (NemoPlacesSidebar *sidebar, PlacesDiscovery *query)
+{
+    GTask *task;
+    GList *mounts = g_volume_monitor_get_mounts (sidebar->volume_monitor);
+
+    query->mount_roots = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
+                                               g_object_unref, g_object_unref);
+    for (GList *l = mounts; l != NULL; l = l->next) {
+        g_hash_table_replace (query->mount_roots, g_mount_get_root (l->data), g_object_ref (l->data));
+    }
+    g_list_free_full (mounts, g_object_unref);
+
+    sidebar->discovery_cancellable = g_cancellable_new ();
+    sidebar->discovery_timeout_id = g_timeout_add_seconds (DISK_FULL_QUERY_TIMEOUT_SECONDS,
+                                                            places_discovery_timeout, sidebar);
+    places_discovery_workers++;
+    task = g_task_new (NULL, sidebar->discovery_cancellable, places_discovery_cb, query);
+    g_task_set_task_data (task, query, NULL);
+    g_task_set_return_on_cancel (task, FALSE);
+    g_task_run_in_thread (task, places_discovery_thread);
+    g_object_unref (task);
+}
+
+static void
+start_places_discovery (NemoPlacesSidebar *sidebar)
+{
+    PlacesDiscovery *query;
+
+    if (sidebar->cache_only_redraw || sidebar->discovery_pending != NULL ||
+        (sidebar->discovery_last_finished != 0 &&
+         g_get_monotonic_time () - sidebar->discovery_last_finished < DISK_FULL_REFRESH_INTERVAL_US)) {
+        return;
+    }
+
+    query = g_new0 (PlacesDiscovery, 1);
+    g_weak_ref_init (&query->sidebar_ref, sidebar);
+    query->home_uri = nemo_get_home_directory_uri ();
+    query->generation = sidebar->discovery_generation;
+    if (sidebar->discovery_cancellable != NULL || places_discovery_workers >= 2) {
+        sidebar->discovery_pending = query;
+        places_discovery_waiters = g_list_append (places_discovery_waiters, query);
+    } else {
+        dispatch_places_discovery (sidebar, query);
+    }
+}
+
+static void
+invalidate_mount_readings (NemoPlacesSidebar *sidebar, GMount *mount)
+{
+    GHashTableIter iter;
+    gpointer key;
+    GFile *root = g_mount_get_root (mount);
+
+    g_hash_table_iter_init (&iter, sidebar->disk_full_cache);
+    while (g_hash_table_iter_next (&iter, &key, NULL)) {
+        GFile *file = g_file_new_for_uri (key);
+        if (g_file_equal (file, root) || g_file_has_prefix (file, root)) {
+            /* A new entry gets a new generation; an old completion may neither
+             * fill it nor modify its throttle/in-flight state. */
+            g_hash_table_iter_remove (&iter);
+        }
+        g_object_unref (file);
+    }
+    g_object_unref (root);
+    sidebar->discovery_generation++;
+    cancel_pending_discovery (sidebar);
+    sidebar->discovery_last_finished = 0;
+    sidebar->home_different_fs = FALSE;
+    g_list_free_full (sidebar->portable_mounts, g_object_unref);
+    sidebar->portable_mounts = NULL;
+    if (sidebar->discovery_cancellable != NULL) {
+        g_cancellable_cancel (sidebar->discovery_cancellable);
+    }
+}
+
+static void
+sidebar_async_dispose (NemoPlacesSidebar *sidebar)
+{
+    cancel_pending_discovery (sidebar);
+    g_clear_pointer (&sidebar->disk_full_cache, g_hash_table_destroy);
+    g_clear_handle_id (&sidebar->discovery_timeout_id, g_source_remove);
+    if (sidebar->discovery_cancellable != NULL) {
+        g_cancellable_cancel (sidebar->discovery_cancellable);
+        g_clear_object (&sidebar->discovery_cancellable);
+    }
+    g_list_free_full (sidebar->portable_mounts, g_object_unref);
+    sidebar->portable_mounts = NULL;
+}
+#endif
 
 /* Detect if an MTP-capable USB interface is present via sysfs.
  * MTP devices typically expose a PTP/MTP interface class 06, subclass 01. */
@@ -1119,6 +1508,9 @@ update_places (NemoPlacesSidebar *sidebar)
 	DEBUG ("Updating places sidebar");
 
     sidebar->updating_sidebar = TRUE;
+#ifdef NEMO_SMPL
+    start_places_discovery (sidebar);
+#endif
 
 	model = NULL;
 	last_uri = NULL;
@@ -1189,7 +1581,12 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
                            _("Home"), icon,
                            mount_uri, NULL, NULL, NULL, 0,
                            tooltip,
-                           full, home_on_different_fs (mount_uri) && full > -1,
+                           full,
+#ifdef NEMO_SMPL
+                           sidebar->home_different_fs && full > -1,
+#else
+                           home_on_different_fs (mount_uri) && full > -1,
+#endif
                            cat_iter);
     g_free (icon);
     sidebar->top_bookend_uri = g_strdup (mount_uri);
@@ -1416,7 +1813,12 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
     /* Also check for portable devices (phones, USB drives) from /run/media
      * that might not be properly exposed by GVolumeMonitor. This helps
      * detect devices that GVFS MTP backend hasn't enumerated yet. */
+#ifdef NEMO_SMPL
+    GList *portable_mounts = g_list_copy_deep (sidebar->portable_mounts,
+                                              (GCopyFunc) g_object_ref, NULL);
+#else
     GList *portable_mounts = get_portable_devices_from_media_dir ();
+#endif
     for (l = portable_mounts; l != NULL; l = l->next) {
         mount = l->data;
         if (g_mount_is_shadowed (mount)) {
@@ -1853,6 +2255,9 @@ mount_added_callback (GVolumeMonitor *volume_monitor,
 		      GMount *mount,
 		      NemoPlacesSidebar *sidebar)
 {
+#ifdef NEMO_SMPL
+    invalidate_mount_readings (sidebar, mount);
+#endif
 	update_places_on_idle (sidebar);
 }
 
@@ -1861,6 +2266,9 @@ mount_removed_callback (GVolumeMonitor *volume_monitor,
 			GMount *mount,
 			NemoPlacesSidebar *sidebar)
 {
+#ifdef NEMO_SMPL
+    invalidate_mount_readings (sidebar, mount);
+#endif
 	update_places_on_idle (sidebar);
 }
 
@@ -1869,6 +2277,9 @@ mount_changed_callback (GVolumeMonitor *volume_monitor,
 			GMount *mount,
 			NemoPlacesSidebar *sidebar)
 {
+#ifdef NEMO_SMPL
+    invalidate_mount_readings (sidebar, mount);
+#endif
 	update_places_on_idle (sidebar);
 }
 
@@ -5082,8 +5493,7 @@ nemo_places_sidebar_dispose (GObject *object)
     }
 
 #ifdef NEMO_SMPL
-    /* Cancels and frees any free-space queries still in flight. */
-    g_clear_pointer (&sidebar->disk_full_cache, g_hash_table_destroy);
+    sidebar_async_dispose (sidebar);
 #endif
 
 	g_clear_object (&sidebar->store);
@@ -5165,7 +5575,14 @@ update_places_on_idle_callback (NemoPlacesSidebar *sidebar)
 {
     sidebar->update_places_on_idle_id = 0;
 
+#ifdef NEMO_SMPL
+    sidebar->cache_only_redraw = sidebar->idle_cache_only;
+    sidebar->idle_cache_only = FALSE;
+#endif
     update_places (sidebar);
+#ifdef NEMO_SMPL
+    sidebar->cache_only_redraw = FALSE;
+#endif
 
     return FALSE;
 }
@@ -5173,6 +5590,9 @@ update_places_on_idle_callback (NemoPlacesSidebar *sidebar)
 static void
 update_places_on_idle (NemoPlacesSidebar *sidebar)
 {
+#ifdef NEMO_SMPL
+    sidebar->idle_cache_only = FALSE;
+#endif
     if (sidebar->update_places_on_idle_id != 0) {
         g_source_remove (sidebar->update_places_on_idle_id);
         sidebar->update_places_on_idle_id = 0;
@@ -5182,6 +5602,19 @@ update_places_on_idle (NemoPlacesSidebar *sidebar)
                                                          (GSourceFunc) update_places_on_idle_callback,
                                                          sidebar, NULL);
 }
+
+#ifdef NEMO_SMPL
+static void
+redraw_places_on_idle (NemoPlacesSidebar *sidebar)
+{
+    /* An already pending external refresh takes precedence. Completions only
+     * render cached results, even if another mount's throttle has expired. */
+    if (sidebar->update_places_on_idle_id == 0) {
+        update_places_on_idle (sidebar);
+        sidebar->idle_cache_only = TRUE;
+    }
+}
+#endif
 
 static void
 nemo_places_sidebar_set_parent_window (NemoPlacesSidebar *sidebar,

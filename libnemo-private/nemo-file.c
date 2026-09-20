@@ -179,6 +179,9 @@ static void file_mount_unmounted (GMount *mount,  gpointer data);
 static void metadata_hash_free (GHashTable *hash);
 static void invalidate_thumbnail (NemoFile *file);
 static void maybe_query_computer_filesystem_info (NemoFile *file);
+#ifdef NEMO_SMPL
+static void invalidate_filesystem_query (NemoFile *file);
+#endif
 
 G_DEFINE_TYPE_WITH_CODE (NemoFile, nemo_file, G_TYPE_OBJECT,
 			 G_IMPLEMENT_INTERFACE (NEMO_TYPE_FILE_INFO,
@@ -442,6 +445,9 @@ nemo_file_update_metadata_from_info (NemoFile *file,
 void
 nemo_file_clear_info (NemoFile *file)
 {
+#ifdef NEMO_SMPL
+	invalidate_filesystem_query (file);
+#endif
 	file->details->got_file_info = FALSE;
 	if (file->details->get_info_error) {
 		g_error_free (file->details->get_info_error);
@@ -780,6 +786,11 @@ finalize (GObject *object)
 	char *uri;
 
 	file = NEMO_FILE (object);
+
+#ifdef NEMO_SMPL
+	invalidate_filesystem_query (file);
+	g_clear_object (&file->details->fs_volume_monitor);
+#endif
 
 #ifdef NEMO_FILE_DEBUG_REF
     NEMO_FILE_URI ("finalize: ", file);
@@ -7462,6 +7473,9 @@ file_mount_unmounted (GMount *mount,
 
 	file = NEMO_FILE (data);
 
+#ifdef NEMO_SMPL
+	invalidate_filesystem_query (file);
+#endif
 	nemo_file_invalidate_attributes (file, NEMO_FILE_ATTRIBUTE_MOUNT);
 }
 
@@ -7469,6 +7483,11 @@ void
 nemo_file_set_mount (NemoFile *file,
 			 GMount *mount)
 {
+#ifdef NEMO_SMPL
+	if (file->details->mount != mount) {
+		invalidate_filesystem_query (file);
+	}
+#endif
 	if (file->details->mount) {
 		g_signal_handlers_disconnect_by_func (file->details->mount, file_mount_unmounted, file);
 		g_object_unref (file->details->mount);
@@ -7504,6 +7523,7 @@ nemo_file_is_broken_symbolic_link (NemoFile *file)
 	return nemo_file_get_file_type (file) == G_FILE_TYPE_SYMBOLIC_LINK;
 }
 
+#ifndef NEMO_SMPL
 static void
 get_fs_free_cb (GObject *source_object,
 		GAsyncResult *res,
@@ -7559,29 +7579,20 @@ get_fs_free_cb (GObject *source_object,
 		nemo_file_emit_changed (file);
 	}
 
-#ifdef NEMO_SMPL
-	file->details->fs_query_in_flight = FALSE;
-#endif
-
 	nemo_file_unref (file);
 }
+#endif
 
 #ifdef NEMO_SMPL
 /* smplOS: resolve a computer:// mountable to the location whose filesystem
  * we actually want to measure, given the already-fetched GFileInfo.
  *
- * Everything in here is local -- /proc/self/mountinfo and the volume
- * monitor's in-process cache -- so it is safe on the main thread. The one
- * part that is *not* (querying the computer:// URI itself) happens
- * asynchronously before this is called. */
+ * Called on the query worker, never on the UI thread. */
 static GFile *
-resolve_computer_target (GFile *location, GFileInfo *info)
+resolve_computer_target (GFile *location, GFileInfo *info, GHashTable *mount_roots)
 {
 	const char *target_uri;
 	const char *device_path;
-	GVolumeMonitor *monitor;
-	GList *mounts;
-	GList *l;
 	GFile *root;
 	char *device_base;
 	GList *unix_mounts;
@@ -7592,13 +7603,14 @@ resolve_computer_target (GFile *location, GFileInfo *info)
 		return g_object_ref (location);
 	}
 
-	target_uri = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_TARGET_URI);
+	target_uri = g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_STANDARD_TARGET_URI) == G_FILE_ATTRIBUTE_TYPE_STRING
+	           ? g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_TARGET_URI) : NULL;
 	if (target_uri != NULL) {
 		return g_file_new_for_uri (target_uri);
 	}
 
 	device_path = NULL;
-	if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_MOUNTABLE_UNIX_DEVICE_FILE)) {
+	if (g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_MOUNTABLE_UNIX_DEVICE_FILE) == G_FILE_ATTRIBUTE_TYPE_STRING) {
 		device_path = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_MOUNTABLE_UNIX_DEVICE_FILE);
 	}
 
@@ -7630,87 +7642,253 @@ resolve_computer_target (GFile *location, GFileInfo *info)
 	}
 
 	device_base = g_path_get_basename (device_path);
-	monitor = g_volume_monitor_get ();
-	mounts = g_volume_monitor_get_mounts (monitor);
 	root = NULL;
-
-	for (l = mounts; l != NULL; l = l->next) {
-		GMount *mount = l->data;
-		GVolume *volume = g_mount_get_volume (mount);
-		char *volume_device = NULL;
-		char *volume_base = NULL;
-
-		if (volume != NULL) {
-			volume_device = g_volume_get_identifier (volume, G_VOLUME_IDENTIFIER_KIND_UNIX_DEVICE);
-			g_object_unref (volume);
-		}
-
-		if (volume_device != NULL) {
-			volume_base = g_path_get_basename (volume_device);
-			if (g_str_has_prefix (volume_base, device_base)) {
-				root = g_mount_get_root (mount);
-				g_free (volume_base);
-				g_free (volume_device);
-				break;
-			}
+	GHashTableIter iter;
+	gpointer device, mount_root;
+	g_hash_table_iter_init (&iter, mount_roots);
+	while (g_hash_table_iter_next (&iter, &device, &mount_root)) {
+		char *volume_base = g_path_get_basename (device);
+		if (g_str_has_prefix (volume_base, device_base)) {
+			root = g_object_ref (mount_root);
 			g_free (volume_base);
-			g_free (volume_device);
+			break;
 		}
+		g_free (volume_base);
 	}
-
-	g_list_free_full (mounts, g_object_unref);
-	g_object_unref (monitor);
 	g_free (device_base);
 
 	return root != NULL ? root : g_object_ref (location);
 }
 
+typedef struct _NemoFilesystemQuery {
+	GWeakRef file_ref;
+	GFile *location;
+	GFile *target;
+	GHashTable *mount_roots;
+	GCancellable *cancellable;
+	gchar *uri;
+	guint64 generation;
+	guint timeout_id;
+} NemoFilesystemQuery;
+
+/* Main-context only, including across file destruction and mount replacement. */
+static GList *filesystem_queries;
+static GList *filesystem_query_waiters;
+static void start_filesystem_query (NemoFile *file);
+static void dispatch_filesystem_waiters (void);
+
 static void
-query_filesystem_info_for (NemoFile *file, GFile *location)
+filesystem_query_free (NemoFilesystemQuery *query)
 {
-	g_file_query_filesystem_info_async (location,
+	g_clear_handle_id (&query->timeout_id, g_source_remove);
+	g_weak_ref_clear (&query->file_ref);
+	g_clear_object (&query->target);
+	g_clear_pointer (&query->mount_roots, g_hash_table_unref);
+	g_object_unref (query->location);
+	g_object_unref (query->cancellable);
+	g_free (query->uri);
+	g_free (query);
+}
+
+static void
+invalidate_filesystem_query (NemoFile *file)
+{
+	file->details->fs_query_generation++;
+	file->details->free_space = (guint64) -1;
+	file->details->free_space_read = 0;
+	if (file->details->fs_size_cached) {
+		file->details->size = -1;
+		file->details->fs_size_cached = FALSE;
+	}
+	if (file->details->fs_query != NULL) {
+		g_cancellable_cancel (file->details->fs_query->cancellable);
+		/* Keep the outstanding slot until the worker really returns. */
+	}
+	if (file->details->fs_query_pending != NULL) {
+		filesystem_query_waiters = g_list_remove (filesystem_query_waiters, file->details->fs_query_pending);
+		filesystem_query_free (file->details->fs_query_pending);
+		file->details->fs_query_pending = NULL;
+	}
+}
+
+static void
+filesystem_mount_changed (GVolumeMonitor *monitor, GMount *mount, NemoFile *file)
+{
+	GFile *location = nemo_file_get_location (file);
+	GFile *root = g_mount_get_root (mount);
+
+	if (g_file_has_uri_scheme (location, "computer") ||
+	    g_file_equal (location, root) || g_file_has_prefix (location, root)) {
+		invalidate_filesystem_query (file);
+	}
+	g_object_unref (root);
+	g_object_unref (location);
+}
+
+static gboolean
+filesystem_query_timeout (gpointer data)
+{
+	NemoFilesystemQuery *query = data;
+
+	query->timeout_id = 0;
+	/* A deadline requests cancellation; it cannot interrupt native statfs.
+	 * Do not release the worker slot or hold a NemoFile alive while waiting. */
+	g_cancellable_cancel (query->cancellable);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+filesystem_query_thread (GTask *task, gpointer source, gpointer task_data,
+                         GCancellable *cancellable)
+{
+	NemoFilesystemQuery *query = task_data;
+	GFile *target = query->target != NULL ? g_object_ref (query->target) : NULL;
+	GFileInfo *info = NULL;
+	GError *error = NULL;
+
+	if (target == NULL && g_file_has_uri_scheme (query->location, "computer")) {
+		info = g_file_query_info (query->location,
+		                         G_FILE_ATTRIBUTE_STANDARD_TARGET_URI ","
+		                         G_FILE_ATTRIBUTE_MOUNTABLE_UNIX_DEVICE_FILE,
+		                         G_FILE_QUERY_INFO_NONE, cancellable, &error);
+		if (info == NULL) {
+			g_task_return_error (task, error);
+			return;
+		}
+		if (g_task_return_error_if_cancelled (task)) {
+			g_object_unref (info);
+			return;
+		}
+		target = resolve_computer_target (query->location, info, query->mount_roots);
+		g_object_unref (info);
+	} else if (target == NULL) {
+		target = g_object_ref (query->location);
+	}
+
+	if (g_task_return_error_if_cancelled (task)) {
+		g_object_unref (target);
+		return;
+	}
+	info = g_file_query_filesystem_info (target,
 	                                    G_FILE_ATTRIBUTE_FILESYSTEM_FREE ","
 	                                    G_FILE_ATTRIBUTE_FILESYSTEM_SIZE,
-	                                    0, NULL,
-	                                    get_fs_free_cb,
-	                                    file);   /* consumes the ref */
+	                                    cancellable, &error);
+	g_object_unref (target);
+	if (info != NULL) {
+		g_task_return_pointer (task, info, g_object_unref);
+	} else {
+		g_task_return_error (task, error);
+	}
 }
 
 static void
-computer_target_query_cb (GObject *source_object,
-                          GAsyncResult *res,
-                          gpointer user_data)
+filesystem_query_cb (GObject *source, GAsyncResult *res, gpointer data)
 {
-	NemoFile *file = NEMO_FILE (user_data);
-	GFile *location = G_FILE (source_object);
-	GFileInfo *info;
-	GFile *target;
+	NemoFilesystemQuery *query = data;
+	NemoFile *file = g_weak_ref_get (&query->file_ref);
+	GError *error = NULL;
+	GFileInfo *info = g_task_propagate_pointer (G_TASK (res), &error);
 
-	info = g_file_query_info_finish (location, res, NULL);
-	target = resolve_computer_target (location, info);
+	filesystem_queries = g_list_remove (filesystem_queries, query);
+	g_clear_handle_id (&query->timeout_id, g_source_remove);
+	if (file != NULL) {
+		GFile *location = nemo_file_get_location (file);
+		gboolean current = file->details->fs_query_generation == query->generation &&
+		                   !file->details->is_gone && g_file_equal (location, query->location);
+		g_object_unref (location);
+		file->details->fs_query = NULL;
+		if (current) {
+			gboolean changed = FALSE;
+			file->details->free_space_read = time (NULL);
+			if (info != NULL) {
+				guint64 free_space = (guint64) -1;
+				guint64 size = (guint64) -1;
+				if (g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE) == G_FILE_ATTRIBUTE_TYPE_UINT64) {
+					free_space = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+				}
+				if (g_file_info_get_attribute_type (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE) == G_FILE_ATTRIBUTE_TYPE_UINT64) {
+					size = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+				}
+				if (size != (guint64) -1 && free_space != (guint64) -1 && free_space > size) {
+					free_space = (guint64) -1;
+				}
+				if (file->details->free_space != free_space) {
+					file->details->free_space = free_space;
+					changed = TRUE;
+				}
+				if (file->details->type == G_FILE_TYPE_MOUNTABLE ||
+				    g_file_has_uri_scheme (query->location, "computer")) {
+					goffset valid_size = size <= G_MAXINT64 ? (goffset) size : -1;
+					if (file->details->size != valid_size) {
+						file->details->size = valid_size;
+						changed = TRUE;
+					}
+					file->details->fs_size_cached = TRUE;
+				}
+			}
+			if (changed) {
+				nemo_file_emit_changed (file);
+			}
+		}
+		nemo_file_unref (file);
+	}
+	if (error != NULL && !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+		DEBUG ("Filesystem query for %s failed: %s", query->uri, error->message);
+	}
+	g_clear_error (&error);
 	g_clear_object (&info);
-
-	query_filesystem_info_for (file, target);   /* passes our ref on */
-	g_object_unref (target);
+	filesystem_query_free (query);
+	dispatch_filesystem_waiters ();
 }
 
-/* smplOS: kick off the free-space query for `file` without ever blocking the
- * main thread.
- *
- * The original code resolved a computer:// mountable to its real filesystem
- * with a *synchronous, uncancellable* g_file_query_info() and only then went
- * async. That query goes out to gvfsd-computer, which in turn talks to the
- * backend owning the device. With gvfsd-mtp saturated streaming a phone, the
- * reply can take many seconds -- during which Nemo's main loop is stopped
- * dead and the window manager puts up "Nemo is not responding".
- *
- * Takes a reference to `file` which is released when the chain finishes. */
+static gboolean
+filesystem_slot_available (const gchar *uri)
+{
+	if (g_list_length (filesystem_queries) >= 8) {
+		return FALSE;
+	}
+	for (GList *l = filesystem_queries; l != NULL; l = l->next) {
+		if (g_str_equal (((NemoFilesystemQuery *) l->data)->uri, uri)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static void
+dispatch_filesystem_waiters (void)
+{
+	GList *l = filesystem_query_waiters;
+	while (l != NULL) {
+		GList *next = l->next;
+		NemoFilesystemQuery *query = l->data;
+		NemoFile *file = g_weak_ref_get (&query->file_ref);
+		if (file == NULL || (file->details->fs_query == NULL && filesystem_slot_available (query->uri))) {
+			filesystem_query_waiters = g_list_delete_link (filesystem_query_waiters, l);
+			if (file != NULL) {
+				file->details->fs_query_pending = NULL;
+				if (file->details->fs_query_generation == query->generation) {
+					start_filesystem_query (file);
+				}
+			}
+			filesystem_query_free (query);
+		}
+		g_clear_object (&file);
+		l = next;
+	}
+}
+
 static void
 start_filesystem_query (NemoFile *file)
 {
 	GFile *location;
+	gchar *uri;
+	NemoFilesystemQuery *query;
+	GTask *task;
 
-	if (file->details->fs_query_in_flight) {
+	if (file->details->is_gone || file->details->fs_query_pending != NULL ||
+	    (file->details->fs_query != NULL &&
+	     file->details->fs_query->generation == file->details->fs_query_generation)) {
 		return;
 	}
 
@@ -7719,34 +7897,56 @@ start_filesystem_query (NemoFile *file)
 		return;
 	}
 
-	file->details->fs_query_in_flight = TRUE;
-
-	/* Already-mounted mountables and ordinary locations need no
-	 * resolution step, so they skip straight to the filesystem query. */
-	if (g_file_has_uri_scheme (location, "computer")) {
-		GFile *root = NULL;
-
-		if (file->details->mount != NULL) {
-			root = g_mount_get_root (file->details->mount);
-		}
-
-		if (root != NULL) {
-			query_filesystem_info_for (nemo_file_ref (file), root);
-			g_object_unref (root);
-		} else {
-			g_file_query_info_async (location,
-			                         G_FILE_ATTRIBUTE_STANDARD_TARGET_URI ","
-			                         G_FILE_ATTRIBUTE_MOUNTABLE_UNIX_DEVICE_FILE,
-			                         G_FILE_QUERY_INFO_NONE,
-			                         G_PRIORITY_DEFAULT, NULL,
-			                         computer_target_query_cb,
-			                         nemo_file_ref (file));
-		}
-	} else {
-		query_filesystem_info_for (nemo_file_ref (file), location);
+	uri = g_file_get_uri (location);
+	if (file->details->fs_volume_monitor == NULL) {
+		file->details->fs_volume_monitor = g_volume_monitor_get ();
+		g_signal_connect_object (file->details->fs_volume_monitor, "mount-added",
+		                         G_CALLBACK (filesystem_mount_changed), file, 0);
+		g_signal_connect_object (file->details->fs_volume_monitor, "mount-removed",
+		                         G_CALLBACK (filesystem_mount_changed), file, 0);
+		g_signal_connect_object (file->details->fs_volume_monitor, "mount-changed",
+		                         G_CALLBACK (filesystem_mount_changed), file, 0);
 	}
-
-	g_object_unref (location);
+	query = g_new0 (NemoFilesystemQuery, 1);
+	g_weak_ref_init (&query->file_ref, file);
+	query->location = location;
+	query->uri = uri;
+	query->generation = file->details->fs_query_generation;
+	query->cancellable = g_cancellable_new ();
+	if (file->details->fs_query != NULL || !filesystem_slot_available (uri)) {
+		file->details->fs_query_pending = query;
+		filesystem_query_waiters = g_list_append (filesystem_query_waiters, query);
+		return;
+	}
+	/* GVolumeMonitor is main-thread-only. Give the worker an immutable map
+	 * of device identifiers to ref-counted roots, not the monitor itself. */
+	query->mount_roots = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
+	if (g_file_has_uri_scheme (location, "computer")) {
+		GList *mounts = g_volume_monitor_get_mounts (file->details->fs_volume_monitor);
+		for (GList *l = mounts; l != NULL; l = l->next) {
+			GMount *mount = l->data;
+			GVolume *volume = g_mount_get_volume (mount);
+			if (volume != NULL) {
+				char *device = g_volume_get_identifier (volume, G_VOLUME_IDENTIFIER_KIND_UNIX_DEVICE);
+				if (device != NULL) {
+					g_hash_table_replace (query->mount_roots, device, g_mount_get_root (mount));
+				}
+				g_object_unref (volume);
+			}
+		}
+		g_list_free_full (mounts, g_object_unref);
+	}
+	if (g_file_has_uri_scheme (location, "computer") && file->details->mount != NULL) {
+		query->target = g_mount_get_root (file->details->mount);
+	}
+	query->timeout_id = g_timeout_add_seconds (10, filesystem_query_timeout, query);
+	file->details->fs_query = query;
+	filesystem_queries = g_list_prepend (filesystem_queries, query);
+	task = g_task_new (NULL, query->cancellable, filesystem_query_cb, query);
+	g_task_set_task_data (task, query, NULL);
+	g_task_set_return_on_cancel (task, FALSE);
+	g_task_run_in_thread (task, filesystem_query_thread);
+	g_object_unref (task);
 }
 #else
 static GFile *
