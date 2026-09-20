@@ -294,6 +294,9 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	case NEMO_PROGRESS_OUTCOME_CANCELLED:
 		g_string_append_printf (text, _("%s cancelled."), operation);
 		break;
+	case NEMO_PROGRESS_OUTCOME_RETAINED:
+		g_string_append_printf (text, _("%s finished with existing files retained (not verified)."), operation);
+		break;
 	default:
 		g_string_append_printf (text, _("%s finished. Success was not reported."), operation);
 		break;
@@ -320,17 +323,34 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	if (result.failed_items > 0) {
 		g_string_append_printf (text, _("\nFailed items: %" G_GUINT64_FORMAT), result.failed_items);
 	}
+	if (result.existing_verified_regular_files > 0) {
+		g_string_append_printf (text, _("\nExisting regular files SHA-256 verified (not rewritten): %" G_GUINT64_FORMAT),
+		                        result.existing_verified_regular_files);
+	}
+	if (result.existing_verified_symlinks > 0) {
+		g_string_append_printf (text, _("\nExisting symbolic links link-text verified (not rewritten): %" G_GUINT64_FORMAT),
+		                        result.existing_verified_symlinks);
+	}
+	if (result.unverified_retained_files > 0) {
+		g_string_append_printf (text, _("\nExisting files retained (not verified): %" G_GUINT64_FORMAT),
+		                        result.unverified_retained_files);
+	}
 	if (result.checksum_verified_files > 0) {
 		g_string_append_printf (text, _("\nSHA-256 verified files (completed): %" G_GUINT64_FORMAT),
 		                        result.checksum_verified_files);
+	}
+	if (result.checksum_verified_files > 0 || result.existing_verified_regular_files > 0) {
 		if (result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
 		    result.failed_items == 0 && result.skipped_items == 0 &&
+		    result.unverified_retained_files == 0 &&
 		    result.atomic_moves == 0 &&
 		    result.checksum_verified_files == result.completed_regular_files &&
 		    result.verified_symlinks == result.completed_symlinks &&
 		    result.completed_items == result.completed_regular_files +
 		                              result.completed_directories + result.completed_symlinks) {
-			g_string_append (text, _("\nAll copied regular files were SHA-256 verified."));
+			g_string_append (text, result.existing_verified_regular_files > 0 ?
+			                 _("\nAll required regular-file contents were SHA-256 verified.") :
+			                 _("\nAll copied regular files were SHA-256 verified."));
 		}
 	} else if (result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
 	           result.operation == NEMO_PROGRESS_OPERATION_COPY &&

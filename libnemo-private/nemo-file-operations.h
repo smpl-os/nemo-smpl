@@ -30,7 +30,9 @@
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 
-/* smpl copy/move jobs report success only when no item failed or was skipped.
+/* smpl copy/move jobs report success only when every item was copied/moved or,
+ * for verified copies, confirmed already present with stable matching contents.
+ * Unverified retained conflicts (even a neutral RETAINED result) are not success.
  * An incomplete transaction may leave a published destination and its source. */
 typedef void (* NemoCopyCallback)      (GHashTable *debuting_uris,
 					    gboolean    success,

@@ -140,6 +140,7 @@ typedef struct {
 	gboolean had_errors;
 	NemoProgressResult result;
 	GHashTable *incomplete_paths;
+	gboolean undo_has_changes;
 #endif
 } CopyMoveJob;
 
@@ -3485,7 +3486,8 @@ report_copy_progress (CopyMoveJob *copy_job,
             nemo_progress_info_take_details (job->progress, g_strdup (_("Paused")));
         } else {
             char *s;
-            remaining_time = (total_size - transfer_info->num_bytes) / transfer_rate;
+            remaining_time = transfer_rate > 0 ?
+                (total_size - transfer_info->num_bytes) / transfer_rate : 0;
 
             /* To translators: %S will expand to a size like "2 bytes" or "3 MB", %T to a time duration like
              * "2 minutes". So the whole thing will be something like "2 kb of 4 MB -- 2 hours left (4kb/sec)"
@@ -3869,7 +3871,8 @@ remember_incomplete_copy (CopyMoveJob *job, GFile *file, gboolean failed)
 	previous = g_hash_table_lookup (job->incomplete_paths, file);
 	/* A later skip must not hide an already recorded error on the same path. */
 	g_hash_table_replace (job->incomplete_paths, g_object_ref (file),
-	                      GINT_TO_POINTER (failed || GPOINTER_TO_INT (previous) == 2 ? 2 : 1));
+	                      GINT_TO_POINTER (failed || GPOINTER_TO_INT (previous) == 2 ? 2 :
+	                                       previous != NULL ? GPOINTER_TO_INT (previous) : 1));
 }
 
 static void
@@ -3879,6 +3882,28 @@ record_incomplete_copy (CopyMoveJob *job, GFile *file, gboolean failed)
 	if (!job_aborted (&job->common)) {
 		remember_incomplete_copy (job, file, failed);
 	}
+}
+
+static gboolean
+copy_subtree_only_retained (CopyMoveJob *job, GFile *directory)
+{
+	GHashTableIter iter;
+	gpointer file, state;
+	gboolean found = FALSE;
+
+	if (job->incomplete_paths == NULL) {
+		return FALSE;
+	}
+	g_hash_table_iter_init (&iter, job->incomplete_paths);
+	while (g_hash_table_iter_next (&iter, &file, &state)) {
+		if (g_file_equal (file, directory) || g_file_has_prefix (file, directory)) {
+			if (GPOINTER_TO_INT (state) != 3) {
+				return FALSE;
+			}
+			found = TRUE;
+		}
+	}
+	return found;
 }
 
 static void
@@ -3904,6 +3929,8 @@ set_copy_move_result (CopyMoveJob *job)
 		while (g_hash_table_iter_next (&iter, NULL, &state)) {
 			if (GPOINTER_TO_INT (state) == 2) {
 				job->result.failed_items++;
+			} else if (GPOINTER_TO_INT (state) == 3) {
+				job->result.unverified_retained_files++;
 			} else {
 				job->result.skipped_items++;
 			}
@@ -3915,7 +3942,13 @@ set_copy_move_result (CopyMoveJob *job)
 		job->result.outcome = NEMO_PROGRESS_OUTCOME_CANCELLED;
 	} else if (!job->had_errors) {
 		job->result.outcome = NEMO_PROGRESS_OUTCOME_SUCCESS;
+	} else if (!job->is_move && !job->verify_after_copy &&
+	           job->result.unverified_retained_files > 0 &&
+	           job->result.skipped_items == 0 && job->result.failed_items == 0) {
+		job->result.outcome = NEMO_PROGRESS_OUTCOME_RETAINED;
 	} else if (job->result.completed_items > 0 ||
+	           job->result.existing_verified_regular_files > 0 ||
+	           job->result.existing_verified_symlinks > 0 ||
 	           (job->result.skipped_items > 0 && job->result.failed_items == 0)) {
 		job->result.outcome = NEMO_PROGRESS_OUTCOME_PARTIAL;
 	} else {
@@ -3931,6 +3964,11 @@ static gboolean sync_copy_fd (int fd, GCancellable *cancellable, GError **error)
 static gboolean copy_errno (int err, GError **error);
 static gboolean copy_optional_attributes (GFile *src, GFile *dest, GFileCopyFlags flags,
                                          GCancellable *cancellable, GError **error);
+static GFileInfo *query_copy_source (GFile *src, GCancellable *cancellable, GError **error);
+static gboolean copy_source_unchanged (GFile *src, GFileInfo *before,
+                                      GCancellable *cancellable, GError **error);
+static gboolean copy_directory_identity_unchanged (GFile *dest, GFileInfo *before,
+                                                  GCancellable *cancellable, GError **error);
 
 static void
 directory_copy_failed (CopyMoveJob *copy_job, GFile *src, GError *error)
@@ -3942,7 +3980,7 @@ directory_copy_failed (CopyMoveJob *copy_job, GFile *src, GError *error)
 	if (!job_aborted (job) && !job->skip_all_error) {
 		response = run_warning (
 			job, f (_("The operation on \"%B\" was not completed."), src),
-			g_strdup (_("The destination folder could not be made durable. "
+			g_strdup (_("The folder contents could not be fully completed or confirmed. "
 			            "Any remaining source files have been retained.")),
 			error->message, TRUE, GTK_STOCK_CANCEL, SKIP_ALL, SKIP, NULL);
 		if (response == 0 || response == GTK_RESPONSE_DELETE_EVENT) {
@@ -4084,10 +4122,29 @@ copy_move_directory (CopyMoveJob *copy_job,
 	GFileCopyFlags flags;
 #ifdef NEMO_SMPL
 	int parent_fd = -1, dest_fd = -1;
+	g_autoptr (GFileInfo) source_snapshot = NULL;
+	g_autoptr (GFileInfo) dest_snapshot = NULL;
 #endif
 
 	job = (CommonJob *)copy_job;
 
+#ifdef NEMO_SMPL
+	if (!copy_job->is_move && copy_job->verify_after_copy) {
+		error = NULL;
+		source_snapshot = query_copy_source (src, job->cancellable, &error);
+		if (source_snapshot != NULL &&
+		    g_file_info_get_file_type (source_snapshot) != G_FILE_TYPE_DIRECTORY) {
+			g_clear_object (&source_snapshot);
+			g_set_error_literal (&error, G_IO_ERROR, G_IO_ERROR_FAILED,
+			                     _("The source is no longer a folder."));
+		}
+		if (source_snapshot == NULL) {
+			directory_copy_failed (copy_job, src, error);
+			*skipped_file = TRUE;
+			return TRUE;
+		}
+	}
+#endif
 	if (create_dest) {
 #ifdef NEMO_SMPL
 		error = NULL;
@@ -4126,6 +4183,7 @@ copy_move_directory (CopyMoveJob *copy_job,
 				break;
 		}
 #ifdef NEMO_SMPL
+		copy_job->undo_has_changes = TRUE;
 		if (parent_fd >= 0) {
 			gboolean synced = sync_copy_fd (parent_fd, job->cancellable, &error);
 			if (close (parent_fd) < 0 && synced) {
@@ -4148,7 +4206,17 @@ copy_move_directory (CopyMoveJob *copy_job,
 #ifdef NEMO_SMPL
 	error = NULL;
 	dest_fd = open_copy_directory (*dest, job->cancellable, &error);
+	if (error == NULL && source_snapshot != NULL) {
+		dest_snapshot = query_copy_source (*dest, job->cancellable, &error);
+		if (dest_snapshot != NULL &&
+		    !copy_directory_identity_unchanged (*dest, dest_snapshot, job->cancellable, &error)) {
+			g_clear_object (&dest_snapshot);
+		}
+	}
 	if (error != NULL) {
+		if (dest_fd >= 0) {
+			close (dest_fd);
+		}
 		directory_copy_failed (copy_job, src, error);
 		*skipped_file = TRUE;
 		return TRUE;
@@ -4299,6 +4367,13 @@ copy_move_directory (CopyMoveJob *copy_job,
 
 	error = NULL;
 #ifdef NEMO_SMPL
+	if (source_snapshot != NULL && !job_aborted (job) &&
+	    (!copy_source_unchanged (src, source_snapshot, job->cancellable, &error) ||
+	     !copy_directory_identity_unchanged (*dest, dest_snapshot, job->cancellable, &error))) {
+		directory_copy_failed (copy_job, src, error);
+		error = NULL;
+		local_skipped_file = TRUE;
+	}
 	if (dest_fd >= 0) {
 		gboolean synced = TRUE;
 		if (!job_aborted (job)) {
@@ -4356,7 +4431,9 @@ copy_move_directory (CopyMoveJob *copy_job,
 	if (local_skipped_file || job_aborted (job)) {
 		*skipped_file = TRUE;
 #ifdef NEMO_SMPL
-		record_incomplete_copy (copy_job, src, FALSE);
+		if (!copy_subtree_only_retained (copy_job, src)) {
+			record_incomplete_copy (copy_job, src, FALSE);
+		}
 #endif
 	}
 #ifdef NEMO_SMPL
@@ -4558,8 +4635,6 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable, guint64 mini
 		int fd = open (path, O_RDONLY);
 #endif
 
-		g_free (path);
-
 		if (fd < 0) {
 			failed = TRUE;
 		} else {
@@ -4568,6 +4643,7 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable, guint64 mini
 				close (fd);
 				g_checksum_free (cksum);
 				g_free (buf);
+				g_free (path);
 				return NULL;
 			}
 			minimum_size = MAX (minimum_size, (guint64) st.st_size);
@@ -4610,8 +4686,25 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable, guint64 mini
 			/* Drop again so we don't pollute the cache with
 			 * verification data */
 			posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
-			close (fd);
+#ifdef NEMO_SMPL
+			struct stat after, named;
+			if (fstat (fd, &after) != 0 || lstat (path, &named) != 0 ||
+			    st.st_dev != after.st_dev || st.st_ino != after.st_ino ||
+			    st.st_size != after.st_size ||
+			    st.st_mtim.tv_sec != after.st_mtim.tv_sec ||
+			    st.st_mtim.tv_nsec != after.st_mtim.tv_nsec ||
+			    st.st_ctim.tv_sec != after.st_ctim.tv_sec ||
+			    st.st_ctim.tv_nsec != after.st_ctim.tv_nsec ||
+			    after.st_dev != named.st_dev || after.st_ino != named.st_ino ||
+			    bytes_hashed != (guint64) after.st_size) {
+				failed = TRUE;
+			}
+#endif
+			if (close (fd) < 0) {
+				failed = TRUE;
+			}
 		}
+		g_free (path);
 	} else {
 		GFileInputStream *stream;
 
@@ -5201,7 +5294,9 @@ open_dest_directory (GFile *file, GCancellable *cancellable, GError **error)
 #define COPY_SOURCE_ATTRIBUTES G_FILE_ATTRIBUTE_STANDARD_TYPE "," \
 	G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET "," \
 	G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ETAG_VALUE "," \
-	G_FILE_ATTRIBUTE_TIME_MODIFIED "," G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC
+	G_FILE_ATTRIBUTE_TIME_MODIFIED "," G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC "," \
+	G_FILE_ATTRIBUTE_TIME_CHANGED "," G_FILE_ATTRIBUTE_TIME_CHANGED_USEC "," \
+	"time::modified-nsec,time::changed-nsec"
 
 static GFileInfo *
 query_copy_source (GFile *src, GCancellable *cancellable, GError **error)
@@ -5269,7 +5364,8 @@ move_without_fallback (GFile *src, GFile *dest, GFileCopyFlags flags,
 }
 
 static gboolean
-copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest, gboolean *is_merge)
+copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest,
+                        gboolean *is_merge, gboolean *retained_regular)
 {
 	CommonJob *job = &copy_job->common;
 	GError *error = NULL;
@@ -5284,6 +5380,14 @@ copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest, gboolean
 	if (ok) {
 		*is_merge = g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY &&
 		            g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY;
+		if (retained_regular != NULL) {
+			*retained_regular = !copy_job->is_move && !copy_job->verify_after_copy &&
+			                   g_file_info_get_file_type (src_info) == G_FILE_TYPE_REGULAR &&
+			                   g_file_info_get_file_type (dest_info) == G_FILE_TYPE_REGULAR &&
+			                   (!g_file_info_has_attribute (src_info, G_FILE_ATTRIBUTE_STANDARD_SIZE) ||
+			                    !g_file_info_has_attribute (dest_info, G_FILE_ATTRIBUTE_STANDARD_SIZE) ||
+			                    g_file_info_get_size (src_info) == g_file_info_get_size (dest_info));
+		}
 	} else {
 		record_incomplete_copy (copy_job, src, TRUE);
 		if (!job_aborted (job) && !job->skip_all_error) {
@@ -5313,14 +5417,9 @@ copy_source_has_version (GFileInfo *info)
 }
 
 static gboolean
-copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable, GError **error)
+copy_info_unchanged (GFileInfo *before, GFileInfo *after)
 {
-	GFileInfo *after = query_copy_source (src, cancellable, error);
 	gboolean same;
-
-	if (after == NULL) {
-		return FALSE;
-	}
 	same = g_file_info_get_file_type (before) == g_file_info_get_file_type (after) &&
 	       g_file_info_get_attribute_uint64 (before, G_FILE_ATTRIBUTE_STANDARD_SIZE) ==
 	       g_file_info_get_attribute_uint64 (after, G_FILE_ATTRIBUTE_STANDARD_SIZE) &&
@@ -5331,17 +5430,119 @@ copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable,
 	       g_file_info_get_attribute_uint64 (before, G_FILE_ATTRIBUTE_TIME_MODIFIED) ==
 	       g_file_info_get_attribute_uint64 (after, G_FILE_ATTRIBUTE_TIME_MODIFIED) &&
 	       g_file_info_get_attribute_uint32 (before, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC) ==
-	       g_file_info_get_attribute_uint32 (after, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
+	       g_file_info_get_attribute_uint32 (after, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC) &&
+	       g_file_info_get_attribute_uint64 (before, G_FILE_ATTRIBUTE_TIME_CHANGED) ==
+	       g_file_info_get_attribute_uint64 (after, G_FILE_ATTRIBUTE_TIME_CHANGED) &&
+	       g_file_info_get_attribute_uint32 (before, G_FILE_ATTRIBUTE_TIME_CHANGED_USEC) ==
+	       g_file_info_get_attribute_uint32 (after, G_FILE_ATTRIBUTE_TIME_CHANGED_USEC) &&
+	       g_file_info_get_attribute_uint32 (before, "time::modified-nsec") ==
+	       g_file_info_get_attribute_uint32 (after, "time::modified-nsec") &&
+	       g_file_info_get_attribute_uint32 (before, "time::changed-nsec") ==
+	       g_file_info_get_attribute_uint32 (after, "time::changed-nsec");
 	if (same && g_file_info_get_file_type (before) == G_FILE_TYPE_SYMBOLIC_LINK) {
 		same = g_strcmp0 (g_file_info_get_attribute_byte_string (before, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET),
 		                  g_file_info_get_attribute_byte_string (after, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET)) == 0;
 	}
-	g_object_unref (after);
+	return same;
+}
+
+static gboolean
+copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable, GError **error)
+{
+	g_autoptr (GFileInfo) after = query_copy_source (src, cancellable, error);
+	if (after == NULL) {
+		return FALSE;
+	}
+	gboolean same = copy_info_unchanged (before, after);
 	if (!same) {
 		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
-		                     _("The source changed while it was being copied. The source was not removed."));
+		                     _("A file changed during the operation. Completion could not be "
+		                       "confirmed and the source was not removed."));
 	}
 	return same;
+}
+
+static gboolean
+copy_directory_identity_unchanged (GFile *dest, GFileInfo *before,
+                                   GCancellable *cancellable, GError **error)
+{
+	g_autoptr (GFileInfo) after = query_copy_source (dest, cancellable, error);
+	if (after == NULL) {
+		return FALSE;
+	}
+	const char *id = g_file_info_get_attribute_string (before, G_FILE_ATTRIBUTE_ID_FILE);
+	if (g_file_info_get_file_type (before) != G_FILE_TYPE_DIRECTORY ||
+	    g_file_info_get_file_type (after) != G_FILE_TYPE_DIRECTORY ||
+	    id == NULL || id[0] == '\0' ||
+	    g_strcmp0 (id, g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ID_FILE)) != 0) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                     _("The destination folder identity could not be confirmed."));
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* An unreadable or unstable existing file is not a different file, and never
+ * grants permission to replace it. Do not use the copy-corruption diagnostic
+ * here: different existing contents are an ordinary user conflict. */
+static VerifyResult
+compare_existing_copy (CommonJob *job, GFile *src, GFile *dest,
+                       GFileInfo *src_info, GFileInfo *dest_info, GError **error)
+{
+	GFileType type = g_file_info_get_file_type (src_info);
+	VerifyResult verdict = VERIFY_RESULT_MISMATCH;
+	g_autofree char *src_sum = NULL;
+	g_autofree char *dest_sum = NULL;
+
+	if ((type == G_FILE_TYPE_REGULAR && !copy_source_has_version (src_info)) ||
+	    (g_file_info_get_file_type (dest_info) == G_FILE_TYPE_REGULAR &&
+	     !copy_source_has_version (dest_info))) {
+		goto unavailable;
+	}
+	if (type == g_file_info_get_file_type (dest_info)) {
+		if (type == G_FILE_TYPE_REGULAR) {
+			if (g_file_info_has_attribute (src_info, G_FILE_ATTRIBUTE_STANDARD_SIZE) &&
+			    g_file_info_has_attribute (dest_info, G_FILE_ATTRIBUTE_STANDARD_SIZE) &&
+			    g_file_info_get_size (src_info) > 0 && g_file_info_get_size (dest_info) > 0 &&
+			    g_file_info_get_size (src_info) != g_file_info_get_size (dest_info)) {
+				goto check_stability;
+			}
+			nemo_progress_info_set_details (job->progress, _("Verifying existing file contents (no data written)"));
+			nemo_progress_info_pulse_progress (job->progress);
+			src_sum = checksum_file_bypass_cache (src, job->cancellable,
+				g_file_info_get_attribute_uint64 (src_info, G_FILE_ATTRIBUTE_STANDARD_SIZE));
+			if (src_sum == NULL) {
+				goto unavailable;
+			}
+			dest_sum = checksum_file_bypass_cache (dest, job->cancellable,
+				g_file_info_get_attribute_uint64 (dest_info, G_FILE_ATTRIBUTE_STANDARD_SIZE));
+			if (dest_sum == NULL) {
+				goto unavailable;
+			}
+			verdict = g_str_equal (src_sum, dest_sum) ? VERIFY_RESULT_MATCH : VERIFY_RESULT_MISMATCH;
+		} else if (type == G_FILE_TYPE_SYMBOLIC_LINK) {
+			const char *source_target = g_file_info_get_symlink_target (src_info);
+			const char *dest_target = g_file_info_get_symlink_target (dest_info);
+			if (source_target == NULL || dest_target == NULL) {
+				goto unavailable;
+			}
+			verdict = g_str_equal (source_target, dest_target) ? VERIFY_RESULT_MATCH : VERIFY_RESULT_MISMATCH;
+		}
+	}
+check_stability:
+	if (!copy_source_unchanged (src, src_info, job->cancellable, error) ||
+	    !copy_source_unchanged (dest, dest_info, job->cancellable, error)) {
+		return VERIFY_RESULT_UNAVAILABLE;
+	}
+	return verdict;
+
+unavailable:
+	if (!g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                     _("The existing contents could not be verified. "
+		                       "The source and destination have been retained."));
+	}
+	return VERIFY_RESULT_UNAVAILABLE;
 }
 
 static GInputStream *
@@ -5624,6 +5825,8 @@ out:
 static gboolean
 copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
                        gboolean same_fs, GFileCopyFlags flags, ProgressData *pdata,
+                       gboolean recognize_existing, GFileInfo **compared_src,
+                       GFileInfo **compared_dest, gboolean *already_present,
                        gboolean *published, GError **error)
 {
 	CommonJob *job = &copy_job->common;
@@ -5668,8 +5871,40 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 		}
 		g_clear_error (error);
 	}
+	if (recognize_existing && dest_info != NULL) {
+		if (*compared_src != NULL) {
+			/* Reuse hashes only while both snapshots still describe the
+			 * files the user saw before authorizing replacement. */
+			if (!copy_info_unchanged (*compared_src, info) ||
+			    !copy_info_unchanged (*compared_dest, dest_info)) {
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+				                     _("The conflicting files changed while awaiting your decision. "
+				                       "The destination has not been replaced."));
+				goto out;
+			}
+		} else if (type != G_FILE_TYPE_DIRECTORY) {
+			VerifyResult verdict = compare_existing_copy (job, src, dest, info, dest_info, error);
+			if (verdict == VERIFY_RESULT_UNAVAILABLE) {
+				goto out;
+			}
+			if (verdict == VERIFY_RESULT_MATCH) {
+				copy_job->result.existing_verified_regular_files += type == G_FILE_TYPE_REGULAR;
+				copy_job->result.existing_verified_symlinks += type == G_FILE_TYPE_SYMBOLIC_LINK;
+				pdata->source_info->num_bytes = MAX (0, pdata->source_info->num_bytes -
+					g_file_info_get_size (info));
+				*already_present = TRUE;
+				ok = TRUE;
+				goto out;
+			}
+			*compared_src = g_object_ref (info);
+			*compared_dest = g_object_ref (dest_info);
+		}
+	}
 	if (dest_info != NULL && !(flags & G_FILE_COPY_OVERWRITE)) {
-		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_EXISTS, _("File exists"));
+		g_set_error_literal (error, G_IO_ERROR,
+		                     recognize_existing && type == G_FILE_TYPE_DIRECTORY &&
+		                     g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY ?
+		                     G_IO_ERROR_WOULD_MERGE : G_IO_ERROR_EXISTS, _("File exists"));
 		goto out;
 	}
 	/* Never delete an existing tree (or file) to make room for a different
@@ -5813,6 +6048,10 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	    g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
 		goto out;
 	}
+	if (recognize_existing && (flags & G_FILE_COPY_OVERWRITE) && *compared_dest != NULL &&
+	    !copy_source_unchanged (dest, *compared_dest, job->cancellable, error)) {
+		goto out;
+	}
 	if (!g_file_move (staging, dest,
 	                  (flags & G_FILE_COPY_OVERWRITE) |
 	                  G_FILE_COPY_NOFOLLOW_SYMLINKS | G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
@@ -5844,7 +6083,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	ok = TRUE;
 
 out:
-	if (ok) {
+	if (ok && !*already_present) {
 		copy_job->result.completed_items++;
 		if (!atomic_move) {
 			copy_job->result.completed_regular_files += type == G_FILE_TYPE_REGULAR;
@@ -5901,6 +6140,9 @@ copy_move_file (CopyMoveJob *copy_job,
     gboolean target_is_desktop, source_is_desktop;
 #ifdef NEMO_SMPL
 	gboolean published = FALSE;
+	gboolean already_present = FALSE, retained_regular = FALSE;
+	g_autoptr (GFileInfo) compared_src = NULL;
+	g_autoptr (GFileInfo) compared_dest = NULL;
 #endif
 
 	job = (CommonJob *)copy_job;
@@ -6041,6 +6283,9 @@ copy_move_file (CopyMoveJob *copy_job,
 #ifdef NEMO_SMPL
 	published = FALSE;
 	res = copy_move_transaction (copy_job, src, dest, same_fs, flags, &pdata,
+	                             !copy_job->is_move && copy_job->verify_after_copy &&
+	                             !unique_names && !job->auto_rename_all,
+	                             &compared_src, &compared_dest, &already_present,
 	                             &published, &error);
 	if (!res && !published) {
 		transfer_info->num_bytes -= pdata.last_size;
@@ -6162,6 +6407,16 @@ copy_move_file (CopyMoveJob *copy_job,
 		transfer_info->num_files ++;
 		report_copy_progress (copy_job, source_info, transfer_info);
 
+#ifdef NEMO_SMPL
+		if (already_present) {
+			if (debuting_files) {
+				g_hash_table_replace (debuting_files, g_object_ref (dest), GINT_TO_POINTER (FALSE));
+			}
+			/* No undo entry: undoing this job must not delete an older copy. */
+			g_object_unref (dest);
+			return;
+		}
+#endif
         if (debuting_files) {
             if (target_is_desktop && position) {
                 nemo_file_changes_queue_schedule_position_set (dest, *position, job->monitor_num);
@@ -6201,6 +6456,9 @@ copy_move_file (CopyMoveJob *copy_job,
 		if (job->undo_info != NULL) {
 			nemo_file_undo_info_ext_add_origin_target_pair (NEMO_FILE_UNDO_INFO_EXT (job->undo_info),
 									    src, dest);
+#ifdef NEMO_SMPL
+			copy_job->undo_has_changes = TRUE;
+#endif
 		}
 
 		g_object_unref (dest);
@@ -6255,7 +6513,7 @@ copy_move_file (CopyMoveJob *copy_job,
 		is_a_merge = FALSE;
 
 #ifdef NEMO_SMPL
-		if (!copy_conflict_is_merge (copy_job, src, dest, &is_a_merge)) {
+		if (!copy_conflict_is_merge (copy_job, src, dest, &is_a_merge, &retained_regular)) {
 			goto out;
 		}
 #else
@@ -6297,12 +6555,22 @@ copy_move_file (CopyMoveJob *copy_job,
 			conflict_response_data_free (resp);
 			goto retry;
 		} else if (resp->id == CONFLICT_RESPONSE_RENAME) {
+#ifdef NEMO_SMPL
+			g_clear_object (&compared_src);
+			g_clear_object (&compared_dest);
+			retained_regular = FALSE;
+#endif
 			g_object_unref (dest);
 			dest = get_target_file_for_display_name (dest_dir,
 								 resp->new_name);
 			conflict_response_data_free (resp);
 			goto retry;
 		} else if (resp->id == CONFLICT_RESPONSE_AUTO_RENAME) {
+#ifdef NEMO_SMPL
+			g_clear_object (&compared_src);
+			g_clear_object (&compared_dest);
+			retained_regular = FALSE;
+#endif
 			if (resp->apply_to_all) {
 				job->auto_rename_all = TRUE;
 			}
@@ -6450,6 +6718,14 @@ copy_move_file (CopyMoveJob *copy_job,
 	*skipped_file = TRUE; /* Or aborted, but same-same */
 #ifdef NEMO_SMPL
 	record_incomplete_copy (copy_job, src, FALSE);
+	if (retained_regular && copy_job->incomplete_paths != NULL &&
+	    GPOINTER_TO_INT (g_hash_table_lookup (copy_job->incomplete_paths, src)) == 1) {
+		gboolean merge;
+		if (copy_conflict_is_merge (copy_job, src, dest, &merge, &retained_regular) &&
+		    retained_regular) {
+			g_hash_table_replace (copy_job->incomplete_paths, g_object_ref (src), GINT_TO_POINTER (3));
+		}
+	}
 #endif
 	g_object_unref (dest);
 }
@@ -6548,6 +6824,9 @@ copy_job_done (gpointer user_data)
 	job = user_data;
 #ifdef NEMO_SMPL
 	set_copy_move_result (job);
+	if (!job->undo_has_changes) {
+		g_clear_object (&job->common.undo_info);
+	}
 #endif
 	if (job->done_callback) {
 		job->done_callback (job->debuting_files,
@@ -6657,6 +6936,9 @@ nemo_file_operations_copy_file (GFile *source_file,
 	job = op_job_new (CopyMoveJob, parent_window);
 	job->done_callback = done_callback;
 	job->done_callback_data = done_callback_data;
+	job->verify_after_copy = _nemo_next_copy_verify;
+	_nemo_next_copy_verify = FALSE;
+	job->desktop_location = nemo_get_desktop_location ();
 	job->files = g_list_append (NULL, g_object_ref (source_file));
 	job->destination = g_object_ref (target_dir);
 	job->target_name = g_strdup (new_name);
@@ -6976,7 +7258,7 @@ move_file_prepare (CopyMoveJob *move_job,
 
 		is_merge = FALSE;
 #ifdef NEMO_SMPL
-		if (!copy_conflict_is_merge (move_job, src, dest, &is_merge)) {
+		if (!copy_conflict_is_merge (move_job, src, dest, &is_merge, NULL)) {
 			goto out;
 		}
 #else
@@ -7707,6 +7989,8 @@ nemo_file_operations_duplicate (GList *files,
     job->desktop_location = nemo_get_desktop_location ();
 	job->done_callback = done_callback;
 	job->done_callback_data = done_callback_data;
+	job->verify_after_copy = _nemo_next_copy_verify;
+	_nemo_next_copy_verify = FALSE;
 	job->files = eel_g_object_list_copy (files);
 	job->destination = NULL;
 	if (relative_item_points != NULL &&

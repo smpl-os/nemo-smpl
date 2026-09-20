@@ -44,7 +44,9 @@ typedef enum {
 	NEMO_PROGRESS_OUTCOME_SUCCESS,
 	NEMO_PROGRESS_OUTCOME_PARTIAL,
 	NEMO_PROGRESS_OUTCOME_FAILED,
-	NEMO_PROGRESS_OUTCOME_CANCELLED
+	NEMO_PROGRESS_OUTCOME_CANCELLED,
+	/* A neutral COPY result, not content satisfaction or callback success. */
+	NEMO_PROGRESS_OUTCOME_RETAINED
 } NemoProgressOutcome;
 
 typedef enum {
@@ -69,6 +71,11 @@ typedef struct {
 	guint64 verified_symlinks;
 	guint64 atomic_moves;
 	guint64 completed_directories;
+	/* Disjoint from completed_items: no destination was created or replaced. */
+	guint64 existing_verified_regular_files;
+	guint64 existing_verified_symlinks;
+	/* Disjoint from skipped_items/failed_items; equality is unknown. */
+	guint64 unverified_retained_files;
 	gboolean verification_requested;
 } NemoProgressResult;
 

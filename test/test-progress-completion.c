@@ -525,6 +525,26 @@ test_verification_wording (void)
               .atomic_moves = 1, .verification_requested = TRUE },
             "Atomic moves (not checksum verified): 1", FALSE
         },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .existing_verified_regular_files = 3, .verification_requested = TRUE },
+            "Existing regular files SHA-256 verified (not rewritten): 3\nAll required regular-file contents were SHA-256 verified.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_PARTIAL,
+              .existing_verified_regular_files = 3, .failed_items = 1, .verification_requested = TRUE },
+            "Copy incomplete.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_RETAINED,
+              .unverified_retained_files = 3 },
+            "Copy finished with existing files retained (not verified).", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .existing_verified_symlinks = 2, .verification_requested = TRUE },
+            "Existing symbolic links link-text verified (not rewritten): 2", FALSE
+        },
     };
 
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
@@ -535,6 +555,8 @@ test_verification_wording (void)
         g_assert_nonnull (strstr (text, cases[i].expected));
         g_assert_cmpint (strstr (text, "All copied regular files were SHA-256 verified.") != NULL,
                          ==, cases[i].all_verified);
+        if (cases[i].result.outcome != NEMO_PROGRESS_OUTCOME_SUCCESS)
+            g_assert_null (strstr (text, "All required regular-file contents"));
         drain ();
         g_object_unref (info);
     }

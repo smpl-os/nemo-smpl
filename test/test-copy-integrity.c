@@ -28,7 +28,10 @@ typedef enum {
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
     PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
     SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY,
-    SCAN_FILE, SCAN_OPEN, SCAN_READ
+    SCAN_FILE, SCAN_OPEN, SCAN_READ, EXIST_READ_SOURCE, EXIST_READ_TARGET,
+    EXIST_CANCEL, EXIST_EOF, EXIST_SOURCE_CHANGE, EXIST_TARGET_CHANGE,
+    PROMPT_SOURCE, PROMPT_TARGET, REPAIR_TARGET, EXIST_SOURCE_REWRITE, EXIST_TARGET_REWRITE,
+    EXIST_TARGET_NO_VERSION
 } Fault;
 
 typedef struct {
@@ -127,6 +130,43 @@ static const TestCase cases[] = {
     { "prescan-unreadable-folder", SCAN_OPEN, FALSE, TRUE, FALSE, FALSE },
     { "prescan-readdir-error", SCAN_READ, FALSE, TRUE, FALSE, FALSE },
     { "prescan-skip-then-cancel", SCAN_FILE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-identical", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-empty", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-mixed", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-tree", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-different", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-replace-all", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-skip", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-repair-corrupt", CORRUPT, FALSE, TRUE, FALSE, TRUE },
+    { "existing-repair-write", SYNC_EIO, FALSE, TRUE, FALSE, TRUE },
+    { "existing-read-source", EXIST_READ_SOURCE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-read-target", EXIST_READ_TARGET, FALSE, TRUE, FALSE, FALSE },
+    { "existing-cancel", EXIST_CANCEL, FALSE, TRUE, FALSE, FALSE },
+    { "existing-short-read", EXIST_EOF, FALSE, TRUE, FALSE, FALSE },
+    { "existing-source-change", EXIST_SOURCE_CHANGE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-target-change", EXIST_TARGET_CHANGE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-prompt-source", PROMPT_SOURCE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-prompt-target", PROMPT_TARGET, FALSE, TRUE, FALSE, TRUE },
+    { "existing-repair-target-change", REPAIR_TARGET, FALSE, TRUE, FALSE, TRUE },
+    { "existing-no-version", NO_VERSION, FALSE, TRUE, FALSE, FALSE },
+    { "existing-symlink", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-symlink-different", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-regular-over-symlink", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-fifo", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-unverified", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-unverified-size-skip", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-directory-skip", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-move-skip", NONE, TRUE, TRUE, FALSE, FALSE },
+    { "existing-duplicate", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-rename", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "existing-unverified-tree", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-partial-error", EXIST_READ_TARGET, FALSE, TRUE, FALSE, FALSE },
+    { "existing-source-inplace", EXIST_SOURCE_REWRITE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-target-inplace", EXIST_TARGET_REWRITE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-custom-name", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "existing-no-version-size", NO_VERSION, FALSE, TRUE, FALSE, TRUE },
+    { "existing-target-no-version-size", EXIST_TARGET_NO_VERSION, FALSE, TRUE, FALSE, TRUE },
+    { "existing-link-over-unversioned", EXIST_TARGET_NO_VERSION, FALSE, TRUE, FALSE, TRUE },
 };
 
 typedef struct {
@@ -140,6 +180,8 @@ typedef struct {
     int parent_fd, parent_open, backend_copy, syncfs_calls, filesystem_sync;
     int payload_fd, payload_open, adopted;
     gboolean parent_closed;
+    guint source_hash_reads, target_hash_reads;
+    struct stat original_dest;
 } Item;
 
 static struct {
@@ -177,10 +219,18 @@ pull_case (void)
     return g_str_has_prefix (fixture.test->name, "pull-");
 }
 
+static gboolean
+existing_case (void)
+{
+    return g_str_has_prefix (fixture.test->name, "existing-");
+}
+
 static void
 assert_source_readback (Item *item)
 {
-    if (fixture.test->fault == NO_VERSION)
+    if (!fixture.test->move && fixture.test->verify && item->source_hash_reads > 0)
+        g_assert_cmpint (item->checksum, >, 0);
+    else if (fixture.test->fault == NO_VERSION)
         g_assert_cmpint (item->checksum, >, item->syncs);
     else
         g_assert_cmpint (item->checksum, ==, 0);
@@ -246,6 +296,17 @@ source_item (const char *path)
     return NULL;
 }
 
+static Item *
+destination_item (const char *path)
+{
+    for (guint i = 0; fixture.items && i < fixture.items->len; i++) {
+        Item *item = g_ptr_array_index (fixture.items, i);
+        if (g_strcmp0 (path, item->dest) == 0)
+            return item;
+    }
+    return NULL;
+}
+
 char *
 __wrap_g_file_get_path (GFile *file)
 {
@@ -300,6 +361,13 @@ open_with_fault (const char *path, int flags, mode_t mode, gboolean large_file)
     if (fixture.running) {
         Item *item = source_item (path);
         Item *stage = g_hash_table_lookup (fixture.stages, path);
+        if ((item && fixture.test->fault == EXIST_READ_SOURCE) ||
+            (destination_item (path) && fixture.test->fault == EXIST_READ_TARGET &&
+             (!named ("existing-partial-error") || g_str_has_suffix (path, "payload-1")))) {
+            fixture.injections++;
+            errno = EACCES;
+            return -1;
+        }
         if ((fixture.test->fault == DIR_OPEN && (flags & O_DIRECTORY) &&
              under (path, fixture.dest_dir)) ||
             (fixture.test->fault == READBACK && !pull_case () && stage && stage->syncs)) {
@@ -394,17 +462,53 @@ __wrap_read (int fd, void *buffer, size_t count)
     if (fixture.running) {
         char *path = fd_path (fd);
         Item *item = source_item (path);
+        Item *target = destination_item (path);
         Item *stage = path ? g_hash_table_lookup (fixture.stages, path) : NULL;
         if (item) {
             g_assert_false (item->symlink);
-            g_assert_cmpint (item->syncs, >, item->range);
-            g_assert_cmpint (item->closed, >, item->syncs);
+            if (fixture.test->move || !fixture.test->verify || item->writes) {
+                g_assert_cmpint (item->syncs, >, item->range);
+                g_assert_cmpint (item->closed, >, item->syncs);
+            } else {
+                item->source_hash_reads++;
+            }
             item->checksum = ++fixture.sequence;
         } else if (stage) {
             g_assert_false (stage->symlink);
             g_assert_cmpint (stage->syncs, >, stage->range);
             g_assert_cmpint (stage->closed, >, stage->syncs);
             stage->stage_checksum = ++fixture.sequence;
+        }
+        if (target) {
+            target->target_hash_reads++;
+            if (fixture.test->fault == EXIST_CANCEL) {
+                fixture.injections++;
+                g_cancellable_cancel (fixture.cancel);
+            }
+        }
+        if ((item || target) && fixture.test->fault == EXIST_EOF) {
+            fixture.injections++;
+            g_free (path);
+            return 0;
+        }
+        if (target && fixture.injections == 0 &&
+            (fixture.test->fault == EXIST_SOURCE_CHANGE || fixture.test->fault == EXIST_TARGET_CHANGE)) {
+            const char *changed = fixture.test->fault == EXIST_SOURCE_CHANGE ? target->source : target->dest;
+            g_assert_true (g_file_set_contents (changed, foreign_data, -1, NULL));
+            fixture.injections++;
+        }
+        if (target && fixture.injections == 0 &&
+            (fixture.test->fault == EXIST_SOURCE_REWRITE || fixture.test->fault == EXIST_TARGET_REWRITE)) {
+            const char *changed = fixture.test->fault == EXIST_SOURCE_REWRITE ? target->source : target->dest;
+            struct stat st;
+            g_assert_cmpint (lstat (changed, &st), ==, 0);
+            int writer = __real_open (changed, O_WRONLY);
+            g_assert_cmpint (writer, >=, 0);
+            g_assert_cmpint (pwrite (writer, "X", 1, 0), ==, 1);
+            struct timespec times[] = { st.st_atim, st.st_mtim };
+            g_assert_cmpint (futimens (writer, times), ==, 0);
+            g_assert_cmpint (__real_close (writer), ==, 0);
+            fixture.injections++;
         }
         g_free (path);
         if (stage && fixture.test->fault == CANCEL_VERIFY) {
@@ -443,8 +547,11 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
     if (transaction) {
         g_assert_nonnull (cancel);
         g_assert_true ((flags & G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS) != 0);
-        g_free (fixture.current_source);
-        fixture.current_source = g_strdup (path);
+        if (!named ("existing-duplicate") || source_item (path)) {
+            g_free (fixture.current_source);
+            fixture.current_source = g_strdup (path);
+        }
+        g_set_object (&fixture.cancel, cancel);
     }
     GFileInfo *info = __real_g_file_query_info (file, attributes, flags, cancel, error);
     if (fixture.running && fixture.test->fault == FOLDER_RACE &&
@@ -482,6 +589,13 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
             g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
             g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
         }
+        fixture.injections++;
+    }
+    if (fixture.running && fixture.test->fault == EXIST_TARGET_NO_VERSION &&
+        info && destination_item (path) && strstr (attributes, G_FILE_ATTRIBUTE_ETAG_VALUE)) {
+        g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_ETAG_VALUE);
+        g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+        g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
         fixture.injections++;
     }
     if (transaction && info && item && fixture.test->fault == MISSING_TYPE) {
@@ -576,7 +690,9 @@ GFileOutputStream *
 __wrap_g_file_create (GFile *file, GFileCreateFlags flags, GCancellable *cancel, GError **error)
 {
     char *path = __real_g_file_get_path (file);
-    gboolean stage = fixture.running && under (path, fixture.dest_dir) &&
+    gboolean stage = fixture.running &&
+                     (under (path, fixture.dest_dir) ||
+                      (named ("existing-duplicate") && under (path, fixture.source_dir))) &&
                      strstr (path, "/copy.nemo-partial-");
     if (stage)
         g_assert_true ((flags & G_FILE_CREATE_PRIVATE) != 0);
@@ -754,6 +870,10 @@ __wrap_g_output_stream_close (GOutputStream *stream, GCancellable *cancel, GErro
         times[1].tv_sec += 5;
         g_assert_cmpint (futimens (fd, times), ==, 0);
         g_assert_cmpint (__real_close (fd), ==, 0);
+        fixture.injections++;
+    }
+    if (item && ok && fixture.test->fault == REPAIR_TARGET) {
+        g_assert_true (g_file_set_contents (item->dest, foreign_data, -1, NULL));
         fixture.injections++;
     }
     return ok;
@@ -1099,10 +1219,11 @@ __wrap_g_file_enumerator_next_file (GFileEnumerator *enumerator, GCancellable *c
 static void
 configure_conflict (GtkWidget *widget, gpointer unused)
 {
-    if (GTK_IS_ENTRY (widget) && named ("rename-conflict"))
+    if (GTK_IS_ENTRY (widget) && (named ("rename-conflict") || named ("existing-rename")))
         gtk_entry_set_text (GTK_ENTRY (widget), "renamed-payload");
     if (GTK_IS_CHECK_BUTTON (widget) &&
-        (named ("replace-all") || named ("merge-all") || named ("skip-all")))
+        (named ("replace-all") || named ("merge-all") || named ("skip-all") ||
+         named ("existing-replace-all")))
         gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (widget), TRUE);
     if (GTK_IS_CONTAINER (widget))
         gtk_container_foreach (GTK_CONTAINER (widget), configure_conflict, NULL);
@@ -1118,9 +1239,19 @@ respond (gpointer unused)
         if (NEMO_IS_FILE_CONFLICT_DIALOG (l->data)) {
             fixture.conflicts++;
             configure_conflict (l->data, NULL);
+            if (fixture.test->fault == PROMPT_SOURCE || fixture.test->fault == PROMPT_TARGET) {
+                Item *item = g_ptr_array_index (fixture.items, 0);
+                g_assert_true (g_file_set_contents (fixture.test->fault == PROMPT_SOURCE ?
+                              item->source : item->dest, foreign_data, -1, NULL));
+                fixture.injections++;
+            }
             gtk_dialog_response (l->data,
-                                 (named ("conflict-skip") || named ("partial-conflict-copy")) ?
-                                 CONFLICT_RESPONSE_SKIP : named ("rename-conflict") ?
+                                 (named ("conflict-skip") || named ("partial-conflict-copy") ||
+                                  named ("existing-skip") || named ("existing-unverified") ||
+                                  (named ("existing-unverified-tree") && fixture.conflicts > 2) ||
+                                  g_str_has_suffix (fixture.test->name, "-skip")) ?
+                                 CONFLICT_RESPONSE_SKIP :
+                                 (named ("rename-conflict") || named ("existing-rename")) ?
                                  CONFLICT_RESPONSE_RENAME : CONFLICT_RESPONSE_REPLACE);
         } else {
             char *text = NULL;
@@ -1277,6 +1408,238 @@ assert_staging (const char *root)
         g_free (path);
     }
     g_dir_close (dir);
+}
+
+static void
+test_existing_integrity (void)
+{
+    gboolean tree = named ("existing-tree") || named ("existing-directory-skip") ||
+                    named ("existing-unverified-tree");
+    gboolean links = named ("existing-symlink") || named ("existing-symlink-different") ||
+                     named ("existing-link-over-unversioned");
+    gboolean size_difference = named ("existing-unverified-size-skip") ||
+                               g_str_has_suffix (fixture.test->name, "-version-size");
+    gboolean fifo = named ("existing-fifo");
+    gboolean duplicate = named ("existing-duplicate");
+    gboolean rename = named ("existing-rename");
+    gboolean skipped = named ("existing-skip") || named ("existing-unverified") ||
+                       named ("existing-unverified-tree") ||
+                       g_str_has_suffix (fixture.test->name, "-skip");
+    gboolean retained = named ("existing-unverified") || named ("existing-unverified-tree");
+    gboolean failed = fixture.test->fault != NONE || fifo;
+    guint count = named ("existing-mixed") || named ("existing-replace-all") || tree ? 3 :
+                  named ("existing-partial-error") ? 2 : 1;
+    guint copied_count = 0, existing_count = 0;
+    GList *sources = NULL;
+    g_autofree char *different = g_strdup (payload);
+    different[0] = 'X';
+    fixture.contents = g_strdup (named ("existing-empty") ? "" : payload);
+    fixture.source_dir = g_build_filename (fixture.root, "source", NULL);
+    fixture.dest_dir = g_build_filename (fixture.root, "destination", NULL);
+    g_assert_cmpint (g_mkdir (fixture.source_dir, 0700), ==, 0);
+    g_assert_cmpint (g_mkdir (fixture.dest_dir, 0700), ==, 0);
+    fixture.items = g_ptr_array_new_with_free_func (free_item);
+    fixture.stages = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    fixture.backend_payloads = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    g_autofree char *source_tree = g_build_filename (fixture.source_dir, "tree", NULL);
+    g_autofree char *dest_tree = g_build_filename (fixture.dest_dir, "tree", NULL);
+    g_autofree char *source_nested = g_build_filename (source_tree, "nested", NULL);
+    g_autofree char *dest_nested = g_build_filename (dest_tree, "nested", NULL);
+    g_autofree char *link_target = g_build_filename (fixture.root, "fifo-target", NULL);
+    g_assert_cmpint (mkfifo (link_target, 0600), ==, 0);
+    if (tree) {
+        g_assert_cmpint (g_mkdir_with_parents (source_nested, 0700), ==, 0);
+        g_assert_cmpint (g_mkdir_with_parents (dest_nested, 0700), ==, 0);
+        sources = g_list_append (sources, g_file_new_for_path (source_tree));
+    }
+    for (guint i = 0; i < count; i++) {
+        g_autofree char *name = g_strdup_printf ("payload-%u", i);
+        g_autofree char *src = g_build_filename (tree ? source_nested : fixture.source_dir, name, NULL);
+        g_autofree char *dst = g_build_filename (tree ? dest_nested : fixture.dest_dir, name, NULL);
+        gboolean missing = i == 2 && (named ("existing-mixed") || named ("existing-tree"));
+        gboolean different_content = (fixture.test->replace &&
+                                       !(named ("existing-replace-all") && i == 2)) ||
+                                      named ("existing-unverified");
+        if (links)
+            g_assert_cmpint (symlink (link_target, src), ==, 0);
+        else if (fifo)
+            g_assert_cmpint (mkfifo (src, 0600), ==, 0);
+        else
+            g_assert_true (g_file_set_contents (src, fixture.contents, -1, NULL));
+        if ((links && !named ("existing-link-over-unversioned")) || named ("existing-regular-over-symlink")) {
+            g_assert_cmpint (symlink (links && different_content ? "different-link-text" : link_target, dst), ==, 0);
+        } else if (!missing) {
+            const char *bytes = size_difference ? previous :
+                                different_content ? different : fixture.contents;
+            g_assert_true (g_file_set_contents (dst, bytes, -1, NULL));
+        }
+        Item *item = add_item (src, dst, links);
+        if (!missing)
+            g_assert_cmpint (lstat (dst, &item->original_dest), ==, 0);
+        if (!tree)
+            sources = g_list_append (sources, g_file_new_for_path (src));
+        if (!failed && !skipped) {
+            if (missing || different_content || duplicate || rename)
+                copied_count++;
+            else
+                existing_count++;
+        }
+    }
+    g_autofree char *extra = g_build_filename (tree ? dest_nested : fixture.dest_dir, "extra", NULL);
+    g_assert_true (g_file_set_contents (extra, foreign_data, -1, NULL));
+    nemo_file_operations_set_verify_copies (fixture.test->verify);
+    if (named ("existing-partial-error"))
+        existing_count = 1;
+    NemoProgressInfoManager *manager = nemo_progress_info_manager_new ();
+    g_signal_connect (manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
+    GFile *dest = g_file_new_for_path (fixture.dest_dir);
+    guint responder = g_timeout_add (10, respond, NULL);
+    guint timeout = g_timeout_add_seconds (20, deadline, NULL);
+    fixture.running = TRUE;
+    if (duplicate)
+        nemo_file_operations_duplicate (sources, NULL, NULL, copied, NULL);
+    else if (named ("existing-custom-name"))
+        nemo_file_operations_copy_file (sources->data, dest, NULL, "payload-0", NULL, copied, NULL);
+    else if (fixture.test->move)
+        nemo_file_operations_move (sources, NULL, dest, NULL, copied, NULL);
+    else
+        nemo_file_operations_copy (sources, NULL, dest, NULL, copied, NULL);
+    gtk_main ();
+    fixture.running = FALSE;
+    g_source_remove (responder);
+    if (!fixture.timed_out)
+        g_source_remove (timeout);
+    g_assert_false (fixture.timed_out);
+    g_assert_true (fixture.done);
+    g_assert_cmpuint (fixture.finished, ==, 1);
+    g_assert_cmpint (fixture.success, ==, !failed && !skipped);
+    NemoProgressOutcome expected = fixture.test->fault == EXIST_CANCEL ? NEMO_PROGRESS_OUTCOME_CANCELLED :
+        named ("existing-partial-error") ? NEMO_PROGRESS_OUTCOME_PARTIAL :
+        failed ? NEMO_PROGRESS_OUTCOME_FAILED :
+        retained ? NEMO_PROGRESS_OUTCOME_RETAINED :
+        skipped ? NEMO_PROGRESS_OUTCOME_PARTIAL : NEMO_PROGRESS_OUTCOME_SUCCESS;
+    g_assert_cmpint (fixture.result.outcome, ==, expected);
+    g_assert_cmpuint (fixture.result.completed_regular_files, ==, links ? 0 : copied_count);
+    g_assert_cmpuint (fixture.result.checksum_verified_files, ==, links ? 0 : copied_count);
+    g_assert_cmpuint (fixture.result.completed_symlinks, ==, links ? copied_count : 0);
+    g_assert_cmpuint (fixture.result.existing_verified_regular_files, ==, links ? 0 : existing_count);
+    g_assert_cmpuint (fixture.result.existing_verified_symlinks, ==, links ? existing_count : 0);
+    g_assert_cmpuint (fixture.result.unverified_retained_files, ==, retained ? count : 0);
+    g_assert_cmpuint (fixture.result.completed_directories, ==, named ("existing-tree") ? 2 : 0);
+    g_assert_cmpuint (fixture.result.completed_items, ==, copied_count + (named ("existing-tree") ? 2 : 0));
+    if (fixture.test->fault != NONE)
+        g_assert_cmpint (fixture.injections, >, 0);
+    if (fixture.test->fault == NO_VERSION || fixture.test->fault == EXIST_TARGET_NO_VERSION)
+        g_assert_cmpint (fixture.conflicts, ==, 0);
+    else if (named ("existing-unverified-tree"))
+        g_assert_cmpint (fixture.conflicts, ==, 5);
+    else if (named ("existing-replace-all"))
+        g_assert_cmpint (fixture.conflicts, ==, 1);
+    else if (fixture.test->replace || skipped || fifo)
+        g_assert_cmpint (fixture.conflicts, ==, 1);
+    else
+        g_assert_cmpint (fixture.conflicts, ==, 0);
+    g_autofree char *completion = nemo_progress_info_get_completion_text (fixture.progress);
+    if (retained) {
+        g_assert_nonnull (strstr (completion, "finished with existing files retained (not verified)"));
+        g_assert_null (strstr (completion, "Copy incomplete"));
+    }
+    if (failed || skipped) {
+        g_assert_null (strstr (completion, "All required"));
+        g_assert_null (strstr (completion, "All copied"));
+    }
+    for (guint i = 0; i < fixture.items->len; i++) {
+        Item *item = g_ptr_array_index (fixture.items, i);
+        gboolean missing = i == 2 && (named ("existing-mixed") || named ("existing-tree"));
+        gboolean different_content = (fixture.test->replace &&
+                                       !(named ("existing-replace-all") && i == 2)) ||
+                                      named ("existing-unverified");
+        gboolean rewritten = !failed && !skipped && (missing || different_content);
+        gboolean source_changed = fixture.test->fault == EXIST_SOURCE_CHANGE ||
+                                  fixture.test->fault == PROMPT_SOURCE;
+        gboolean dest_changed = fixture.test->fault == EXIST_TARGET_CHANGE ||
+                                fixture.test->fault == PROMPT_TARGET || fixture.test->fault == REPAIR_TARGET;
+        g_assert_true (exists (item->source));
+        if (links) {
+            g_autofree char *text = g_file_read_link (item->source, NULL);
+            g_assert_cmpstr (text, ==, link_target);
+        } else if (!fifo) {
+            assert_contents (item->source, source_changed ? foreign_data :
+                             fixture.test->fault == EXIST_SOURCE_REWRITE ? different : fixture.contents);
+        }
+        if (links && !named ("existing-link-over-unversioned")) {
+            g_autofree char *text = g_file_read_link (item->dest, NULL);
+            g_assert_cmpstr (text, ==, link_target);
+            g_assert_cmpuint (item->source_hash_reads, ==, 0);
+            g_assert_cmpuint (item->target_hash_reads, ==, 0);
+        } else if (!missing || !skipped) {
+            assert_contents (item->dest, dest_changed ? foreign_data :
+                fixture.test->fault == EXIST_TARGET_REWRITE ? different :
+                (rewritten && !rename) ? fixture.contents :
+                size_difference ? previous :
+                different_content ? different : fixture.contents);
+        }
+        if (!missing && (!rewritten || rename) && !dest_changed) {
+            struct stat st;
+            g_assert_cmpint (lstat (item->dest, &st), ==, 0);
+            g_assert_cmpuint (st.st_ino, ==, item->original_dest.st_ino);
+            g_assert_cmpint (st.st_mtim.tv_sec, ==, item->original_dest.st_mtim.tv_sec);
+            g_assert_cmpint (st.st_mtim.tv_nsec, ==, item->original_dest.st_mtim.tv_nsec);
+        }
+        if (rewritten || duplicate || rename) {
+            if (!links)
+                g_assert_cmpint (item->stage_checksum, >, item->syncs);
+            g_assert_cmpint (item->publish, >, 0);
+        } else {
+            g_assert_cmpint (item->publish, ==, 0);
+        }
+        if (!failed && !skipped && !missing && !links && !duplicate &&
+            !named ("existing-regular-over-symlink")) {
+            /* One source hash and one destination hash, each including EOF;
+             * accepting a conflict must not repeat the phone comparison. */
+            g_assert_cmpuint (item->source_hash_reads, ==, named ("existing-empty") ? 1 : 2);
+            g_assert_cmpuint (item->target_hash_reads, ==, named ("existing-empty") ? 1 : 2);
+        }
+        g_assert_cmpint (item->deleted, ==, 0);
+    }
+    if (rename) {
+        g_autofree char *renamed = g_build_filename (fixture.dest_dir, "renamed-payload", NULL);
+        assert_contents (renamed, fixture.contents);
+    }
+    if (duplicate) {
+        GDir *dir = g_dir_open (fixture.source_dir, 0, NULL);
+        const char *name;
+        guint children = 0;
+        while ((name = g_dir_read_name (dir))) {
+            g_autofree char *path = g_build_filename (fixture.source_dir, name, NULL);
+            assert_contents (path, fixture.contents);
+            children++;
+        }
+        g_dir_close (dir);
+        g_assert_cmpuint (children, ==, 2);
+    }
+    assert_contents (extra, foreign_data);
+    struct stat st;
+    g_assert_cmpint (lstat (link_target, &st), ==, 0);
+    g_assert_true (S_ISFIFO (st.st_mode));
+    assert_staging (fixture.dest_dir);
+    assert_staging (fixture.source_dir);
+    if (existing_count > 0 && copied_count == 0 && !tree)
+        g_assert_null (nemo_file_undo_manager_get_action ());
+    g_list_free_full (sources, g_object_unref);
+    g_object_unref (dest);
+    g_clear_object (&fixture.cancel);
+    g_clear_object (&fixture.progress);
+    g_object_unref (manager);
+    g_hash_table_unref (fixture.stages);
+    g_hash_table_unref (fixture.backend_payloads);
+    g_ptr_array_unref (fixture.items);
+    remove_fixture (fixture.root);
+    g_free (fixture.root);
+    g_free (fixture.source_dir);
+    g_free (fixture.dest_dir);
+    g_free (fixture.current_source);
+    g_free (fixture.contents);
 }
 
 static void
@@ -1828,7 +2191,7 @@ main (int argc, char **argv)
     nemo_global_preferences_init ();
     nemo_file_undo_manager_get ();
     char *path = g_strconcat ("/copy-integrity/", fixture.test->name, NULL);
-    g_test_add_func (path, test_copy_integrity);
+    g_test_add_func (path, existing_case () ? test_existing_integrity : test_copy_integrity);
     g_free (path);
     return g_test_run ();
 }

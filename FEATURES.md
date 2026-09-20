@@ -52,6 +52,9 @@ Double Commander-style instant file viewer:
 
 - Checkbox in F5 (Copy) and F6 (Move) dialogs: "Verify after copy/move"
 - Streamed copies compute SHA-256 while reading the source, then flush and read back the unpublished destination to compare it; the source data is normally read only once
+- Verified copies also compare existing regular files against the source with SHA-256. Stable matching files count as already present, without rewriting them or adding undo actions for them. Both source and destination must remain unchanged during comparison.
+- Different existing contents are a conflict, not evidence of corruption: **Replace**, **Replace All**, rename, or skip. Replacement requires explicit approval and uses the same verified staging transaction; failed writes or verification preserve the old target. **Replace All** still checks each existing file and does not rewrite matches. Unreadable or changing files are not treated as mismatches.
+- If an existing regular source or target has no usable etag/modification-time token, a verified copy cannot establish stable comparison or replacement approval: both files are retained and the operation is reported unverifiable/incomplete, not corrupt. This also applies to known size differences; verification is never silently downgraded.
 - Moves keep size, identity, etag/modification-time checks around the transfer and before deleting the source. Without a usable change token, or when backend-native copying hides the source bytes, verification retains the independent source read
 - Mismatch, incomplete readback, or unavailable verification never replaces an existing destination or deletes the source
 - Copies and verification reads must cover known file sizes; premature end-of-stream is not accepted as a completed or verified transfer
@@ -62,12 +65,14 @@ Double Commander-style instant file viewer:
 - Visible `copy.nemo-partial-UUID` staging names support long final filenames; symbolic links are copied and compared without following their targets
 - Stream-copy staging files start private. Source permissions and timestamps are copied where supported; when a backend supplies no Unix permissions (or default target permissions are requested), a local stream-copy staging file conservatively keeps mode `0600`
 - Pull-only remote sources can still copy to local storage through GIO's native backend. Its output stays in a private temporary folder and uses checked filesystem-wide `syncfs` with an error-tracking descriptor opened before the transfer; requested verification still requires a readable source
-- Folder merges are incremental, with a conflict decision before copying children. File-to-folder or folder-to-file replacement requires a different destination name rather than deleting existing data before the replacement is ready
+- Verified copies traverse existing folders non-destructively and check every source child, prompting for genuinely conflicting files; extra destination files are never deleted. Ordinary copies and moves retain their merge conflict decisions. File-to-folder or folder-to-file replacement requires a different destination name rather than deleting existing data before the replacement is ready.
+- Symbolic-link equality means matching link text, without following the target (including broken links or links to FIFOs). Existing-file recognition applies to copies only, not skipped moves or intentionally named duplicates.
 
 ### Copy/Move Completion Feedback
 
 - The non-modal File Operations window keeps completed results until **Close**. Closing it clears completed summaries and hides the window; active transfers continue.
 - Copy/move results distinguish success, incomplete/skipped work, failure and cancellation. SHA-256 file-content verification and symbolic-link target checks are reported separately. Atomic renames and empty folders are not described as checksum-verified.
+- Newly copied files, verified existing files, and existing files retained without verification have separate counters. With verification off, ordinary retained-file conflicts can finish neutrally as **existing files retained (not verified)**; this is not content-confirmed success. Known differences, unexamined skipped folders, failures, and cancellation remain incomplete. Successful copy callbacks require every source item to be actually copied or verified already present.
 - Hidden-window completions, including short transfers, send a desktop notification without raising the window. The status icon or notification opens the results.
 - Nemo retains the latest 50 text summaries in memory, with an explicit notice when older results are omitted. Results are not written to disk. A visible summary keeps Nemo running until closed; hidden results do not. If Nemo exits, the desktop notification is the remaining record, subject to the desktop's notification-retention settings. Reopening a result after exit requires a desktop notification backend that supports restarting application actions; freedesktop notification backends can only reopen it while Nemo is running.
 
