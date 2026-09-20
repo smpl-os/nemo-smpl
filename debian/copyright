@@ -2,6 +2,11 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: Nemo
 Upstream-Contact: Linux Mint Project <root@linuxmint.com>
 Source: https://github.com/linuxmint/nemo
+Comment: Embedded artwork is documented separately in
+ gresources/default-icons/README.md, origins.json, and licenses/.
+ Full upstream per-file copyright, attribution and license notices are
+ installed in /usr/share/nemo/default-icons/licenses and included in the
+ libnemo-extension1 documentation for standalone library installations.
 
 Files: *
 Copyright: 2009, Alexander Larsson
@@ -31,6 +36,24 @@ Copyright: 2009, Alexander Larsson
            1999-2000, Eazel, Inc
            1999-2000, Red Hat Inc
 License: GPL-2+
+
+Files: gresources/default-icons/icons/symbolic/*
+Copyright: GNOME Project, XApp contributors, and third-party authors
+ as listed in gresources/default-icons/licenses/xsi/copyright
+License: XSI-artwork
+ XSI 1.1.0 is a collection of LGPL-3.0-only artwork with per-file exceptions
+ under GPL-3.0-only, CC-BY-SA-4.0, CC-BY-4.0, CC0-1.0, MIT and BSD-3-Clause.
+ The licenses apply per file, not as a choice of terms for every icon.
+ See gresources/default-icons/licenses/xsi/copyright for the full per-file
+ authorship and terms, and the accompanying unmodified license texts.
+
+Files: gresources/default-icons/icons/regular/*
+Copyright: GNOME Project <https://www.gnome.org/>
+License: CC-BY-SA-3.0
+ Adwaita artwork is offered under CC-BY-SA-3.0 or LGPL-3.0.
+ This distribution selects CC-BY-SA-3.0 for these unmodified images.
+ The full license and authorship notices are provided in
+ gresources/default-icons/licenses/adwaita-50/ and licenses/adwaita-46/.
 
 Files: cut-n-paste-code/libegg/eggtreemultidnd.c
        cut-n-paste-code/libegg/eggtreemultidnd.h

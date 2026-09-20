@@ -46,8 +46,11 @@ jobs:
           dpkg-buildpackage -us -uc -b
 
           mkdir -p debian-build
-          cp ../nemo_*_amd64.deb   "debian-build/nemo-smpl_${VERSION}_amd64.deb"   || true
-          cp ../nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb" || true
+          cp ../nemo_*_amd64.deb "debian-build/nemo-smpl_${VERSION}_amd64.deb"
+          cp ../nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb"
+          cp ../libnemo-extension1_*_amd64.deb \
+             ../libnemo-extension-dev_*_amd64.deb \
+             ../gir1.2-nemo-3.0_*_amd64.deb debian-build/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
