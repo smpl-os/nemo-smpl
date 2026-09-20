@@ -1,7 +1,6 @@
 /* nemo-icon-fallback.h
  *
- * smplOS: provide standard freedesktop fallbacks for the xapp icon names
- * ("xsi-*", "xapp-*") that Nemo asks for throughout its UI.
+ * smplOS: provide embedded flat fallback artwork for Nemo's UI and files.
  *
  * Copyright (C) 2026 smplOS
  *
@@ -23,9 +22,11 @@
 
 G_BEGIN_DECLS
 
-/* Install fallbacks for any xapp icon name the active icon theme does not
- * provide, and keep them in sync when the theme changes. Safe to call more
- * than once; only the first call has an effect.
+#define NEMO_ICON_FALLBACK_RESOURCE_PATH "/org/nemo/default-icons"
+
+/* Register embedded icons as ultimate theme fallbacks. No installed icon
+ * package, cache directory, or preference change is required. Real themes
+ * retain precedence. Safe to call more than once.
  *
  * Must be called after gtk_init(). On builds without NEMO_SMPL this is a
  * no-op.

@@ -1,0 +1,3122 @@
+{
+  "../data/icons/hicolor/actions/scalable/nemo-auto-arrange-symbolic.svg": {
+    "sha256": "91295a8f65e2474ff20ad177f67b432527281061996786654a02d4196e1a0df3",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-auto-arrange-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-desktop-scale-symbolic.svg": {
+    "sha256": "acc7d5dae5037c5060e6a1ddaee48bdecae888f9414b7680d57e10f77015a317",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-desktop-scale-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-horizontal-layout-symbolic.svg": {
+    "sha256": "00c878c5bf7fbf684f2144301ae4e3ff56daca8f5774292987b3324abc068596",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-horizontal-layout-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-horizontal-layout-wide-symbolic.svg": {
+    "sha256": "7c6c83be7921704d40c57a74158dc738fabb10da61b5aa5e3d1c5988bc0732c8",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-horizontal-layout-wide-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-location-symbolic-rtl.svg": {
+    "sha256": "abfc7f76effd84dc9f97a04f4a34557cb6d2eaf5aba7a06a6133daaea853e2e0",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-location-symbolic-rtl.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-location-symbolic.svg": {
+    "sha256": "be87d9c84e8ea7bfc3193f19dfce9e00d22c97d9dbf5671b9ec803842a61ba9b",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-location-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-recursive-search-symbolic-rtl.svg": {
+    "sha256": "f27ae887ad8398fec726f50c8e2672fc316f1f84ea35052dbc3b4ffbf2853f5e",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-recursive-search-symbolic-rtl.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-recursive-search-symbolic.svg": {
+    "sha256": "6383bf4b1223c5f94973c0aadd90a888457abd405a833ff7c0279cb4384faaca",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-recursive-search-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-hide-symbolic-rtl.svg": {
+    "sha256": "24eb6ec78e19d9a0b67fa5a638c9e5a36cab72d28997cb8c26d91873def45988",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-hide-symbolic-rtl.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-hide-symbolic.svg": {
+    "sha256": "fdefeb396c61686c74d1e4a3ac2152106002b0577947425e45df97c5baa668db",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-hide-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-places-symbolic.svg": {
+    "sha256": "2afcc88306e3b2eb994c31506e8603a4f6076b4476018e812b34a38077f4e03b",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-places-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-show-symbolic-rtl.svg": {
+    "sha256": "9d2795ed5aa7395fdeab9c840e7ebc61e816ca4ca57a660683635d290966b315",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-show-symbolic-rtl.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-show-symbolic.svg": {
+    "sha256": "2e277558686bab218d1a403784b4b9c56eae3a9549d063eda03c06572e111e18",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-show-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-tree-symbolic-rtl.svg": {
+    "sha256": "747d32cc4eb94a642cb8ab67f8596eb5ddfa7b317f2c0421f3152787929f3acb",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-tree-symbolic-rtl.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-sidebar-tree-symbolic.svg": {
+    "sha256": "0a4ae92a2edbfd6b25a745adccf6352285ffe54e8992ce5562ffbede6f8f2714",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-sidebar-tree-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-vertical-layout-symbolic.svg": {
+    "sha256": "c106e4909337e38b1c5275333ee56c516a063b6f5c1e316f32c976f20b63992a",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-vertical-layout-symbolic.svg"
+  },
+  "../data/icons/hicolor/actions/scalable/nemo-vertical-layout-wide-symbolic.svg": {
+    "sha256": "da6826f950a173c1d88c4bf60c68f8dad3227f8deec78fc0e77d333b4ea18f4f",
+    "source": "repo:data/icons/hicolor/actions/scalable/nemo-vertical-layout-wide-symbolic.svg"
+  },
+  "../data/icons/hicolor/apps/scalable/nemo.svg": {
+    "sha256": "63871dc95730902e347c987cd63de1fbc1cd9096a5c8c52dfe55fcbfa104718c",
+    "source": "repo:data/icons/hicolor/apps/scalable/nemo.svg"
+  },
+  "../data/icons/hicolor/categories/scalable/nemo-prefs-behavior-symbolic.svg": {
+    "sha256": "4b6849bd0b67be384a96b753974c557deb20c5b4c77fbcc3fee691a9255cdd17",
+    "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-behavior-symbolic.svg"
+  },
+  "../data/icons/hicolor/categories/scalable/nemo-prefs-display-symbolic.svg": {
+    "sha256": "b89632e4e9001e1e840de58fafcc9927d65cae1fc4e793dbbd41a30d3494ed89",
+    "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-display-symbolic.svg"
+  },
+  "../data/icons/hicolor/categories/scalable/nemo-prefs-plugins-symbolic.svg": {
+    "sha256": "a76f8528747d661c8cf59f88301f49d81612504bcdb1efc19bd1a832e69cccbe",
+    "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-plugins-symbolic.svg"
+  },
+  "../data/icons/hicolor/categories/scalable/nemo-prefs-preview-symbolic.svg": {
+    "sha256": "119a1b5c8040ac496d68c714f367b270ac6b188a565d243f33985619954e5f62",
+    "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-preview-symbolic.svg"
+  },
+  "../data/icons/hicolor/categories/scalable/nemo-prefs-toolbar-symbolic.svg": {
+    "sha256": "7de63db4be625bdaae11a833a8b2a6ad6c4a783ed39825645100c98bdd84bb0b",
+    "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-toolbar-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-0-symbolic.svg": {
+    "sha256": "64d040c9e957de60f3cc1eb109d0389fe642e36cb45529a1825163b8522c14c7",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-0-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-10-symbolic.svg": {
+    "sha256": "8df49c88a9dc14563fb531c33657ed0b619779de74952421644030359b99f7d3",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-10-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-100-symbolic.svg": {
+    "sha256": "78121a8d8160a445f42929b4e45c8ddb6288a97e2dc491d3101e61b0f6a02ef8",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-100-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-20-symbolic.svg": {
+    "sha256": "7da7a094bd31efb7100f4d2b039d23aca665743297a891d3bc7ed67185e61c3e",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-20-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-30-symbolic.svg": {
+    "sha256": "eca91a69c7176412ab63d600f8077f4496a0a8ac308b6b08ebaab7f62f57a004",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-30-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-40-symbolic.svg": {
+    "sha256": "8480e2a7a9ec0d1e404a05251bbae7b49810240c3a0aa47be66ce4cf182966ad",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-40-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-50-symbolic.svg": {
+    "sha256": "5851a5200d868e57d59014cb25cdf629aaa1b5bd5b015493e4af1fd26886cc19",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-50-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-60-symbolic.svg": {
+    "sha256": "0616898c2d73c4731c5c9244516c4237532d4f4cc8bbaae37c7ecb04b022f020",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-60-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-70-symbolic.svg": {
+    "sha256": "eacf9974b8157d48173ae4c6c4488d8aaee994d4a2338ad4cd5c5dbd82062f71",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-70-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-80-symbolic.svg": {
+    "sha256": "2e452e15310a9f9116c9a5c084851cad3126531bae944eb983e10757532099a8",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-80-symbolic.svg"
+  },
+  "../data/icons/hicolor/status/scalable/nemo-progress-90-symbolic.svg": {
+    "sha256": "fd4d549a2393064c2af5146271ae0fc46660c3aed132c78d4704a362c059e19b",
+    "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-90-symbolic.svg"
+  },
+  "icons/regular/application-certificate.svg": {
+    "sha256": "ef16ee3087339d7ab332c5740e69d1fa23cdaed81e31df32923dcd57fc9be459",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-certificate.svg"
+  },
+  "icons/regular/application-octet-stream.svg": {
+    "sha256": "aac059f66ce8647ed57d0960436f3444af81be2afee9cef55327ab7572b90120",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-executable.svg"
+  },
+  "icons/regular/application-x-addon.svg": {
+    "sha256": "c8eefa0dab231b99680ca01515fd134f1840d7d9b95699a378e4bf9badfb97ad",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-addon.svg"
+  },
+  "icons/regular/application-x-executable.svg": {
+    "sha256": "aac059f66ce8647ed57d0960436f3444af81be2afee9cef55327ab7572b90120",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-executable.svg"
+  },
+  "icons/regular/application-x-firmware.svg": {
+    "sha256": "536d8ddcdcf4c2ab6b341dc518e12045cb9fe4eef5685a3241743addc17aed18",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-firmware.svg"
+  },
+  "icons/regular/application-x-generic.svg": {
+    "sha256": "9abc2264ef1a4a9636129e9a45dc4126208d6d2d8d78ece422dad25bdabc5582",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-generic.svg"
+  },
+  "icons/regular/application-x-sharedlib.svg": {
+    "sha256": "ef10676ae64e4aa6f4ac41bf30401ace7df5e920c690b0c9a42d86af286102f4",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/application-x-sharedlib.svg"
+  },
+  "icons/regular/audio-headphones.svg": {
+    "sha256": "e843a11c11b9dc2edbe16d0576c33dc75b5e3a3f341da3b54d6623d174ae981d",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/audio-headphones.svg"
+  },
+  "icons/regular/audio-headset.svg": {
+    "sha256": "4eb93282dd1163dd216c43b8771bccd4da0d2c2a1fea5a842352554dba028fbb",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/audio-headset.svg"
+  },
+  "icons/regular/audio-x-generic.svg": {
+    "sha256": "f64419304ae5b20929dacc7072711e4f9ba20d8d7354ef941e32c6a29de4c6e5",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/audio-x-generic.svg"
+  },
+  "icons/regular/avatar-default.svg": {
+    "sha256": "97dceb53ba7eefc638b05fa7fd48ef9e55622e29a90e79886ce06813f9a2e931",
+    "source": "/usr/share/icons/Adwaita/scalable/status/avatar-default.svg"
+  },
+  "icons/regular/camera-web.svg": {
+    "sha256": "b496b5eaa5b3bec7b2685b94d9e6de676de0b841f1aca3f4a90720a1b2d2d675",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/camera-web.svg"
+  },
+  "icons/regular/computer.svg": {
+    "sha256": "310a581ae072f669791acb3a8688115b842e2f0a37460a872155c260a430b3a0",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/computer.svg"
+  },
+  "icons/regular/drive-harddisk.svg": {
+    "sha256": "e3e191a2c12be1188737d423a8e1ba54fe00b1f7c47c55ddae0c2f8f56b3c043",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/drive-harddisk.svg"
+  },
+  "icons/regular/drive-multidisk.svg": {
+    "sha256": "237ba78cb14f00d8226145111895df4ec115f4b85a71491b8621dd4c2fe67d6d",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/drive-multidisk.svg"
+  },
+  "icons/regular/drive-optical.svg": {
+    "sha256": "1f1268ee2ba96d5d91cef1975e7b5a015ca1651ef4f7e0201059d92393fd3353",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/drive-optical.svg"
+  },
+  "icons/regular/drive-removable-media.svg": {
+    "sha256": "4851c8378d7f96e4784a9692f37f5a1ced8a60bf082bc222d2b6cfeaaba49d3b",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/drive-removable-media.svg"
+  },
+  "icons/regular/ebook-reader.svg": {
+    "sha256": "dcfda0e5c461a7a4bc3b3d4c93ecf4b85b3e2f40034b0a8f35fb19800323bacc",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/ebook-reader.svg"
+  },
+  "icons/regular/emblem-symbolic-link.png": {
+    "sha256": "8abb9f80da3ad9951a1c4be95b1ecd53e163fffa133ccbb2a28aa14f6bf8dd16",
+    "source": "/usr/share/icons/Adwaita/16x16/emblems/emblem-symbolic-link.png"
+  },
+  "icons/regular/folder-documents.svg": {
+    "sha256": "9adc199ee595398be592cc9989bbbc02d8ca42355b18e8e1a6c8cc125abe5b5f",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-documents.svg"
+  },
+  "icons/regular/folder-download.svg": {
+    "sha256": "97caa710fd560edb479dfeb8e04fa587ae65504bbe02df6c2fde8a22514e8746",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-download.svg"
+  },
+  "icons/regular/folder-drag-accept.svg": {
+    "sha256": "1ad4aea2e388f553fd958fa0ce8120fb80d48319a004d48ce777d89e051c179d",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-drag-accept.svg"
+  },
+  "icons/regular/folder-music.svg": {
+    "sha256": "4b46e981e7c6e0e9503aed6cd5ca7acbc2c89a66f4a0b62283f08b03fda8201d",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-music.svg"
+  },
+  "icons/regular/folder-open.svg": {
+    "sha256": "1ad4aea2e388f553fd958fa0ce8120fb80d48319a004d48ce777d89e051c179d",
+    "source": "/usr/share/icons/Adwaita/scalable/status/folder-open.svg"
+  },
+  "icons/regular/folder-pictures.svg": {
+    "sha256": "4b36a3dc78d0689537a76bef4380bd6aefd61d93cfea3432b8ed198c064625ed",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-pictures.svg"
+  },
+  "icons/regular/folder-publicshare.svg": {
+    "sha256": "5776713f288e9c17cfa3afe1a9ea7f16a5cb60c6d4b54571a69356c64ddf2f5b",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-publicshare.svg"
+  },
+  "icons/regular/folder-remote.svg": {
+    "sha256": "c8fc5923de2f9cc66a68a773d7cd250d7b0b53c01f01bd132decd746784b8d51",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-remote.svg"
+  },
+  "icons/regular/folder-saved-search.png": {
+    "sha256": "602ba135e391d744afc2c2e7ac1916529db193111ac6dcfe988c5e676cd8b867",
+    "source": "/usr/share/icons/AdwaitaLegacy/48x48/places/folder-saved-search.png"
+  },
+  "icons/regular/folder-templates.svg": {
+    "sha256": "490f984055418dafb1c17385e25af6b789da133fe5623572c6b7e31a3fbdbc12",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-templates.svg"
+  },
+  "icons/regular/folder-videos.svg": {
+    "sha256": "c48f7b4644789ad668e07ec267b45d7bc5aef9dad684bfcd6f5babf25e72c852",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder-videos.svg"
+  },
+  "icons/regular/folder-visiting.svg": {
+    "sha256": "1ad4aea2e388f553fd958fa0ce8120fb80d48319a004d48ce777d89e051c179d",
+    "source": "/usr/share/icons/Adwaita/scalable/status/folder-open.svg"
+  },
+  "icons/regular/folder.svg": {
+    "sha256": "1ad4aea2e388f553fd958fa0ce8120fb80d48319a004d48ce777d89e051c179d",
+    "source": "/usr/share/icons/Adwaita/scalable/places/folder.svg"
+  },
+  "icons/regular/font-x-generic.svg": {
+    "sha256": "1df055ebdee2588dcd8516a25f30f25f7d3f970b2e3191113c4d9baa794f5aef",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/font-x-generic.svg"
+  },
+  "icons/regular/image-loading.svg": {
+    "sha256": "4ff7a5d906160c7a77cec8fceca5258af405a787d69ee5818bef613b6843c84f",
+    "source": "/usr/share/icons/Adwaita/scalable/status/image-loading.svg"
+  },
+  "icons/regular/image-missing.svg": {
+    "sha256": "af6b1fbc74b1dec2431352153b747e8cd584b11fcb762d97b1563dc03a2b6a18",
+    "source": "/usr/share/icons/Adwaita/scalable/status/image-missing.svg"
+  },
+  "icons/regular/image-x-generic.svg": {
+    "sha256": "809c4de9f22898465eae95a42b58bf21dd57e9ef178fc8acf009d73eb80494d5",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/image-x-generic.svg"
+  },
+  "icons/regular/inode-directory.svg": {
+    "sha256": "1ad4aea2e388f553fd958fa0ce8120fb80d48319a004d48ce777d89e051c179d",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/inode-directory.svg"
+  },
+  "icons/regular/inode-symlink.svg": {
+    "sha256": "c3aee1ac411f534d87f4f6d1b726017eced2864ab5b01c04debfc9a37c784697",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/inode-symlink.svg"
+  },
+  "icons/regular/input-gaming.svg": {
+    "sha256": "d911c122be154aac2e848f053e60c6c0984806d5e9406a323d85ac251cf056f5",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/input-gaming.svg"
+  },
+  "icons/regular/input-keyboard.svg": {
+    "sha256": "8e3e95244c98f767b25977d36bb761b218dd7d5728e207ce9f5cdce94da01b8f",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/input-keyboard.svg"
+  },
+  "icons/regular/input-mouse.svg": {
+    "sha256": "3d4278e62e8bc386f6adb0ca67fec15a5075ddaab7a960b12c29511f7529dde9",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/input-mouse.svg"
+  },
+  "icons/regular/input-tablet.svg": {
+    "sha256": "e2c90fe126062b3defc57cd0d33f39be9cdb3ffa4536a2dd54e5776ca6580331",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/input-tablet.svg"
+  },
+  "icons/regular/media-flash.svg": {
+    "sha256": "20345a5cce1eacea431f7a168816b184bc9d6b03bc05b42e8ca519b1807716f1",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/media-flash.svg"
+  },
+  "icons/regular/media-optical.svg": {
+    "sha256": "c4112c3b921884d21e2e094ad5399b9c32ca35d598aa079815c3fc0960e356d4",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/media-optical.svg"
+  },
+  "icons/regular/media-removable.svg": {
+    "sha256": "aa897a8d3b8db66f3e5ce8e410b0ba2ca65efaf9cbc2611d5533306633874203",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/media-removable.svg"
+  },
+  "icons/regular/microphone.svg": {
+    "sha256": "10f38e2a98204c26ee0e8f2b714c9531efab1e96660178749d2b982a9f4c0bf8",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/microphone.svg"
+  },
+  "icons/regular/model.svg": {
+    "sha256": "761bfc4527947de2a5c770c9a161a7fbd69115e91eb679dbaa41b78149002d8f",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/model.svg"
+  },
+  "icons/regular/nemo-cd-burner.svg": {
+    "sha256": "c4112c3b921884d21e2e094ad5399b9c32ca35d598aa079815c3fc0960e356d4",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/media-optical.svg"
+  },
+  "icons/regular/network-server.svg": {
+    "sha256": "3d27d653a218ef38b2929685e782b378cdf5029ee92df044077f524bf043aba9",
+    "source": "/usr/share/icons/Adwaita/scalable/places/network-server.svg"
+  },
+  "icons/regular/network-workgroup.svg": {
+    "sha256": "311965cce176a028983d77ee80f8575d4f40036823ccaccfdf2bf6fb8b2da8b1",
+    "source": "/usr/share/icons/Adwaita/scalable/places/network-workgroup.svg"
+  },
+  "icons/regular/non-starred.png": {
+    "sha256": "a6e16117a7a5465ae576f9178a8745f2d982e6c0c0e72f5103c625e530c09162",
+    "source": "/usr/share/icons/AdwaitaLegacy/48x48/legacy/non-starred.png"
+  },
+  "icons/regular/package-x-generic.svg": {
+    "sha256": "d32af7109587f5fe2e76ece001eac406830da907e0e75b5d6eb191f3c16945e2",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/package-x-generic.svg"
+  },
+  "icons/regular/phone.svg": {
+    "sha256": "491f9318d440117f154466ac9a207cace8176aaab307150f9171c893a2ced108",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/phone.svg"
+  },
+  "icons/regular/preferences-desktop.png": {
+    "sha256": "2db52b68ef645c0e785e793b4e649fa5b8b3b60dc7e5f5ced9731e4d270f1df7",
+    "source": "/usr/share/icons/AdwaitaLegacy/48x48/legacy/preferences-desktop.png"
+  },
+  "icons/regular/printer-network.svg": {
+    "sha256": "6e415078bff51aec0e984abf5160c56e302836839bd6fe31995a2f3b2b8de820",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/printer-network.svg"
+  },
+  "icons/regular/printer.svg": {
+    "sha256": "ccaeec2b773bf679239e66cb9defea22c55b2221d4bcac2add91f747028e6c68",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/printer.svg"
+  },
+  "icons/regular/scanner.svg": {
+    "sha256": "b2c61d95464cc9e1d84c66e7abd4c22eb140892098a7a219752f7afb4f7a3690",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/scanner.svg"
+  },
+  "icons/regular/starred.png": {
+    "sha256": "fade3ec6b848f4ef21a74f33aa6a14801aaec308edbd89d6ded496cb4430c302",
+    "source": "/usr/share/icons/AdwaitaLegacy/48x48/legacy/starred.png"
+  },
+  "icons/regular/system-search.png": {
+    "sha256": "9a2272092a82d7437addcd677cbc169684716850d7f3ebf24744c9ab9db572ff",
+    "source": "/usr/share/icons/AdwaitaLegacy/48x48/legacy/system-search.png"
+  },
+  "icons/regular/text-html.svg": {
+    "sha256": "cbd1ca5d50d0d25bbd56cedbebc69dd6b5e6ea107387fa7411204aa5e4394616",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/text-html.svg"
+  },
+  "icons/regular/text-x-generic-template.svg": {
+    "sha256": "4440894b5c881149687df39ce667d1003f5e3c0003fb9a9bf1bd40555dfc75df",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/text-x-generic.svg"
+  },
+  "icons/regular/text-x-generic.svg": {
+    "sha256": "4440894b5c881149687df39ce667d1003f5e3c0003fb9a9bf1bd40555dfc75df",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/text-x-generic.svg"
+  },
+  "icons/regular/text-x-preview.svg": {
+    "sha256": "9abc2264ef1a4a9636129e9a45dc4126208d6d2d8d78ece422dad25bdabc5582",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/text-x-preview.svg"
+  },
+  "icons/regular/text-x-script.svg": {
+    "sha256": "67afdc110e12617ad2fb15dffaa5468a15192d6305a3256ef622f6e8b7c7568c",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/text-x-script.svg"
+  },
+  "icons/regular/user-bookmarks.svg": {
+    "sha256": "5155d899e827b6f63582594ef0684c7429bafd75393006f71a04b780dca1cb9f",
+    "source": "/usr/share/icons/Adwaita/scalable/places/user-bookmarks.svg"
+  },
+  "icons/regular/user-desktop.svg": {
+    "sha256": "30eb913d230063f1d9b813a77bf5fdfdb05094e2071b985d975550c5ab4693f0",
+    "source": "/usr/share/icons/Adwaita/scalable/places/user-desktop.svg"
+  },
+  "icons/regular/user-home.svg": {
+    "sha256": "e1e37072238f2938e71ce7990bb6a551e1f84b5b424bd2cf5847ffb35ff63cc8",
+    "source": "/usr/share/icons/Adwaita/scalable/places/user-home.svg"
+  },
+  "icons/regular/user-trash-full.svg": {
+    "sha256": "0ec030387477f219992fbb6fe6d739b13bbcc59afb2723e4f6025773434664ae",
+    "source": "/usr/share/icons/Adwaita/scalable/status/user-trash-full.svg"
+  },
+  "icons/regular/user-trash.svg": {
+    "sha256": "2f775224df164249dbf250cf91177c92b55f58e3a366ca9cf134c1390857bed4",
+    "source": "/usr/share/icons/Adwaita/scalable/places/user-trash.svg"
+  },
+  "icons/regular/video-display.svg": {
+    "sha256": "582d88126d8f51bc470788585ddbbfbcda6999d4a73fbbe1446506b5bd1576a2",
+    "source": "/usr/share/icons/Adwaita/scalable/devices/video-display.svg"
+  },
+  "icons/regular/video-x-generic.svg": {
+    "sha256": "5ed0289b7acb979407d9d2d182818b794a6e4400a7d2084e2cd106182fda8f63",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/video-x-generic.svg"
+  },
+  "icons/regular/x-office-addressbook.svg": {
+    "sha256": "45f8d6302a998039df58c83b23b7e52d69cccb404de5c7d7fc79857aaf091b82",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-addressbook.svg"
+  },
+  "icons/regular/x-office-document-template.svg": {
+    "sha256": "35cea626e18d30c4512a853bbe4f761112295e825980434e08ec3a51b56054dd",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-document-template.svg"
+  },
+  "icons/regular/x-office-document.svg": {
+    "sha256": "5ac4e698cf7fdc68fd201e492178f7f38979ac3af3ef67768ea023c5738d2c19",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-document.svg"
+  },
+  "icons/regular/x-office-drawing.svg": {
+    "sha256": "6cad5b028bddb238ff83d8ff44840c38959f8b687e27a356241b8098c5cd2d3e",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-drawing.svg"
+  },
+  "icons/regular/x-office-presentation-template.svg": {
+    "sha256": "e498425c60c22269adaf75b57728643feb3bac049f40c6ad69aca0235b73456a",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-presentation-template.svg"
+  },
+  "icons/regular/x-office-presentation.svg": {
+    "sha256": "a0bc7e36bf7e5826599e5abbab076f1ea287066870551acc422f3a459f3b210b",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-presentation.svg"
+  },
+  "icons/regular/x-office-spreadsheet-template.svg": {
+    "sha256": "dc525be606e007d622f62a1fc6b2dda3a9f8229cb45ab9e2ada57127cdedd1b0",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-spreadsheet-template.svg"
+  },
+  "icons/regular/x-office-spreadsheet.svg": {
+    "sha256": "78f02b4b20c454315a793f3b21f05ff701be35513e059e94b158aa4b44eefd57",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-office-spreadsheet.svg"
+  },
+  "icons/regular/x-package-repository.svg": {
+    "sha256": "b599ef4ec98e14de227d2dbf705393b41c5b45635456bc87bf65c7af3193ca99",
+    "source": "/usr/share/icons/Adwaita/scalable/mimetypes/x-package-repository.svg"
+  },
+  "icons/symbolic/xsi-accessibility-symbolic.svg": {
+    "sha256": "71fbe444207e964f4ce063cf615091b4e89ca829a38185973d829409056f2a2e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-accessibility-symbolic.svg"
+  },
+  "icons/symbolic/xsi-add-files-to-archive-symbolic.svg": {
+    "sha256": "3675360cc9329e891b12b17832ef938095fb0447f9e2aca4eda11b6b1f6719ec",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-add-files-to-archive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-addon-symbolic.svg": {
+    "sha256": "0239c1b5bc4c06f74305b95b3dec6b8140bad1defe96663536ef405fedb63736",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-addon-symbolic.svg"
+  },
+  "icons/symbolic/xsi-address-book-new-symbolic.svg": {
+    "sha256": "0b2f019284a794c4c380cab41e9f36e59357744aa1fe1a171e8831c761b1dd89",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-address-book-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-airplane-symbolic.svg": {
+    "sha256": "81078ae527769ba8141768b27287f30da50028f41b8decef09b8c7049e844750",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-airplane-symbolic.svg"
+  },
+  "icons/symbolic/xsi-alarm-symbolic.svg": {
+    "sha256": "9cf8e1c390ec7892a69a393336edd189f224a89fcbbe72e8605aa00d806f19e7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-alarm-symbolic.svg"
+  },
+  "icons/symbolic/xsi-annotations-squiggly-symbolic.svg": {
+    "sha256": "66023a4a8c915488d669eb1160b57ab73a82f11d91c77f042dbac8e354d33016",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-annotations-squiggly-symbolic.svg"
+  },
+  "icons/symbolic/xsi-annotations-text-symbolic.svg": {
+    "sha256": "8490773a1c5c8b4c8d2d8b579cf5e561af5bcdc7399fd458fbe717428bc0ab11",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-annotations-text-symbolic.svg"
+  },
+  "icons/symbolic/xsi-appearance-symbolic.svg": {
+    "sha256": "2521fc04fc3fd850f95fd4797a120a4dd3659866dbfb006bb4053021b66a71ff",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-appearance-symbolic.svg"
+  },
+  "icons/symbolic/xsi-appliance-symbolic.svg": {
+    "sha256": "b907f708a0858036d9fb2a7eeef789334d4c3754ba65eb4aaf02ae108009d700",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-appliance-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-accessories-symbolic.svg": {
+    "sha256": "26b069ad21997d1210a5f8e6c34a71595a0c88184597fdf32ac182c39e5352a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-accessories-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-administration-symbolic.svg": {
+    "sha256": "76c8e673df6c429c4537a97a981b9089edad086c08a7936212917052a8f678b9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-administration-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-development-symbolic.svg": {
+    "sha256": "c20adad603e4eedb8a13756eeb2f7d95d89bf4aa862cfb3e4e9fe22d56f08827",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-development-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-education-symbolic.svg": {
+    "sha256": "14b997f3d9aac995866c70d15a7f9896e6aba6c82b617a79703d676842f25d82",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-education-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-electronics-symbolic.svg": {
+    "sha256": "0d900c5b93d72a25386fc2d204d27e57f29cc933915612de81ee0724243ad88c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-electronics-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-engineering-symbolic.svg": {
+    "sha256": "8fee7608fe4062e5b896eae3f5f9e8599b243e1579d6dcd88af0c946e5bcbc99",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-engineering-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-games-symbolic.svg": {
+    "sha256": "f94c5164aaed9737ab55293aa4a88c7b9598f35440c16ea4390dc5f1f4611b7c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-games-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-graphics-symbolic.svg": {
+    "sha256": "a184b2464e374e4a2cbe1e0ecac98e2cb2cd90bd2a406aef4e55adaf0e1a2adc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-graphics-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-internet-symbolic.svg": {
+    "sha256": "8f5ba63d97a3f3af71cc1d91bd4c60fdcc3fe8740e5b57c238604cb7705e2e19",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-internet-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-multimedia-symbolic.svg": {
+    "sha256": "32bbf497bd2fea0569edf5f68f7d1944d2f230c2e2d1aba7fdf40d93dd83e8cf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-multimedia-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-office-symbolic.svg": {
+    "sha256": "74e7b6c8e1f5016c6b749f001053ea6def5968d1d8cc74f0c6d23a394588a14d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-office-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-other-symbolic.svg": {
+    "sha256": "c26e9d82dea52c3f55f0cc02587b113bdbb700f621fbf39fc5778268629d9560",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-other-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-preferences-symbolic.svg": {
+    "sha256": "287a3f6c2dbdb1d90899680cf843a2b563b2f0025134bc23d99f23cdc1e2137c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-preferences-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-science-symbolic.svg": {
+    "sha256": "685e75d53d03f1f48671904b10fa43bf1fbf4450609386afc5d8deb92bdc80b5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-science-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-system-symbolic.svg": {
+    "sha256": "76c8e673df6c429c4537a97a981b9089edad086c08a7936212917052a8f678b9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-system-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-utilities-symbolic.svg": {
+    "sha256": "26b069ad21997d1210a5f8e6c34a71595a0c88184597fdf32ac182c39e5352a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-utilities-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-webapps-symbolic.svg": {
+    "sha256": "217657af86a2ca47a4e7d468ad7060c2c4ef3468f7459f71afc04d894afd72ee",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-webapps-symbolic.svg"
+  },
+  "icons/symbolic/xsi-applications-wine-symbolic.svg": {
+    "sha256": "9a91b756b0fd3ec76847fff7b4897d7966dd58433d0f266cdaa34f48d7c8b7f9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-applications-wine-symbolic.svg"
+  },
+  "icons/symbolic/xsi-appointment-missed-symbolic.svg": {
+    "sha256": "da371c4c6d24dca3db7cef6622c231c1a3031974f2d2cd030f2f720cd3fd09ef",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-appointment-missed-symbolic.svg"
+  },
+  "icons/symbolic/xsi-appointment-new-symbolic.svg": {
+    "sha256": "337beedd9931b0cd847a5ac61abf3b299c67f46a2918a5fe5c0c5eccc871cd44",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-appointment-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-appointment-soon-symbolic.svg": {
+    "sha256": "61e28176aa54bc11e77c960fa4451a4135ecdc331f5488624146c5460c9e31c0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-appointment-soon-symbolic.svg"
+  },
+  "icons/symbolic/xsi-apps-symbolic.svg": {
+    "sha256": "57105d0167595f53258304c91b412e224943ade0a71fb183df0e843c2890ffe8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-apps-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-card-symbolic.svg": {
+    "sha256": "93ee70ff3498e75c4ca54a62e90792ac320feed24f11d696599ba56d3a94494a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-card-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-headphones-symbolic.svg": {
+    "sha256": "67bbf36803c6e63e530c057dd0431fafbeac4011e892d9585989f77f6b19434b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-headphones-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-headset-symbolic.svg": {
+    "sha256": "80b569be634212287286ab6e429569001dd64ae53cbfd5cc38f9debdf4a9a8a6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-headset-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-input-microphone-symbolic.svg": {
+    "sha256": "2ed932d679852639c7b2c89652d404bdfaa42916719ff3f134fac1f4f575d0ff",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-input-microphone-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-speakers-symbolic-rtl.svg": {
+    "sha256": "236a6e3550a7d3938d9bcfdbf6c677af00a4550cfdbc5aa636c4942e83dd24c5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-speakers-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-speakers-symbolic.svg": {
+    "sha256": "b23ef5e92807e03034eaad59519ff6b521597634f7252fb3924fa2c5d46e757f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-speakers-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-control-symbolic.svg": {
+    "sha256": "2f11a00cc5dd755c1e5054aef16ce293716532140b3ddb0f0623abd460f99571",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-control-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-high-symbolic-rtl.svg": {
+    "sha256": "f61605e2cfedab064a4fb21ed9d6d5e147ab2ebcbb86d5c5543d17d1b44b906b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-high-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-high-symbolic.svg": {
+    "sha256": "ed111cb22410a2c6b0556678662308f4ba3aa1cbca53b12fdd4939a52c0c7f52",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-high-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-low-symbolic-rtl.svg": {
+    "sha256": "21db02919d25dd9c7432c9a168e9ed34c9006fb6ab9c7abd6fafa639a494bcda",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-low-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-low-symbolic.svg": {
+    "sha256": "789ad418ac0af947aeecaaf863b1fe622a2b657b9ae2346f79eb9aca1270d308",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-low-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-medium-symbolic-rtl.svg": {
+    "sha256": "b1b9450b879ebb51f8acb56b310f3166c33efa483449bd9666ac4692b199e24d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-medium-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-medium-symbolic.svg": {
+    "sha256": "d2339a7d194e7b3ce9d352765883d167dd0e5c53a0a0983ed61faf4b755cb68c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-medium-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-muted-symbolic-rtl.svg": {
+    "sha256": "c90f10f82c7c09b369544e7f4c54ded9831157a5acc2a5533ba0c9133db6a1b8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-muted-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-muted-symbolic.svg": {
+    "sha256": "9df9074f7acd05ae7f36e5bd26e5ef89eb188cd382106f807b039caf409ff539",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-muted-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-overamplified-symbolic-rtl.svg": {
+    "sha256": "a775e8bbce0d5f853d2d8cee64f47ef929f3b21114afa4d9aedc0e033279044d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-overamplified-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-audio-volume-overamplified-symbolic.svg": {
+    "sha256": "8591a57b70950a77f59319704c6f8f48e57358c3f061b983dc95b5afc8a0000b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-volume-overamplified-symbolic.svg"
+  },
+  "icons/symbolic/xsi-audio-x-generic-symbolic.svg": {
+    "sha256": "e9d6377cc778790d383eaa2941e37b6a14b12dd6bd7b3852b9857e628364617a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-audio-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-auth-face-symbolic.svg": {
+    "sha256": "4e614d5544a6cf7fe54f3e3e787c5a39b5d399e81cdb4a3de13e3d8c62649962",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-auth-face-symbolic.svg"
+  },
+  "icons/symbolic/xsi-avatar-default-symbolic.svg": {
+    "sha256": "017ac0ebce425c10a1a7540da3505f1eecfe0e36532607df7a610a0356394e5f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-avatar-default-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-ac-symbolic.svg": {
+    "sha256": "9fb9df91c455646a32fb4dc39311630747bdd2056a61c316b2c1ef90b1a1d8c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-ac-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-action-symbolic.svg": {
+    "sha256": "dceceeda090ebea4e174ad6e727ce39a9e4fd09e2d9f63ea3736a9a740c6739f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-action-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-caution-symbolic.svg": {
+    "sha256": "9680d8a8c7a11717c786e7536c42d650384b34250b4f290970483ef756fcfbd1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-caution-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-0-charging-symbolic.svg": {
+    "sha256": "64da172e9149745284281b040d71c4c0a5e59ac83ea5d159a2858f29b3b62a68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-0-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-0-symbolic.svg": {
+    "sha256": "4000eae28ae0b83dbbab6d557f1852fb8e811539829513d22153ecd202bda3cb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-0-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-10-charging-symbolic.svg": {
+    "sha256": "9ba4bf5aa675c73298d5c85d8bcdeaaacdf10e05a0a8c973f10e4a7faa5aece7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-10-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-10-symbolic.svg": {
+    "sha256": "b875fa5414d59cebdde7c1c10940161343e40e55d2d4e6fe48dedb47766c8ee1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-10-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-100-charged-symbolic.svg": {
+    "sha256": "d235a6db52f6e05fa8f320ea7020d88f6aac41ae2dae7381bb1e44850bac8bab",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-100-charged-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-100-charging-symbolic.svg": {
+    "sha256": "d235a6db52f6e05fa8f320ea7020d88f6aac41ae2dae7381bb1e44850bac8bab",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-100-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-100-symbolic.svg": {
+    "sha256": "d23f7af6dbe0784fb28e7089aa8df04cf2babadac4844ab235c78dd9594ffeae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-100-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-20-charging-symbolic.svg": {
+    "sha256": "86ca7c95e67b5e593ea1a8b6810ee3f7f5c07369ff0bc98a08d28ab487144fbd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-20-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-20-symbolic.svg": {
+    "sha256": "7ec45f6392ff16e5e3b218dce255e6d20b58bb87cb8ac4f692c623b425a88d1e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-20-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-30-charging-symbolic.svg": {
+    "sha256": "86ca7c95e67b5e593ea1a8b6810ee3f7f5c07369ff0bc98a08d28ab487144fbd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-30-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-30-symbolic.svg": {
+    "sha256": "e50e2daf44bfdfa580640223dd9ad5aaf61961cd55537794dbbf3e3e945c24df",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-30-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-40-charging-symbolic.svg": {
+    "sha256": "8b78dfee302cbdd8ecabe390fd53a6652fa9aeda5b1ce74f6433db93536cc0ed",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-40-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-40-symbolic.svg": {
+    "sha256": "faec44b5f86b64de5b528118e69aff5f59fdce7fab8e27393ce348eac9abfa12",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-40-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-50-charging-symbolic.svg": {
+    "sha256": "40e4109c01fae8872505a598dcad37ce7550112b406fa75e7f240f2015607fe8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-50-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-50-symbolic.svg": {
+    "sha256": "353ccb6f5a1aba261f356fca41bd7a95ca31e5a1e2ae84f18f53ce3ec9553992",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-50-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-60-charging-symbolic.svg": {
+    "sha256": "40e4109c01fae8872505a598dcad37ce7550112b406fa75e7f240f2015607fe8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-60-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-60-symbolic.svg": {
+    "sha256": "353ccb6f5a1aba261f356fca41bd7a95ca31e5a1e2ae84f18f53ce3ec9553992",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-60-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-70-charging-symbolic.svg": {
+    "sha256": "96423397bb495e65c96e9e4205ddadf5f41aa2686b13c86e7a200c47369843a2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-70-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-70-symbolic.svg": {
+    "sha256": "a692b5ec96f334b3ca6adb1a3167d47c3bf278c7ddf9c1c88ca46c9250535624",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-70-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-80-charging-symbolic.svg": {
+    "sha256": "d4ae062e77210c15f2ffcd7c61c25f9ff2451517f10d6e35904731cc1876cd28",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-80-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-80-symbolic.svg": {
+    "sha256": "6efcb2bf46b02f3eed2a94a7bc91f1b667bcb90bac276a54bf9d693da24ee259",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-80-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-90-charging-symbolic.svg": {
+    "sha256": "c7155b4649cf41d40880baf2ed009c709c372a052e3fe880e084a8ec96e42c5c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-90-charging-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-level-90-symbolic.svg": {
+    "sha256": "66cc0a08fd28fce8bb9a943f5f19c40ff47d57cfc57d3db33a908f7f1612e2eb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-level-90-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-low-symbolic.svg": {
+    "sha256": "c1dfc0ce26ee36d3b269264de749fe575d7e3936e8ff1ad4679772f88e7d9d16",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-low-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-missing-symbolic.svg": {
+    "sha256": "dbff8f0a7a4b644394d84defd297764b2346271ba21c6ed6a8cc03ad7f208a3f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-missing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-battery-symbolic.svg": {
+    "sha256": "e3b54f28cfb1d5525678351c323eeb16d141eebd8d8e1fc7c77c80cb0e85b8af",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-battery-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-acquiring-symbolic.svg": {
+    "sha256": "50f8d65e51568e4f640f98f038e7c2b8b85c3ac89f4e5776918cb0838bee388a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-active-symbolic.svg": {
+    "sha256": "885e7242c9a7acb263ef05587e2fa8dd779841b00e3912f6cb09a4c5bad788df",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-active-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-disabled-symbolic.svg": {
+    "sha256": "11ae5037828c7e8c1e0f5b79d8cced43de7f66a9f5eab7516c61e7c6a753f81c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-disconnected-symbolic.svg": {
+    "sha256": "f7f9538ced46481f94551c8054087eec774aff139ee4d94e313c155349f25865",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-disconnected-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-hardware-disabled-symbolic.svg": {
+    "sha256": "10fc7ec2b3ba0267fd88560c3ab74c049bf5f2040d626e5e821c1688bfcc4e78",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-hardware-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bluetooth-symbolic.svg": {
+    "sha256": "885e7242c9a7acb263ef05587e2fa8dd779841b00e3912f6cb09a4c5bad788df",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bluetooth-symbolic.svg"
+  },
+  "icons/symbolic/xsi-bookmark-new-symbolic.svg": {
+    "sha256": "07e7e8b9f2ff101eeeec6a956e75e3c2c466c01606fd97cc46c6b678d0be7624",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-bookmark-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-boot-menu-symbolic.svg": {
+    "sha256": "0a35c69817ca6c8d6929b5d43a7f2674dfa255cda85067b94872f5d75869b708",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-boot-menu-symbolic.svg"
+  },
+  "icons/symbolic/xsi-calculator-symbolic.svg": {
+    "sha256": "5a24fc5b41820aa388995363b978159e9fa8321d69e0720e0dfd0fef69ac826b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-calculator-symbolic.svg"
+  },
+  "icons/symbolic/xsi-call-incoming-symbolic.svg": {
+    "sha256": "1aa21fdbe8bd8bd8d6f0304d42401059c2e48642eb7546f11371f459c1c97c47",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-call-incoming-symbolic.svg"
+  },
+  "icons/symbolic/xsi-call-missed-symbolic.svg": {
+    "sha256": "7613b5fe23fd3450a77f079ce8e72d83269fd866f4fc67716d07f3e911a586d4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-call-missed-symbolic.svg"
+  },
+  "icons/symbolic/xsi-call-outgoing-symbolic.svg": {
+    "sha256": "5f1d6bd922aa992659a5078ce7413e8eae27bc719df4ce81e542599912a9aec2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-call-outgoing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-call-start-symbolic.svg": {
+    "sha256": "9e0e98f8ef2ba02351cdba37d5f9fe45fcbb8d9026dca897396cf3e497e4e4cc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-call-start-symbolic.svg"
+  },
+  "icons/symbolic/xsi-call-stop-symbolic.svg": {
+    "sha256": "cf3466965715c9c24fe423c492460264e6d86cb8bbce4695922ad77d73b95aea",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-call-stop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-camera-disabled-symbolic.svg": {
+    "sha256": "ce515a767ae37f64a7f66a5aa83ad2e92f8d27100b2a78b08dce69de0619407d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-camera-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-camera-hardware-disabled-symbolic.svg": {
+    "sha256": "01e50c20b2cece4bcdd957c57fc8ed248d06d4d6f1888732f884323535927770",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-camera-hardware-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-camera-switch-symbolic.svg": {
+    "sha256": "f781195f67410f0401863cf71ded8b86347fb8306948b840c0e23140017bc374",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-camera-switch-symbolic.svg"
+  },
+  "icons/symbolic/xsi-camera-symbolic.svg": {
+    "sha256": "8e9d182746e6366e0515a204d95d5edb4dbe17d82951b7f4cd48e5a91aaa2b68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-camera-symbolic.svg"
+  },
+  "icons/symbolic/xsi-camera-video-symbolic.svg": {
+    "sha256": "8f1b0810252abf5cba495e3d103b20cdd66b9a2038bcf8030e692c3574b74470",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-camera-video-symbolic.svg"
+  },
+  "icons/symbolic/xsi-category-search-symbolic.svg": {
+    "sha256": "5c4bf3731b8bae2d80b5cd47f3e0089d6335b5b0e466bf688dedcf824501d329",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-category-search-symbolic.svg"
+  },
+  "icons/symbolic/xsi-certificate-symbolic.svg": {
+    "sha256": "629fecca2dc942442d24f2c17dd7e332bd1976337598de818bcf0da10c9a3c74",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-certificate-symbolic.svg"
+  },
+  "icons/symbolic/xsi-changes-allow-symbolic.svg": {
+    "sha256": "c9237dff56ee4726c6a0be0f0f7eaac3092211b8b10c7385859866a3b5afe3a1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-changes-allow-symbolic.svg"
+  },
+  "icons/symbolic/xsi-changes-prevent-symbolic.svg": {
+    "sha256": "1ae63c45551ac54158a0d5a8131feeb56f1055f9099dd2fb7a60cd8630ec7bae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-changes-prevent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-channel-insecure-symbolic.svg": {
+    "sha256": "e2f141fee1aeb213aaea0aceec05935c9defef14c0568132baa6e388165bd668",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-channel-insecure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-channel-secure-symbolic.svg": {
+    "sha256": "1ae63c45551ac54158a0d5a8131feeb56f1055f9099dd2fb7a60cd8630ec7bae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-channel-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-chat-message-new-symbolic.svg": {
+    "sha256": "01e4ef2ee3cfbbb7149db8657c0d0e70bf51ece26dceb63f20ff78f4dc1b083a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-chat-message-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-check-spelling-symbolic.svg": {
+    "sha256": "5f1c1b6e518240d586e66ff6a8a0cba943a9cabbbfadb860ab4adcd7f6242b89",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-check-spelling-symbolic.svg"
+  },
+  "icons/symbolic/xsi-checkbox-checked-symbolic.svg": {
+    "sha256": "980d209b3dce1744bbf9c2dfeee54fbb3657d1b327d291da71bda2c79f46897b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-checkbox-checked-symbolic.svg"
+  },
+  "icons/symbolic/xsi-checkbox-mixed-symbolic.svg": {
+    "sha256": "8b8828a560b97336875be3de1428a61ad4eca9e104a0241bb508095a8a127604",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-checkbox-mixed-symbolic.svg"
+  },
+  "icons/symbolic/xsi-checkbox-symbolic.svg": {
+    "sha256": "25ac2c47432ea5d99a96ee1dbbcf98fcd953d80075ce3337e09702d55ef9650e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-checkbox-symbolic.svg"
+  },
+  "icons/symbolic/xsi-cog-symbolic.svg": {
+    "sha256": "76c8e673df6c429c4537a97a981b9089edad086c08a7936212917052a8f678b9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-cog-symbolic.svg"
+  },
+  "icons/symbolic/xsi-cog2-symbolic.svg": {
+    "sha256": "4b6849bd0b67be384a96b753974c557deb20c5b4c77fbcc3fee691a9255cdd17",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-cog2-symbolic.svg"
+  },
+  "icons/symbolic/xsi-color-select-symbolic.svg": {
+    "sha256": "83d4638185a29769fdd3084713acc80ee7dd68fe36f048f99421915268066038",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-color-select-symbolic.svg"
+  },
+  "icons/symbolic/xsi-color-symbolic.svg": {
+    "sha256": "a8bdd1ae3a43493834280a8fc04994c66a9059fa9cdfafcc136d71316c52317c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-color-symbolic.svg"
+  },
+  "icons/symbolic/xsi-colorimeter-colorhug-symbolic.svg": {
+    "sha256": "90ff137078fb7cd8a7ce32261032e105a84b3b532feb2619d07fe734555a3a76",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-colorimeter-colorhug-symbolic.svg"
+  },
+  "icons/symbolic/xsi-computer-apple-ipad-symbolic.svg": {
+    "sha256": "9adf8ae9526d1090f4ed76f3ae7251356cb8a1e2c19c17dee2b761d95b75739e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-computer-apple-ipad-symbolic.svg"
+  },
+  "icons/symbolic/xsi-computer-fail-symbolic.svg": {
+    "sha256": "cf089220986df3cc54e61c15764942197142ec8ecafeb3eaebb9d73bb1e738b6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-computer-fail-symbolic.svg"
+  },
+  "icons/symbolic/xsi-computer-symbolic.svg": {
+    "sha256": "edbcdcbca98efa81f57cdfda0ce01a03c324e27e1d224f82a3b640a5443cbe68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-computer-symbolic.svg"
+  },
+  "icons/symbolic/xsi-contact-new-symbolic.svg": {
+    "sha256": "21093ca9c46844817706cd88474a4b50cb676aa69ed37d77ac10f13be52ac087",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-contact-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-content-loading-symbolic.svg": {
+    "sha256": "4d3d37f5657baf54f1c1adba268232fc0b2ad704fe3a72aaeb4073b87714d427",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-content-loading-symbolic.svg"
+  },
+  "icons/symbolic/xsi-cpu-symbolic.svg": {
+    "sha256": "8d41f512f8aad4231e3bf299761f32e5bb4a14a373ff3661e151884f26f50b52",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-cpu-symbolic.svg"
+  },
+  "icons/symbolic/xsi-daytime-sunrise-symbolic.svg": {
+    "sha256": "d19f4df8f2517e592a9792763ed99b71397cdc4d8154b9310cbc3d6ec65ea13a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-daytime-sunrise-symbolic.svg"
+  },
+  "icons/symbolic/xsi-daytime-sunset-symbolic.svg": {
+    "sha256": "8770a00a578a9cc79753994cb732fdbc28683797612b0a9fb746d6eb2e20fbcf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-daytime-sunset-symbolic.svg"
+  },
+  "icons/symbolic/xsi-devices-symbolic.svg": {
+    "sha256": "d921f92fc5c6847564e8911f3da947ec953f3721ce1c92f3822eaa44505ff0cb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-devices-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dialog-error-symbolic.svg": {
+    "sha256": "9ae9275bada87b8f1328664d6ec93710a9420fb6dbe945b0868b9a42feebe95d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dialog-error-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dialog-information-symbolic.svg": {
+    "sha256": "56894455b54804e2635b18525b4be87073544dfa9832aceb1b8cb11edf0454ad",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dialog-information-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dialog-password-symbolic.svg": {
+    "sha256": "7405ec678d02f3acee30ef1e9a0298cda55f23c6c0d747506852dd2d0dce7f22",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dialog-password-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dialog-question-symbolic.svg": {
+    "sha256": "cd377c14a21592df2a75f21d5b289f342a2f3450259de9f00673899fc465ac26",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dialog-question-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dialog-warning-symbolic.svg": {
+    "sha256": "27a4f24f6b33ac7ed87f382ff9c7bcc69bc2a77984511fcfe4633fad9750bb0f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dialog-warning-symbolic.svg"
+  },
+  "icons/symbolic/xsi-diaporama-symbolic.svg": {
+    "sha256": "15884bc2b1449d4876825c623096be47500ed1b465060b79596d1532e5e5ebdd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-diaporama-symbolic.svg"
+  },
+  "icons/symbolic/xsi-dictionary-symbolic.svg": {
+    "sha256": "ea66f3eb0df812db74dabbc8dd150794b3c309458063147b7acf183ac3b39283",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-dictionary-symbolic.svg"
+  },
+  "icons/symbolic/xsi-display-brightness-symbolic.svg": {
+    "sha256": "ad0f64fc22d1415ef890a1ac59121c0bb821c81c3cfda33ac37f8b149811ba54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-display-brightness-symbolic.svg"
+  },
+  "icons/symbolic/xsi-display-projector-symbolic.svg": {
+    "sha256": "04aebb54f1af6e55e559d7cc78c008d9be7bc23ffe34c06297206ce7d95e76b8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-display-projector-symbolic.svg"
+  },
+  "icons/symbolic/xsi-display-symbolic.svg": {
+    "sha256": "72b19137566952fa42d207afcad5f043f4e8ef1600231044b3f045e1788d907b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-display-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-edit-symbolic.svg": {
+    "sha256": "7a1cbca134efc37ed1b8a5c51a4a9dc2ec0b52fac1547e2dcc537d84a8e9df14",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-edit-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-new-symbolic.svg": {
+    "sha256": "3925f99a0a2ff858b8ecc209e59fbf24625baa739eef9c70721d7ea35481ac81",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-open-recent-symbolic.svg": {
+    "sha256": "3efd3309a649270ca1092924e03030495a058e90797c6d8dcb69f77615803b95",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-open-recent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-open-symbolic.svg": {
+    "sha256": "caa94690a91374c8ccbf97f41d6cdcb08f33f0ad2a5e5e527a46c6e1ec0687c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-open-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-page-setup-symbolic.svg": {
+    "sha256": "781d9c2d5870e9198028703e4fc4b8957e0bcfce3b6903b8717ea2a553d45bcc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-page-setup-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-print-preview-symbolic.svg": {
+    "sha256": "10699526531359608cb92e9f82690047a53d13a2cfd3f12ec8b36e5992810818",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-print-preview-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-print-symbolic.svg": {
+    "sha256": "cdfb44e001493bbc89b85916f6a3b53e3acce6f91403d4df5332ab9b5ade9ce0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-print-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-properties-symbolic.svg": {
+    "sha256": "ade6696dfe942f2b64c0e598a3db07ea6d7c440506ce69618cbbb08709f0e865",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-properties-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-revert-symbolic-rtl.svg": {
+    "sha256": "835293176d8429e7e4f366d23f938e75e2429bffabb527f22d3cbd49edb2c8bb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-revert-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-document-revert-symbolic.svg": {
+    "sha256": "c30122f9710f3c4377072b65b3ca80bc182133b6516712e35b85510cf5a9e62c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-revert-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-save-as-symbolic.svg": {
+    "sha256": "67c8809eb385cd87f569f0812a74607db1df957b58a5876328e96b6feb07b87b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-save-as-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-save-symbolic.svg": {
+    "sha256": "93410237a42a0336b687bd2997c06734c7c619db217b804d910cade5c82f08af",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-save-symbolic.svg"
+  },
+  "icons/symbolic/xsi-document-send-symbolic.svg": {
+    "sha256": "7770eb9e225082d03aa1df08e08376e596e84ad1007310a396595888888a28ff",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-document-send-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-harddisk-ieee1394-symbolic.svg": {
+    "sha256": "4901616f75ba2773b3cfcc738a22a153d71cc99ae2f83d0a2fe240338869ea54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-harddisk-ieee1394-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-harddisk-solidstate-symbolic.svg": {
+    "sha256": "654d82c1891bc0426dfc5a3b2a1a109a4d15a35af96f3b86ec9809826aa125b7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-harddisk-solidstate-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-harddisk-symbolic.svg": {
+    "sha256": "4901616f75ba2773b3cfcc738a22a153d71cc99ae2f83d0a2fe240338869ea54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-harddisk-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-harddisk-system-symbolic.svg": {
+    "sha256": "4901616f75ba2773b3cfcc738a22a153d71cc99ae2f83d0a2fe240338869ea54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-harddisk-system-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-harddisk-usb-symbolic.svg": {
+    "sha256": "89f7c56b584ccc21a11680cad5b42ed235bc44fe5aab734626716c9cb37c1f0d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-harddisk-usb-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-multidisk-symbolic.svg": {
+    "sha256": "c01e8468f4c1bac608705ccfaae61b2284bc9ee8296fadec3fc1f2d077c35ea7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-multidisk-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-optical-symbolic.svg": {
+    "sha256": "c55872c35782513712e5c3e6fe9d14922171ddf8e6fa5d5998ff3fa75becf4c6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-optical-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-removable-media-symbolic.svg": {
+    "sha256": "2dd0d541781c2a36ad6ebfbaa0195718b8c320498cc317a1fb697a6dcc68682f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-removable-media-symbolic.svg"
+  },
+  "icons/symbolic/xsi-drive-removable-media-usb-symbolic.svg": {
+    "sha256": "e0f21b8711ab6fe5e9989b868b4177582ba6fc5013690543594bd7d76eed4a63",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-drive-removable-media-usb-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-clear-all-symbolic.svg": {
+    "sha256": "acb2227d005c536c703d1c8b02efe9c7324b357d599ec36333ab7aefa8d3128b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-clear-all-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-clear-symbolic-rtl.svg": {
+    "sha256": "dee93eec4774ac7cd42c027ce812cd629559ee12b33bfda5a252d78a560a428a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-clear-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-edit-clear-symbolic.svg": {
+    "sha256": "1e6370b781b4739a2f9907f988c9285ca5a5a355d95bdc5574e35c0b74c445c5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-clear-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-copy-symbolic.svg": {
+    "sha256": "7aa32044a367ce62d42332ac5b3b2517ddc87fbe9798a091f191df6c86481579",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-copy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-cut-symbolic.svg": {
+    "sha256": "2ae4083ddf8f8e130a1ad82bdecab4eaf7c5dd5bc2b5a33616b4950e2ae8b92c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-cut-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-delete-symbolic.svg": {
+    "sha256": "a568392eb740f66b23f61e764ff27ba77688ca46b6a4a7012e5f9aa59cc1002c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-delete-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-find-replace-symbolic.svg": {
+    "sha256": "8c30ae4405bb2a906066ae01a77577de8ca85cc8058b6ce4858cb55f8ada1074",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-find-replace-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-find-symbolic.svg": {
+    "sha256": "e65ed504332ab9ff5792b22fdf8a1f0c3baad0803c3fdd13ceace101600185bc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-find-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-page-symbolic.svg": {
+    "sha256": "09bc507611135983f034cd302ca809f482977611d310804b5b31dfcdda26d5a3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-page-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-paste-symbolic.svg": {
+    "sha256": "91fb6b27ae2d0674354c032237000d6a6992329a8447221f1af5d0b123b1188f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-paste-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-redo-symbolic-rtl.svg": {
+    "sha256": "ef4a33b7da49d3b96439f157e050b4ea18728a4993701894262106fa232e7929",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-redo-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-edit-redo-symbolic.svg": {
+    "sha256": "19bbabe848d5e20cff82c39d6622aa20cf0bb1183adb479442c8df204a0ae5c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-redo-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-select-all-symbolic.svg": {
+    "sha256": "1c6d419e8398fb61aa76fe2f321b971a90cc9492eb359e50c03f9c0effd8dcc6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-select-all-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-select-symbolic.svg": {
+    "sha256": "7790bde77d0a51169c8b5a4f9b56d5fcfbe770bb1ae17f1cf1642bd9e2af653a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-select-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-symbolic.svg": {
+    "sha256": "ea18bd78de5df4b79bf35716af3443f4c1476969141d8c30ce4577e9512165d0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-symbolic.svg"
+  },
+  "icons/symbolic/xsi-edit-undo-symbolic-rtl.svg": {
+    "sha256": "19bbabe848d5e20cff82c39d6622aa20cf0bb1183adb479442c8df204a0ae5c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-undo-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-edit-undo-symbolic.svg": {
+    "sha256": "ef4a33b7da49d3b96439f157e050b4ea18728a4993701894262106fa232e7929",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-edit-undo-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-default-symbolic.svg": {
+    "sha256": "cdbc6cb8e3315a4ffef81e09435e064f8de28fa3dccbd0a606abe8ee28902e24",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-default-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-documents-symbolic.svg": {
+    "sha256": "5e4c91d2a113d38d5760c6eb8a78b87345f92dc6aa39e1072d140cb8ca0ddfcd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-documents-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-favorite-symbolic.svg": {
+    "sha256": "54eebec362e10deea2374397cabf7de801b5518fd4e8caddfc497dfd57282188",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-favorite-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-important-symbolic.svg": {
+    "sha256": "ff91ea1e77525f8850ef20d2efa59a00172373747c1fbf23e1455f925853c58b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-important-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-music-symbolic.svg": {
+    "sha256": "e9d6377cc778790d383eaa2941e37b6a14b12dd6bd7b3852b9857e628364617a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-music-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-ok-symbolic.svg": {
+    "sha256": "2f316af0449a986b2193b63083d2b4e083a2dc05f2c50da8b46f2baebb277535",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-ok-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-photos-symbolic.svg": {
+    "sha256": "4273af04b48528da86ffd1237638f8ea0ae4583c2adce06ad3f0ca8324a55367",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-photos-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-shared-symbolic.svg": {
+    "sha256": "b3deff5fdc59deba3ee4b981e1bf6489a45e338bfe86d096ec87fe0a5220396d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-shared-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-synchronizing-symbolic.svg": {
+    "sha256": "79f266d397263237d48d302213a4a7728690de91648cd3b364a24c5f722cc601",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-synchronizing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-system-symbolic.svg": {
+    "sha256": "30e76c3fc3bd2cd0c20cfc5eefe8078789df9f6072228dcdbc3de18288878c01",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-system-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emblem-videos-symbolic.svg": {
+    "sha256": "b419f0104be027ac7393e2fa72bfac5238c149bcedae228ea48198f88f2cd92d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emblem-videos-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-activities-symbolic.svg": {
+    "sha256": "31d65c19d3f8b474612c46f55934a65f30591d7ac126c8c2051f7eb93603c3e4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-activities-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-body-symbolic.svg": {
+    "sha256": "86c2e5cdc1c082b21be9af64c93b87058f412f4d67ba9f3bfe92d9559e41b52e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-body-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-flags-symbolic.svg": {
+    "sha256": "0ece73f7e8c2081159fdf62d8b9dc5c3490f54c07419d6c76157d3d49c6115ad",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-flags-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-food-symbolic.svg": {
+    "sha256": "9b2fabc760d438597c242047b86c32e6a96ab9eac4ee6de0ca8e1df9bfa2948c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-food-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-nature-symbolic.svg": {
+    "sha256": "6ea937752fd0ac48d99215ad065b2d79b70cb6294b5f7a8b8375e2ee0d7d0ebd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-nature-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-objects-symbolic.svg": {
+    "sha256": "6e29e82b75c4080344108f8591ac105eef268440e5ff96c88d0161faab096710",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-objects-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-people-symbolic.svg": {
+    "sha256": "6eacb6717d3b23a382e27da5072884a15c20b7c71567abd38003b99fda6ddbc5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-people-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-recent-symbolic.svg": {
+    "sha256": "666f54fe2df653827b86e89ada00947fcc8c830e33e502600b4e7c24c06dcdd6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-recent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-symbols-symbolic.svg": {
+    "sha256": "97a7e6cd874fd5f32a7b22b93034b4184170d91dab9234362cf13432b36a42ae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-symbols-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emoji-travel-symbolic.svg": {
+    "sha256": "705060191024c9232f547b6d7f65905dd578d369758a18363ee435129f185c4f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emoji-travel-symbolic.svg"
+  },
+  "icons/symbolic/xsi-emote-love-symbolic.svg": {
+    "sha256": "bfd74c1d4a9888698fa359dec8851ef8e400b2351a87c06f906f612c670ecd49",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-emote-love-symbolic.svg"
+  },
+  "icons/symbolic/xsi-empty-icon-symbolic.svg": {
+    "sha256": "91f6e0f1269d5ea69aa87677b0a1b7fc1552b156d32ba902507be217fdc1e857",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-empty-icon-symbolic.svg"
+  },
+  "icons/symbolic/xsi-engineering-symbolic.svg": {
+    "sha256": "8fee7608fe4062e5b896eae3f5f9e8599b243e1579d6dcd88af0c946e5bcbc99",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-engineering-symbolic.svg"
+  },
+  "icons/symbolic/xsi-error-correct-symbolic.svg": {
+    "sha256": "ae889c86951e44422722862cd6f3d09502cb608923fffc71324bead2866afe76",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-error-correct-symbolic.svg"
+  },
+  "icons/symbolic/xsi-executable-symbolic.svg": {
+    "sha256": "b0a4954339d5edcc102057a454d4606872ea8059ec35bdc425e421faf39b6d0b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-executable-symbolic.svg"
+  },
+  "icons/symbolic/xsi-exit-symbolic-rtl.svg": {
+    "sha256": "301f8b2bfa2ea6c4a4919c677ccddfa793bf4f680a92a31fc39966c3f4f5638c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-exit-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-exit-symbolic.svg": {
+    "sha256": "6117a3b55fe5b8cbcf66d23915b2b08c426be35a0b2aa45b794676dfa375ae2a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-exit-symbolic.svg"
+  },
+  "icons/symbolic/xsi-extract-archive-symbolic.svg": {
+    "sha256": "891ef2fe625e01176b891dfc8b45f89b9a3c57d48c73556c4689b9c92fce6dbf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-extract-archive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-eye-symbolic.svg": {
+    "sha256": "b89632e4e9001e1e840de58fafcc9927d65cae1fc4e793dbbd41a30d3494ed89",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-eye-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-plain-symbolic.svg": {
+    "sha256": "c8bc791037fce74a13001a3806b3a582cf1dcecc32fd677e86afb5423570eb83",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-plain-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-sad-symbolic.svg": {
+    "sha256": "6c68cc077a14b6f81cea499d6fb4eb7b532038702109e39273592e027e0db77a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-sad-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-smile-big-symbolic.svg": {
+    "sha256": "ec6efd4bd4a14059c3cdb1f77f9ae27ab2afba4c8f34b6bda27c7c911a7736d3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-smile-big-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-smile-symbolic.svg": {
+    "sha256": "5888e077b04545a3ff70495783f28d7f1dbd330e42df2c6133f8d50f887206a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-smile-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-smirk-symbolic.svg": {
+    "sha256": "d537f545ba2837405e4edcd0bd61f5558bee1b1fe277ffae7f2e23fa5bd5c069",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-smirk-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-surprise-symbolic.svg": {
+    "sha256": "7f68de78fe29278d69d9a71b2db5908fa7ed5ffcfd456ed3ae3358d18f98a40c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-surprise-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-uncertain-symbolic.svg": {
+    "sha256": "553e153e98235b6782ec92ea77c2fc73b0d54a0013ee5f22e56f95e4a4070b3f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-uncertain-symbolic.svg"
+  },
+  "icons/symbolic/xsi-face-wink-symbolic.svg": {
+    "sha256": "4b8a151974a7509f20e69e83cab627d5c331bdc14933a0a601df2dd8b36f827b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-face-wink-symbolic.svg"
+  },
+  "icons/symbolic/xsi-fan-symbolic.svg": {
+    "sha256": "23d11c70af663613941e96e8de4411aa342e8c2ec85f147254c6365a730b9ef9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-fan-symbolic.svg"
+  },
+  "icons/symbolic/xsi-favorite-symbolic.svg": {
+    "sha256": "8486b6337130a718bb0024def809ec1f69c36fbe3b60dc00391f4ec6412aac49",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-favorite-symbolic.svg"
+  },
+  "icons/symbolic/xsi-file-manager-symbolic.svg": {
+    "sha256": "0f3a8dd83ffcefa9cdf4e6778adad739e40261ab8731d15f0d9c1e2f6013f269",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-file-manager-symbolic.svg"
+  },
+  "icons/symbolic/xsi-find-location-symbolic.svg": {
+    "sha256": "062a9f2b192b9b79b4b1596aa88f222bc5a593ce1fa019fde264fb22ab364afd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-find-location-symbolic.svg"
+  },
+  "icons/symbolic/xsi-fingerprint-symbolic.svg": {
+    "sha256": "a19e7e361dd0adeb3b56734061c5152d23c5a26f25417f3eec1f0a019ed0df58",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-fingerprint-symbolic.svg"
+  },
+  "icons/symbolic/xsi-firmware-symbolic.svg": {
+    "sha256": "1fcb25ee8ab47a636c7bc0e54b69a8cd3df1f8dce53f8de34ea48da81e0cae0a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-firmware-symbolic.svg"
+  },
+  "icons/symbolic/xsi-flag-symbolic.svg": {
+    "sha256": "c4f1bce6b5350194e9a96493a661cae8f7feec5e61b1767f0c87fa5a739c67a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-flag-symbolic.svg"
+  },
+  "icons/symbolic/xsi-focus-legacy-systray-symbolic.svg": {
+    "sha256": "2e3d232dbc921193eed2d0c43c2a8b111824d4991a825e04dd8c556389637a0b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-focus-legacy-systray-symbolic.svg"
+  },
+  "icons/symbolic/xsi-focus-top-bar-symbolic.svg": {
+    "sha256": "5b1d7d2d18da097cad370df6446573b1d72faccafc1b169f6e195b3819ba50cd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-focus-top-bar-symbolic.svg"
+  },
+  "icons/symbolic/xsi-focus-windows-symbolic.svg": {
+    "sha256": "d7985a6740d2efa04edbe1df83dd369cb33b48867bd06a0077a8dabefcde1746",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-focus-windows-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-documents-symbolic.svg": {
+    "sha256": "5f1399508d2ade833996642a95799f95b9e732e02158b1a02d10b4459a4ebb39",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-documents-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-download-symbolic.svg": {
+    "sha256": "00701780f38b8a2cbddb853134068b111698ba20756fb9180ced875f2fc14fec",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-download-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-drag-accept-symbolic.svg": {
+    "sha256": "450ae47e3b5cbfbe744a3504dc3a4bccef8ffb5b5f4cf7e48e33ed2097ac04e5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-drag-accept-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-music-symbolic.svg": {
+    "sha256": "706d76d93ee8c91e0e9623c923eaf08f8d42369873e028a6e7f63e685dbdae10",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-music-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-new-symbolic.svg": {
+    "sha256": "0b742fc0b6c12cdd8c220e9fa824511d1b2300b3c1cb4b23dd6c2197ac962a46",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-open-symbolic.svg": {
+    "sha256": "caa94690a91374c8ccbf97f41d6cdcb08f33f0ad2a5e5e527a46c6e1ec0687c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-open-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-pictures-symbolic.svg": {
+    "sha256": "4273af04b48528da86ffd1237638f8ea0ae4583c2adce06ad3f0ca8324a55367",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-pictures-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-publicshare-symbolic.svg": {
+    "sha256": "5b69f46cad7d8afd30be6631a666983288337725e9e7f23eed23d6f088c8350d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-publicshare-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-recent-symbolic.svg": {
+    "sha256": "79b21a2c3711095cf200c785427c200074c3c1ca2f9a58d9d69197efabf6d6c0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-recent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-remote-symbolic.svg": {
+    "sha256": "06e564bce2348a44f6799f3e2787fe4788e8606c41ab4d418b34ddcd6543287c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-remote-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-saved-search-symbolic.svg": {
+    "sha256": "261311ff9d145722f89ad1742c034fe6ae2ef72d34d65633f7a0d71db30e8b78",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-saved-search-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-symbolic.svg": {
+    "sha256": "d5fbf420bca60ec27f41296e00d517cd66bbbeb3622a89643c70808dfa204c6f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-templates-symbolic.svg": {
+    "sha256": "0a7c7a0bcdd1e994f48109fabc30c0a32b32e19e7496580484e12f8fe7ade9c6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-templates-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-videos-symbolic.svg": {
+    "sha256": "187ea5995032967301e3c2ac03daf4d922a2e6aad436ee67c55f50d591e64751",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-videos-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-visiting-symbolic.svg": {
+    "sha256": "9ec8ee33c20ebb7c7dcdf95696febb3ce50c47638669e909b4359bf9684b003f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-visiting-symbolic.svg"
+  },
+  "icons/symbolic/xsi-folder-warning-symbolic.svg": {
+    "sha256": "fe5a94a9071e7bcdf148bc55c5cf6e075b89cc8eb8cad7c9a15a743804d1931b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-folder-warning-symbolic.svg"
+  },
+  "icons/symbolic/xsi-font-select-symbolic.svg": {
+    "sha256": "26e8a5a573eb4348dd4745ddf0b6f48a29a0f25476dc5f5c22375c1ca1c74859",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-font-select-symbolic.svg"
+  },
+  "icons/symbolic/xsi-font-symbolic.svg": {
+    "sha256": "ffe8dfc331bf135353aec2ace9b5bc607b4e45054e8a3875f3d41b231080c665",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-font-symbolic.svg"
+  },
+  "icons/symbolic/xsi-font-x-generic-symbolic.svg": {
+    "sha256": "fd6e2d5907441f3e3d6ce3f0aae59065368be43d62495840a1ba5b5157ed9014",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-font-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-indent-less-symbolic-rtl.svg": {
+    "sha256": "526ae44fdfb7652ed5c9996934639a774546094bf28bd4e46456fdc329d55198",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-indent-less-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-format-indent-less-symbolic.svg": {
+    "sha256": "95c1ab1439f59128e2a973b9eda7fca07709a679807168406b3a54f6aa050f56",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-indent-less-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-indent-more-symbolic-rtl.svg": {
+    "sha256": "bf1b114a62f1b5cf4596d0345df9d2b6d77ebf261ee6a3ee21f5f3c4df734df6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-indent-more-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-format-indent-more-symbolic.svg": {
+    "sha256": "688f8fa7ae032036ae00e1156cc36977ac9366a3a1c7b83e06ef5b825601ff75",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-indent-more-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-justify-center-symbolic.svg": {
+    "sha256": "526872ac6d347718202bf0ea8c67b9130b72cd19fc63853a2bf2580bc822d382",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-justify-center-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-justify-fill-symbolic.svg": {
+    "sha256": "abea1ff00e13ddc3ff0edf615395a07dda1e76c02e68bd2cb77f553b4eb50c4e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-justify-fill-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-justify-left-symbolic.svg": {
+    "sha256": "e55d877aceb21d895d76a30cb751be0f288b87820461533d6008c681eae31530",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-justify-left-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-justify-right-symbolic.svg": {
+    "sha256": "f78024627585bbcc27a8227687259e3eef545a3d833ef33575925528c3a7e184",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-justify-right-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-bold-symbolic.svg": {
+    "sha256": "cfa986429d6900e70dde252b8009608c0df083c871c066fde9cffa24c295310b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-bold-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-direction-left-symbolic.svg": {
+    "sha256": "9b007c8b84c3dcebad01d852b028cb0c1e35a449479b96e487ec0ce620f608c4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-direction-left-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-direction-right-symbolic.svg": {
+    "sha256": "4ec0f10bdef42b3ebe3846d75cfeff5e2d983500cf702e78e24f7d14bf3445f1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-direction-right-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-highlight-symbolic.svg": {
+    "sha256": "4a31a618e04992902d6c888e52e2b413bcbe9297425b12e7ee13119cea59e0ae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-highlight-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-italic-symbolic.svg": {
+    "sha256": "b729b752e20da4ffa9c63568d48116e0e9c448d9eeec9e47e2033de074054513",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-italic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-plaintext-symbolic.svg": {
+    "sha256": "e1ff5778f2f0bb5ce8ecaf524f937b12223be39eff1c89be4584f35211f296c7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-plaintext-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-rich-symbolic.svg": {
+    "sha256": "c7c0272856a02bd6c6817930d4d37a0277ff02e1102267620512fe94f1191c9a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-rich-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-strikethrough-symbolic.svg": {
+    "sha256": "5f311c291ff48b9173e96e1936ece6326e9c6a4886d7d6e961c1cded62e99e73",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-strikethrough-symbolic.svg"
+  },
+  "icons/symbolic/xsi-format-text-underline-symbolic.svg": {
+    "sha256": "cc459ca4b1c1ba847b4735b68b91b11f342f289637f2222d1617c3bfcc6afc1a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-format-text-underline-symbolic.svg"
+  },
+  "icons/symbolic/xsi-games-symbolic.svg": {
+    "sha256": "f94c5164aaed9737ab55293aa4a88c7b9598f35440c16ea4390dc5f1f4611b7c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-games-symbolic.svg"
+  },
+  "icons/symbolic/xsi-gauge-symbolic.svg": {
+    "sha256": "0afc69b4c0e4291442f15a5be9d417bf8335438d7b08bd9a60303b03a1434614",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-gauge-symbolic.svg"
+  },
+  "icons/symbolic/xsi-gauge2-symbolic.svg": {
+    "sha256": "44c9809cdcbe23e51266fc81fe6a29b666b6bea43474e41cefe57acc637302b4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-gauge2-symbolic.svg"
+  },
+  "icons/symbolic/xsi-geolocation-disabled-symbolic.svg": {
+    "sha256": "baaaa43cb9c029a4e3ff121faf1499717749e96008bd8c14e69d0e8f3137d8ed",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-geolocation-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-geolocation-symbolic.svg": {
+    "sha256": "7f1943ce1c28b0fa13c284acc8803612ebcb7b650a1e6fc03cdd9793b6d0d0e7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-geolocation-symbolic.svg"
+  },
+  "icons/symbolic/xsi-git-pr-symbolic.svg": {
+    "sha256": "f4ca2059ad563036f933267ee73b4d59063c4301aa711bdd731a08bbd21e2b1b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-git-pr-symbolic.svg"
+  },
+  "icons/symbolic/xsi-git-symbolic.svg": {
+    "sha256": "b5531e05145e2b1558be3039a0838584bf07476ca57b9ad3a55f85601a54d8b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-git-symbolic.svg"
+  },
+  "icons/symbolic/xsi-github-symbolic.svg": {
+    "sha256": "8a01ddfcadbbfa553526ee26bff5a9624e6c0eb66d86aedc1d7ba7be6052d04e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-github-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-bottom-symbolic.svg": {
+    "sha256": "f2337127d2b7f406e1a4ed0ea0220a1fc1205049e8a4d67afcc873a5a18618ae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-bottom-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-down-symbolic.svg": {
+    "sha256": "0f34ae1e37d81fc4ce366da0ae7fa2e3d7cb43e15f03f671bda3b3800263d032",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-down-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-first-symbolic-rtl.svg": {
+    "sha256": "c6abaccd19a9d8acf44c22ee70cf301b28d83b1a47f90a60ed47a1c6e805cca4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-first-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-first-symbolic.svg": {
+    "sha256": "556060053380e4d1eb3c81ab7f486502adb0bf9a9b0b715059746c254b80329a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-first-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-history-next-symbolic-rtl.svg": {
+    "sha256": "216b8aa5bc16b8842fe1fc516773f88079f93d09921917a51937705cb47005a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-history-next-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-history-next-symbolic.svg": {
+    "sha256": "d3227422bf4504bfb1620130da2fd1034198ce64435fbf0907dcc0a0c0a4acb2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-history-next-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-history-previous-symbolic-rtl.svg": {
+    "sha256": "d3227422bf4504bfb1620130da2fd1034198ce64435fbf0907dcc0a0c0a4acb2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-history-previous-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-history-previous-symbolic.svg": {
+    "sha256": "216b8aa5bc16b8842fe1fc516773f88079f93d09921917a51937705cb47005a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-history-previous-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-home-symbolic.svg": {
+    "sha256": "057dc63d111737fda0852f927858905808712106b09bb8f46e54d0abb38afc86",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-home-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-jump-symbolic-rtl.svg": {
+    "sha256": "c5ea3c4196e037e8eeedf615eb7d953f7b8366638cf09f7e32302f7850b0e108",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-jump-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-jump-symbolic.svg": {
+    "sha256": "3f3ba9b458b62b3be1ebe30b9d7b194ecb761b683865cca8a8f57f599afdc57f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-jump-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-last-symbolic-rtl.svg": {
+    "sha256": "556060053380e4d1eb3c81ab7f486502adb0bf9a9b0b715059746c254b80329a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-last-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-last-symbolic.svg": {
+    "sha256": "c6abaccd19a9d8acf44c22ee70cf301b28d83b1a47f90a60ed47a1c6e805cca4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-last-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-next-symbolic-rtl.svg": {
+    "sha256": "989eaa987a8c96a0bcd4265839274e97f27e8761cc1ae9d2e41df37ea5840118",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-next-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-next-symbolic.svg": {
+    "sha256": "d868d51ab13b03a9ef999b6355e5472f082c697c02ba12bb18e2db7562ed8b79",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-next-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-previous-symbolic-rtl.svg": {
+    "sha256": "d868d51ab13b03a9ef999b6355e5472f082c697c02ba12bb18e2db7562ed8b79",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-previous-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-go-previous-symbolic.svg": {
+    "sha256": "989eaa987a8c96a0bcd4265839274e97f27e8761cc1ae9d2e41df37ea5840118",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-previous-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-top-symbolic.svg": {
+    "sha256": "b403ba8afef8ddec3df8d580a511e1fadade18b50eef3d632d5d6d07cdc93d6d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-top-symbolic.svg"
+  },
+  "icons/symbolic/xsi-go-up-symbolic.svg": {
+    "sha256": "15975bd41aca6420cd42c09eb0e763b29503b70ee31cb4fb913500729429668c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-go-up-symbolic.svg"
+  },
+  "icons/symbolic/xsi-graphics-symbolic.svg": {
+    "sha256": "a184b2464e374e4a2cbe1e0ecac98e2cb2cd90bd2a406aef4e55adaf0e1a2adc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-graphics-symbolic.svg"
+  },
+  "icons/symbolic/xsi-group-symbolic.svg": {
+    "sha256": "84337eb97c37cecc866ca7b026fc94ba58af956b956783f0e972ab027a5c6893",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-group-symbolic.svg"
+  },
+  "icons/symbolic/xsi-help-about-symbolic.svg": {
+    "sha256": "55e8c95e849bd124fac17ab859892a8f7ed5e09c2956408cb503acdb91e8f480",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-help-about-symbolic.svg"
+  },
+  "icons/symbolic/xsi-help-browser-symbolic.svg": {
+    "sha256": "cd59f2092360c88a27c919c861da36ff36d86ec53e01a1b4f74d2ee3f19c66b4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-help-browser-symbolic.svg"
+  },
+  "icons/symbolic/xsi-help-contents-symbolic.svg": {
+    "sha256": "0cec421ec2bc56ba330b12e91fcb283a6da0d46e9262c1cada729ca58378b42b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-help-contents-symbolic.svg"
+  },
+  "icons/symbolic/xsi-help-faq-symbolic.svg": {
+    "sha256": "7795f27c4c9f095044c25fa2b36a55823ba80238002c2af7e49437578d3a1bb9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-help-faq-symbolic.svg"
+  },
+  "icons/symbolic/xsi-help-symbolic.svg": {
+    "sha256": "1e512ddd68a9bec4d735a6e9fd91c94c5c1d835f144637155e728ef88072b166",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-help-symbolic.svg"
+  },
+  "icons/symbolic/xsi-image-crop-symbolic.svg": {
+    "sha256": "bdec05dd76b35e3dccc6f8362d07c23361fc086846a7c875ca38e24252d0d10a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-image-crop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-image-loading-symbolic.svg": {
+    "sha256": "4d3d37f5657baf54f1c1adba268232fc0b2ad704fe3a72aaeb4073b87714d427",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-image-loading-symbolic.svg"
+  },
+  "icons/symbolic/xsi-image-missing-symbolic.svg": {
+    "sha256": "42138bdc4cc5dcb8724bfe4f1da0a157b84dbdc35d33d718c58c790474e44e73",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-image-missing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-image-x-generic-symbolic.svg": {
+    "sha256": "4273af04b48528da86ffd1237638f8ea0ae4583c2adce06ad3f0ca8324a55367",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-image-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-inode-directory-symbolic.svg": {
+    "sha256": "d5fbf420bca60ec27f41296e00d517cd66bbbeb3622a89643c70808dfa204c6f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-inode-directory-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-dialpad-symbolic.svg": {
+    "sha256": "6be3359250e911213fcdd42483d9c79c312199500ab5f176dfa749215c92561f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-dialpad-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-gaming-symbolic.svg": {
+    "sha256": "245b0c47ce2ece5276b39069957235fc927d07de2c40a2f68173050540d2022b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-gaming-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-keyboard-symbolic.svg": {
+    "sha256": "f065743d82110e80d73f5fb0cd0268c791882013b4ba22d3752ad72cc4dbf170",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-keyboard-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-mouse-symbolic.svg": {
+    "sha256": "0cb34b4137855556c42f30d1523c48ac0fe08d4a856a279fcd4cda4596148849",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-mouse-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-tablet-symbolic.svg": {
+    "sha256": "17cd0659613f7d31cadc1d57f83a621e3ab0bdbd4bfbd30e78e549c0ab6ee230",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-tablet-symbolic.svg"
+  },
+  "icons/symbolic/xsi-input-touchpad-symbolic.svg": {
+    "sha256": "127750ceb720412932b7b7c17374362bb4044e81e0cb6e244cd7bdca0ddccbc3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-input-touchpad-symbolic.svg"
+  },
+  "icons/symbolic/xsi-insert-image-symbolic.svg": {
+    "sha256": "79c54c0d006492d82617385f0b4f1651c43c855329c2095940310589a6896666",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-insert-image-symbolic.svg"
+  },
+  "icons/symbolic/xsi-insert-link-symbolic.svg": {
+    "sha256": "caab66705de244d46af9836dcf3f62e15b6334ab08c7940f2d4a534d01d5a713",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-insert-link-symbolic.svg"
+  },
+  "icons/symbolic/xsi-insert-object-symbolic.svg": {
+    "sha256": "b7b3e8c68a663b15473dd7e64b5938ef31aa9c3a9bbb8bb31c1e9e456368350f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-insert-object-symbolic.svg"
+  },
+  "icons/symbolic/xsi-insert-text-symbolic.svg": {
+    "sha256": "22bea828b58a1a81293d0f37da346e5fb0d2f31f4e0c119ee194f7da81da0bfd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-insert-text-symbolic.svg"
+  },
+  "icons/symbolic/xsi-keyboard-brightness-symbolic.svg": {
+    "sha256": "eea2b0865030374f77c53dd90a2b4bac936a191ef447d1190d0f4bd5b5de5bbd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-keyboard-brightness-symbolic.svg"
+  },
+  "icons/symbolic/xsi-keyboard-character-symbolic.svg": {
+    "sha256": "ec1c3e747be4e3ee79627c91987f6df1b53d7ac8f69fd7e26304458d20eb7162",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-keyboard-character-symbolic.svg"
+  },
+  "icons/symbolic/xsi-keyboard-shortcuts-symbolic.svg": {
+    "sha256": "128db6b7912b404b539772ef4c44b9f4d05aa6fe717cde4d786de7c0be844ff6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-keyboard-shortcuts-symbolic.svg"
+  },
+  "icons/symbolic/xsi-keyboard-symbolic.svg": {
+    "sha256": "cb1c61525da0ad7d1753f83e8a470aebdd1e0648464b322976ed49db408715a6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-keyboard-symbolic.svg"
+  },
+  "icons/symbolic/xsi-launch-symbolic.svg": {
+    "sha256": "859e068790d65454a1d921c68afaf3303dd7e3f0c99190abd8aadc83f3b936b3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-launch-symbolic.svg"
+  },
+  "icons/symbolic/xsi-list-add-symbolic.svg": {
+    "sha256": "405a271977c2af2516e043dbe0422ae03c136ad15e10e431b58d8852e4e111cf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-list-add-symbolic.svg"
+  },
+  "icons/symbolic/xsi-list-drag-handle-symbolic.svg": {
+    "sha256": "991392698de9b6bc23c7ddea278beb66193d9ff002ae25da22d57266b8ec7412",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-list-drag-handle-symbolic.svg"
+  },
+  "icons/symbolic/xsi-list-edit-symbolic.svg": {
+    "sha256": "ea18bd78de5df4b79bf35716af3443f4c1476969141d8c30ce4577e9512165d0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-list-edit-symbolic.svg"
+  },
+  "icons/symbolic/xsi-list-remove-all-symbolic.svg": {
+    "sha256": "210c365daa171730df691d605fcb959829dc67d903346d712459f2c2503751be",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-list-remove-all-symbolic.svg"
+  },
+  "icons/symbolic/xsi-list-remove-symbolic.svg": {
+    "sha256": "7bc41e747793efc38570fb0b03e1bc18c0fdfb60727bfe2708ba06a637d2e952",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-list-remove-symbolic.svg"
+  },
+  "icons/symbolic/xsi-lock-screen-symbolic.svg": {
+    "sha256": "1ae63c45551ac54158a0d5a8131feeb56f1055f9099dd2fb7a60cd8630ec7bae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-lock-screen-symbolic.svg"
+  },
+  "icons/symbolic/xsi-log-out-symbolic-rtl.svg": {
+    "sha256": "d1b6fc1383ebc4089e44a2ca4288950750ea675b43f968523b10e1f572e65e4a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-log-out-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-log-out-symbolic.svg": {
+    "sha256": "69565e1980553660344047af0261a38485bf3e23d4f919def1d38afa863e2926",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-log-out-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-attachment-symbolic.svg": {
+    "sha256": "14b0fd519ac808eec2a55f595c4f0055b5c36877236f925bd338cf54720026dd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-attachment-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-forward-symbolic-rtl.svg": {
+    "sha256": "06afe313a4c708d6142b0c93ccb00cd70fbcfaf4f538a5f04d5ebf4b20907ffe",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-forward-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-mail-forward-symbolic.svg": {
+    "sha256": "0f8d26c9f06ccbbc88f5b82cbc242b87f8158d39198b543d6c1a4e46df355320",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-forward-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-mark-important-symbolic.svg": {
+    "sha256": "1955a821512d410ea66c51e33e440e2e108ec20206ac3145806fdd2574064f81",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-mark-important-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-mark-junk-symbolic.svg": {
+    "sha256": "2d446e4c47ea9a6728c01551e973c020e8746707b8f329fbb47a1f34e5f84019",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-mark-junk-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-mark-notjunk-symbolic.svg": {
+    "sha256": "565edf93d5d0e8b7965ee47e5428e3a8949bb63748f3fb1fd0aacd2368d221d3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-mark-notjunk-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-message-new-symbolic.svg": {
+    "sha256": "362d9c966049af42d859cc82593447f78482c33d904676897cddf999458417ff",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-message-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-read-symbolic.svg": {
+    "sha256": "6d82a50f5705a2213619184e3c99b2251a36e59a4f5268b1f4a4d8dee9dd55c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-read-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-replied-symbolic-rtl.svg": {
+    "sha256": "f9899821b570cacbfc9e91505874749be8c1549ede69728f481cfa83eb43a973",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-replied-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-mail-replied-symbolic.svg": {
+    "sha256": "8e0937e1bf7e0c1feec60d4ac6c9b27497d586ac26e1e9d19d08aa0e0af0fd35",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-replied-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-reply-all-symbolic-rtl.svg": {
+    "sha256": "a38459eb1ccc055b242b04e83deb7a987addf6e4a02bf2b1b19b7c4c062872a3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-reply-all-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-mail-reply-all-symbolic.svg": {
+    "sha256": "4cef4b195a851d3effed47d0bf2f1f27998831da54ad78fcbef84c37a97ebda9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-reply-all-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-reply-sender-symbolic-rtl.svg": {
+    "sha256": "0f8d26c9f06ccbbc88f5b82cbc242b87f8158d39198b543d6c1a4e46df355320",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-reply-sender-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-mail-reply-sender-symbolic.svg": {
+    "sha256": "06afe313a4c708d6142b0c93ccb00cd70fbcfaf4f538a5f04d5ebf4b20907ffe",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-reply-sender-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-send-receive-symbolic.svg": {
+    "sha256": "a12f3c2e18d5440be8e0e557a27b5d7719246569d68cf3c7d8ed11a3dd82114d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-send-receive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-send-symbolic.svg": {
+    "sha256": "bf39237fa5822beb1cf76a7c828c61b5dba9400e2ecc42efe9adb87221ab0aa8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-send-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mail-unread-symbolic.svg": {
+    "sha256": "ab7cf83bb94363fb6a0afb5b1a92e784d21fdbd2777c84cb6925504be99f2c4a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mail-unread-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-eject-symbolic.svg": {
+    "sha256": "afe38eef556427c51f91007fdaff13b22e392c612681d136ac5913e630434d4d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-eject-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-flash-symbolic.svg": {
+    "sha256": "0bf4afd694b3a09f1b103f3ec9a0d9d7926d4d329fb1ed47fe83a68ae86e4eb4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-flash-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-floppy-symbolic.svg": {
+    "sha256": "8cc6887cf082e38d4e3f3dc4fb31a9bf29e9d36e872dfdc188443f93eefd1e05",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-floppy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-mount-symbolic.svg": {
+    "sha256": "60a1c7d9d9e060357a9201fe3db65617c26b16442f46e5442716181dc085c6f4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-mount-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-optical-bd-symbolic.svg": {
+    "sha256": "400909b4e6008b6a90e83e5bac3338ca96b068a6e765b548ce8af87e090054b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-optical-bd-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-optical-cd-audio-symbolic.svg": {
+    "sha256": "400909b4e6008b6a90e83e5bac3338ca96b068a6e765b548ce8af87e090054b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-optical-cd-audio-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-optical-cd-symbolic.svg": {
+    "sha256": "400909b4e6008b6a90e83e5bac3338ca96b068a6e765b548ce8af87e090054b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-optical-cd-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-optical-dvd-symbolic.svg": {
+    "sha256": "400909b4e6008b6a90e83e5bac3338ca96b068a6e765b548ce8af87e090054b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-optical-dvd-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-optical-symbolic.svg": {
+    "sha256": "400909b4e6008b6a90e83e5bac3338ca96b068a6e765b548ce8af87e090054b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-optical-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playback-pause-symbolic.svg": {
+    "sha256": "4756cbc2235a2f241696218f438cdc8c24b32f04a913a722c76988088d921625",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playback-pause-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playback-start-symbolic.svg": {
+    "sha256": "6fc069b21b6b14a524afe7d3892da343eb2ca3fb4ef628a15b93826652ea05c0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playback-start-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playback-stop-symbolic.svg": {
+    "sha256": "de717251084ed2ee64ae328919a4d75ec13dcc620061c67143dab5bb68f0c9df",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playback-stop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playlist-consecutive-symbolic.svg": {
+    "sha256": "f9381f8a8a895dee74ad1e595b852abec87a9b276c3ee9901e1b6173e55e967d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playlist-consecutive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playlist-repeat-song-symbolic.svg": {
+    "sha256": "b0106cca31b502c504acf17f5a5ace21fccf7b9f8a71b46fe7a6692b0a65b92e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playlist-repeat-song-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playlist-repeat-symbolic.svg": {
+    "sha256": "bd04fc37895d21369f851164d97dd14d9caa551d594fddbeb8f4ce39c2d1e36f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playlist-repeat-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-playlist-shuffle-symbolic.svg": {
+    "sha256": "cba8731c50d637316ead272bee1958b74d33a10366727b4e919e00596f922c2a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-playlist-shuffle-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-record-symbolic.svg": {
+    "sha256": "2b1acf578f46fed0c7ba3d832bbd89d5a32c19dc80f030e2454cae10607256f8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-record-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-removable-symbolic.svg": {
+    "sha256": "e0f21b8711ab6fe5e9989b868b4177582ba6fc5013690543594bd7d76eed4a63",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-removable-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-seek-backward-symbolic-rtl.svg": {
+    "sha256": "25a020f43efa35465b17cc798dcf939afb53db250b40e7d30b3b6757388181b8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-seek-backward-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-media-seek-backward-symbolic.svg": {
+    "sha256": "fd8c821f0a4b0457fdad03e5c3c7416cf74f4539f5262d3b7059876f13bc90cc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-seek-backward-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-seek-forward-symbolic-rtl.svg": {
+    "sha256": "fd8c821f0a4b0457fdad03e5c3c7416cf74f4539f5262d3b7059876f13bc90cc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-seek-forward-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-media-seek-forward-symbolic.svg": {
+    "sha256": "25a020f43efa35465b17cc798dcf939afb53db250b40e7d30b3b6757388181b8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-seek-forward-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-skip-backward-symbolic-rtl.svg": {
+    "sha256": "19a3c405db1d2f6e91df3bffd7607d77bff7ef6e978d4ac5ed44c1e202cf9e7c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-skip-backward-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-media-skip-backward-symbolic.svg": {
+    "sha256": "44f78a3fd87a0dc478389e23c04d45c56f0656a0d84ee3809315098e9ea46d08",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-skip-backward-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-skip-forward-symbolic-rtl.svg": {
+    "sha256": "44f78a3fd87a0dc478389e23c04d45c56f0656a0d84ee3809315098e9ea46d08",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-skip-forward-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-media-skip-forward-symbolic.svg": {
+    "sha256": "19a3c405db1d2f6e91df3bffd7607d77bff7ef6e978d4ac5ed44c1e202cf9e7c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-skip-forward-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-tape-symbolic.svg": {
+    "sha256": "79e157684fb172751721fa5711e53c4af1637e616dc323690d1f3bd877fc0e09",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-tape-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-view-subtitles-symbolic.svg": {
+    "sha256": "5a009b99ad8c43f3c391f2630063d8dca6ba43618bd6461bef0d1cceba6bd109",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-view-subtitles-symbolic.svg"
+  },
+  "icons/symbolic/xsi-media-zip-symbolic.svg": {
+    "sha256": "573051d635c0f45d3f7ed6fa194979a6af02bada54b812530b75640d980dc886",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-media-zip-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-disabled-symbolic.svg": {
+    "sha256": "ad54f564dabe7629618c22637b6cf4d4ecd7419cbb759926437e5ff506fd2ad0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-hardware-disabled-symbolic.svg": {
+    "sha256": "52cc62585c9323fb205c86df006990b7d65d7bae2bf2befc0fbc875ce614e93f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-hardware-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-sensitivity-high-symbolic.svg": {
+    "sha256": "2ed932d679852639c7b2c89652d404bdfaa42916719ff3f134fac1f4f575d0ff",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-sensitivity-high-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-sensitivity-low-symbolic.svg": {
+    "sha256": "8d345c9dbc7c4f50d9674cba715c08f682f21e10ad62ae60d2471a50a9abcba8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-sensitivity-low-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-sensitivity-medium-symbolic.svg": {
+    "sha256": "f123f4344ffa88bfe771d67f151716b0d415cde0ea2b08d6b2795cb5afbf971f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-sensitivity-medium-symbolic.svg"
+  },
+  "icons/symbolic/xsi-microphone-sensitivity-muted-symbolic.svg": {
+    "sha256": "eee8147cd7fec24eaf763dca98750fc5ec1e66d5705c69d715f818fc0c8b9582",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-microphone-sensitivity-muted-symbolic.svg"
+  },
+  "icons/symbolic/xsi-modem-symbolic.svg": {
+    "sha256": "1b6a650907f124d9a3fa678cd7d4a578cf0be9a27578f2fa901afd66d6d557ad",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-modem-symbolic.svg"
+  },
+  "icons/symbolic/xsi-mount-archive-symbolic.svg": {
+    "sha256": "76978477ea6a21fa47d21087b8fc95bf3023359d9be95553406bcd1435c53506",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-mount-archive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-move-symbolic.svg": {
+    "sha256": "fc2809d6895d81a723c0b157553cc282ba5b21936aaaf7f5db0f1e878e5d3ec1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-move-symbolic.svg"
+  },
+  "icons/symbolic/xsi-multimedia-player-apple-ipod-touch-symbolic.svg": {
+    "sha256": "71746cfce5b341371108fda25ca90a9df98afef5b719920ca4bb78127c8b1833",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-multimedia-player-apple-ipod-touch-symbolic.svg"
+  },
+  "icons/symbolic/xsi-multimedia-player-symbolic.svg": {
+    "sha256": "71746cfce5b341371108fda25ca90a9df98afef5b719920ca4bb78127c8b1833",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-multimedia-player-symbolic.svg"
+  },
+  "icons/symbolic/xsi-multimedia-symbolic.svg": {
+    "sha256": "32bbf497bd2fea0569edf5f68f7d1944d2f230c2e2d1aba7fdf40d93dd83e8cf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-multimedia-symbolic.svg"
+  },
+  "icons/symbolic/xsi-multitasking-symbolic.svg": {
+    "sha256": "47281d0ed2e12f9f2417252115b4c2985b04501afbcf0cf9011833006d85b837",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-multitasking-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-2g-symbolic.svg": {
+    "sha256": "675d182df1cf947f46685c3eb2da54b3812da29d2f48bcceee4154ca25a425a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-2g-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-3g-symbolic.svg": {
+    "sha256": "a0cdc2e7bea1b63241c3cbc796521744e79c4c17f462ac3d989783912c19b664",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-3g-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-4g-symbolic.svg": {
+    "sha256": "4d2fae01328a26debdf7b29ea63a8a75b898328933ac2a1bdb28fd3ace1e9259",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-4g-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-5g-symbolic.svg": {
+    "sha256": "c4d13056e4e67fa70e6316f9d5a175c15b15f5b79db5a34be808add384e9ceaa",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-5g-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-acquiring-symbolic-rtl.svg": {
+    "sha256": "d78c6f64d0a6f84cad16adf4cbbc7c9a213e1e822b5be770ce55c7b2e4626b46",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-acquiring-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-acquiring-symbolic.svg": {
+    "sha256": "632bd450efc4141e58fea874b64090631e587cf23bca2d12de21a4da47f3d9fc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-connected-symbolic.svg": {
+    "sha256": "33c59f61c06b3ab32dba0c55491aa73203fc3b826442204c66b4280dcd511661",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-connected-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-disabled-symbolic-rtl.svg": {
+    "sha256": "f53fa18651eeb4f37a460ffab63a188fcfe92ca76d2feede820363f5d9791948",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-disabled-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-disabled-symbolic.svg": {
+    "sha256": "77c6c615979a80bd45d3280744391a9cac4afc856fb813cb54b9adf895b3c359",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-edge-symbolic.svg": {
+    "sha256": "6267c209030d114122c7cb4cd8f3241cffffddcca16fdfc8b13f07c3fa4cf4eb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-edge-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-gprs-symbolic.svg": {
+    "sha256": "e798782bec12449aa838b7e20ce1d201e0edfe1a85f3d4e084c4ec9e3ddb9109",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-gprs-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-hardware-disabled-symbolic-rtl.svg": {
+    "sha256": "4a92ba8a271684ac138ccb894fbf0cabac8b40648cb9d29264582b2df9668d54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-hardware-disabled-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-hardware-disabled-symbolic.svg": {
+    "sha256": "d6185854347bd5c91bb2f9fda9c98a43fae671655ad0407015014a824c12e560",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-hardware-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-hspa-symbolic.svg": {
+    "sha256": "b491c7cbc61bc5b91ecae3d6f24df9567d37f0bb168ea245a47055afd39b4a0d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-hspa-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-no-route-symbolic-rtl.svg": {
+    "sha256": "ad9e3b005705d2d9812d0568d62d335ea2896487b9b7b88caafb316bcf858612",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-no-route-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-no-route-symbolic.svg": {
+    "sha256": "629a93fdebbe6a7da857e7da4b7638d379892485d7494d7117e2aca6fd1ef5c5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-no-route-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-offline-symbolic-rtl.svg": {
+    "sha256": "d73372b7d13ad132d279c09db92be222a73d519626a546fa9cfe6fd15a1a8723",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-offline-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-offline-symbolic.svg": {
+    "sha256": "e4a84e80403f23aa056418f177100cce8bad5a139dc5a609498032fbce613089",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-offline-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-excellent-symbolic-rtl.svg": {
+    "sha256": "644f4122e191ec5a774a6d112fbf29dd46ff2fc552dcb13429f338893f9ba57a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-excellent-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-excellent-symbolic.svg": {
+    "sha256": "541014f72ae1b11a27b7e0d88fe1f051b8b91af51c4c4a4d616c9c401614e9e9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-excellent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-good-symbolic-rtl.svg": {
+    "sha256": "51dceef3eab2c01e67a328272355f29dd5768d6f21a83e879760986dd30afb12",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-good-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-good-symbolic.svg": {
+    "sha256": "b07fe249d1aa6a46b14fc20ba30c9978ad4f90aea34fca79477e03b2be67feb8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-good-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-none-symbolic-rtl.svg": {
+    "sha256": "6a24d3b305f924b17799ea8987d8d5e00b0cf5a40023f6f3d2787e73058d4e88",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-none-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-none-symbolic.svg": {
+    "sha256": "d4feb40e0facb72c036af8bcd51277a3eaa0811ea2a7d13222322b8809d322a2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-none-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-ok-symbolic-rtl.svg": {
+    "sha256": "fc96990a3e62b181228342b94ec70885ac8f74a6d30962e56257da332d808a77",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-ok-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-ok-symbolic.svg": {
+    "sha256": "136e90ab3ca9ebccd0808b46a18b61661a1516a98f7c9811ead26c61da0e3806",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-ok-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-weak-symbolic-rtl.svg": {
+    "sha256": "bd4d70b0dfbc652bc938de916f7423094d8b098dcecc3a6b6082cf59ba00f3d9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-weak-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-signal-weak-symbolic.svg": {
+    "sha256": "833925c7edee75b6f433ca105f5e98d298d7033fc26b1053f6dcaca5a4366fd4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-signal-weak-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-cellular-symbolic.svg": {
+    "sha256": "33c59f61c06b3ab32dba0c55491aa73203fc3b826442204c66b4280dcd511661",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-cellular-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-error-symbolic.svg": {
+    "sha256": "adc434ba06e28537d1b292c7e300b37e7c33718caf05eb97b4e371c3ec465c74",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-error-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-idle-symbolic.svg": {
+    "sha256": "633b97564429b114ebd845a86ce4beb0c78e83a494a770ef814140c205f9d773",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-idle-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-no-route-symbolic.svg": {
+    "sha256": "229469bf09a983035d71984692220648c7fe74d1530076155d5e609fca8d7821",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-no-route-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-offline-symbolic.svg": {
+    "sha256": "1039cbc8229c0a2b78d50322e4d7f55b077ca70760f4fbb9706d72c001955f54",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-offline-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-proxy-symbolic.svg": {
+    "sha256": "9fda87884ab4195db49d98079f2123b5fea47073aa1272160e2e80313503af86",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-proxy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-receive-symbolic-rtl.svg": {
+    "sha256": "39a02bce3c27536e7257805aa1b4c396c71a275e57a2ef81329124571a2f819e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-receive-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-receive-symbolic.svg": {
+    "sha256": "c2520ee7f4c466d8b5561e50a5ccf5ed45283c42ef9d7a2c6ce0aa7d64831dc6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-receive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-server-symbolic.svg": {
+    "sha256": "b1c7dd652faea421578a8b64338e58160522c3d8a19d918b25cb233e0fdf9cc1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-server-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-symbolic.svg": {
+    "sha256": "dd6e13599d890820bb7888b1ab88c2b34b4dde88d6edff24d37ff4a3ca842232",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-transmit-receive-symbolic.svg": {
+    "sha256": "ea8a62c72b83675161a7df27b17888434b832775c21bbe1ac358207eef5a1ca4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-transmit-receive-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-transmit-symbolic-rtl.svg": {
+    "sha256": "c2520ee7f4c466d8b5561e50a5ccf5ed45283c42ef9d7a2c6ce0aa7d64831dc6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-transmit-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-network-transmit-symbolic.svg": {
+    "sha256": "39a02bce3c27536e7257805aa1b4c396c71a275e57a2ef81329124571a2f819e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-transmit-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-vpn-acquiring-symbolic.svg": {
+    "sha256": "3a2f76695ce5dac5811b5d825d715fc5c56215594379c2bff760aec5715a8727",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-vpn-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-vpn-disabled-symbolic.svg": {
+    "sha256": "93a014988c692a1cba00972c1193ff8f99600fce28bca9a3964d310058fb7b48",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-vpn-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-vpn-disconnected-symbolic.svg": {
+    "sha256": "f00a437e4e3a2e5ff80ff3d00a1b986c31a059e2e57fba56f2c91947b8eb15c9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-vpn-disconnected-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-vpn-no-route-symbolic.svg": {
+    "sha256": "e81fa606941efa3e4751785811c0483f8b79369d8ac46957b067db17f9a8c3ed",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-vpn-no-route-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-vpn-symbolic.svg": {
+    "sha256": "8f836bccba804174eae946e6ac4525e1aa2463d61493fe2c1ee957e2ada03753",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-vpn-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wired-acquiring-symbolic.svg": {
+    "sha256": "fb080cf32a102fd9b4c6ce71e7663df36954bc86191d746db258886b22c79d46",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wired-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wired-disconnected-symbolic.svg": {
+    "sha256": "0f649a82c5df8b117bd9be232e36bbcf3e31b1f69dd41cf5631cd0ffdcf8cccd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wired-disconnected-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wired-no-route-symbolic.svg": {
+    "sha256": "76e2cab4065d8d3bb9e639785b9430fdb5d82556f770839ad48bfd19df9c6fac",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wired-no-route-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wired-symbolic.svg": {
+    "sha256": "8da4fb7f45252b51a92a2d9a36287dac218b4a35b4d3436998f9df07de3fedfe",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wired-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-acquiring-symbolic.svg": {
+    "sha256": "d9e82f415146123a257eb6e2054338e83a25bf258415d58f41254fef3cd2a203",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-connected-symbolic.svg": {
+    "sha256": "25eaeb1a984dc199726a67da08209363ca07dc019c47944317854a1f03214da2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-connected-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-disabled-symbolic.svg": {
+    "sha256": "db9404f34b5eece58309839caf182d42949a0de739446daa352bd2ba41190a33",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-encrypted-symbolic.svg": {
+    "sha256": "1ae63c45551ac54158a0d5a8131feeb56f1055f9099dd2fb7a60cd8630ec7bae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-encrypted-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-hardware-disabled-symbolic.svg": {
+    "sha256": "d29e64ece1a3b3fc32ce7a7e0cfc8a1e5bb40ee029fbc9d0a57c100738f0de85",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-hardware-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-hotspot-symbolic.svg": {
+    "sha256": "5522ad9f8b36fe43efe92630505a6f22f22ee12881b79b1bd0cc644d35efcffc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-hotspot-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-no-route-symbolic.svg": {
+    "sha256": "e18b108d42d13ea0113ac1160a0804d94645210f49044da9096fee77c73a46a4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-no-route-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-offline-symbolic.svg": {
+    "sha256": "6ba12c6b4b5fec8df3b5e6771c108eb7ef080561ab5fc2f5206b2b35f9e498bb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-offline-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-excellent-secure-symbolic.svg": {
+    "sha256": "4effad9c3e57d85b802544926ecb7fdaa95f7b1bd8596626372ac02c092a28c9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-excellent-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-excellent-symbolic.svg": {
+    "sha256": "818f6738b6c21c6c09350a888dc73274e2411b221b70d5bfa11d9a45cc94d166",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-excellent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-good-secure-symbolic.svg": {
+    "sha256": "a79ad6ff56fec75bd1c0ffe189fc300aaa7e5f91f0dd1da504281beb250c29c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-good-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-good-symbolic.svg": {
+    "sha256": "818f6738b6c21c6c09350a888dc73274e2411b221b70d5bfa11d9a45cc94d166",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-good-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-none-secure-symbolic.svg": {
+    "sha256": "ef1e971ca5962a935cf2b681d5bd9b3a95ffad2c674016609cda7197e99a3aa0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-none-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-none-symbolic.svg": {
+    "sha256": "0e0e37d55ec83d64f5745b377288a599bae3f205aa3e7fb836ff38d625a7bcae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-none-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-ok-secure-symbolic.svg": {
+    "sha256": "a2d5da266a151437b58584e054ddcebaf3c69c89902dd2cac916c52852a7293d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-ok-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-ok-symbolic.svg": {
+    "sha256": "c0482c5e15b5a5f4896de3bb2343cdb5ee5095426c2d3cd77ce13e76db4101de",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-ok-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-weak-secure-symbolic.svg": {
+    "sha256": "daff6497f3f565e6eab6151fe4d7fcc7ced77a9275113ee9d76a224ac4ba0771",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-weak-secure-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-signal-weak-symbolic.svg": {
+    "sha256": "5daad912b5f95f7b2abdcbf78705e2eac23f89582d095f0b8157121460802bc9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-signal-weak-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-wireless-symbolic.svg": {
+    "sha256": "818f6738b6c21c6c09350a888dc73274e2411b221b70d5bfa11d9a45cc94d166",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-wireless-symbolic.svg"
+  },
+  "icons/symbolic/xsi-network-workgroup-symbolic.svg": {
+    "sha256": "1a6e0a682d2f6841d845dacc7d269f46fd7c75d6ecd621f9d4aa9172e57b1825",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-network-workgroup-symbolic.svg"
+  },
+  "icons/symbolic/xsi-night-light-disabled-symbolic.svg": {
+    "sha256": "a142b3ebd9c69ce356c8a542d07a7d7d068da12fdcb1283001d48229c6a9f243",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-night-light-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-night-light-symbolic.svg": {
+    "sha256": "8660782ffb0513a8d4ee8546b7e1f9117f1b3faa1b1f44a4de17a6518efb35a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-night-light-symbolic.svg"
+  },
+  "icons/symbolic/xsi-non-starred-symbolic.svg": {
+    "sha256": "f49c1f70b84dfc2637542703005bd68b20fba65f6fad3c8eff15299cd2ce25f2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-non-starred-symbolic.svg"
+  },
+  "icons/symbolic/xsi-notifications-disabled-symbolic.svg": {
+    "sha256": "41a8633cf3fdb151f2365c6af9cc743fdeb0667e8ee6a5d022935ffc244483a1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-notifications-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-notifications-symbolic.svg": {
+    "sha256": "af69554ce518641970662f360384428c448eacf4632ac02aa968a74424d387bb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-notifications-symbolic.svg"
+  },
+  "icons/symbolic/xsi-object-flip-horizontal-symbolic.svg": {
+    "sha256": "46c468ecd78e423bdcd568e80456703c202664d90927be0618b9510b370eb1be",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-object-flip-horizontal-symbolic.svg"
+  },
+  "icons/symbolic/xsi-object-flip-vertical-symbolic.svg": {
+    "sha256": "88de32acaea174ef50577c2f1298221b4f1b1feb758ce4c3170734197dbccd1b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-object-flip-vertical-symbolic.svg"
+  },
+  "icons/symbolic/xsi-object-rotate-left-symbolic.svg": {
+    "sha256": "70df8ffc6d45a269e0f0d19a91c1511cd7977051594d3a0f0c88b8c198e3b814",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-object-rotate-left-symbolic.svg"
+  },
+  "icons/symbolic/xsi-object-rotate-right-symbolic.svg": {
+    "sha256": "97c8b34dfb88f3a57591b7bec4d85ac98b02d5292d951572ab5f1265bfe3b1a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-object-rotate-right-symbolic.svg"
+  },
+  "icons/symbolic/xsi-object-select-symbolic.svg": {
+    "sha256": "2f316af0449a986b2193b63083d2b4e083a2dc05f2c50da8b46f2baebb277535",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-object-select-symbolic.svg"
+  },
+  "icons/symbolic/xsi-open-menu-symbolic.svg": {
+    "sha256": "dd3f1c117437a6f5124905de7212a1a320e76f9b33d8411bf70dbdbefa8e9bad",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-open-menu-symbolic.svg"
+  },
+  "icons/symbolic/xsi-orientation-landscape-inverse-symbolic.svg": {
+    "sha256": "b2ca646746328e7cf5b72f34f9a1a42bd101d883652556434d24f5cfd688b2aa",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-landscape-inverse-symbolic.svg"
+  },
+  "icons/symbolic/xsi-orientation-landscape-symbolic.svg": {
+    "sha256": "b8837e9fec25007832437c3ad7ac72b920ba277f926f2aa0572b1c3be4cf7c81",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-landscape-symbolic.svg"
+  },
+  "icons/symbolic/xsi-orientation-portrait-left-symbolic-rtl.svg": {
+    "sha256": "92a36d4d914f6cf86f1fb482fb47803bf5855a3715bb8d0310a18f19c9ce22a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-portrait-left-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-orientation-portrait-left-symbolic.svg": {
+    "sha256": "c7c1cb3ef3bd022a4d514624d7aa404919d29ab80ecfff192c210020a78139ec",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-portrait-left-symbolic.svg"
+  },
+  "icons/symbolic/xsi-orientation-portrait-right-symbolic-rtl.svg": {
+    "sha256": "c7c1cb3ef3bd022a4d514624d7aa404919d29ab80ecfff192c210020a78139ec",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-portrait-right-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-orientation-portrait-right-symbolic.svg": {
+    "sha256": "92a36d4d914f6cf86f1fb482fb47803bf5855a3715bb8d0310a18f19c9ce22a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-orientation-portrait-right-symbolic.svg"
+  },
+  "icons/symbolic/xsi-package-x-generic-symbolic.svg": {
+    "sha256": "fc604231cacbe481c02ede8f92f0b6374debcc0485895d1641dd999c406f676f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-package-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pan-down-symbolic.svg": {
+    "sha256": "49b07927082c327ab40a22bd901273f4a48f68bd72d463657432217aff23c89b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-down-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pan-end-symbolic-rtl.svg": {
+    "sha256": "e794670a5cc10498f36a83b2f0bdd98adeb5fccd6f98006fdd29a228ee5e924c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-end-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-pan-end-symbolic.svg": {
+    "sha256": "5691f9109a3c77b42ef738de752f4d9bca6f48e6223625cc5c5cdf47ecce60c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-end-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pan-start-symbolic-rtl.svg": {
+    "sha256": "5691f9109a3c77b42ef738de752f4d9bca6f48e6223625cc5c5cdf47ecce60c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-start-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-pan-start-symbolic.svg": {
+    "sha256": "e794670a5cc10498f36a83b2f0bdd98adeb5fccd6f98006fdd29a228ee5e924c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-start-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pan-up-symbolic.svg": {
+    "sha256": "721e2c94656574da2bdd8cef7cce76e45ecaacebbffcaf7e1efc9aae8f536715",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pan-up-symbolic.svg"
+  },
+  "icons/symbolic/xsi-parental-controls-symbolic.svg": {
+    "sha256": "ac134f8dd5404b2dacb88911a4ea1bb76856536370f5aa0cbb934841321988b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-parental-controls-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pci-card-symbolic.svg": {
+    "sha256": "344dd12c9fb326a82ea1c47db96f491edd4b7b11c0505824a09fc787d1e5fe0e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pci-card-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pda-symbolic.svg": {
+    "sha256": "4f897761c2997e5f22e53eee2c6c9eef181fe6c06bf7bd49b0d9292b6cacb18b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pda-symbolic.svg"
+  },
+  "icons/symbolic/xsi-phone-apple-iphone-symbolic.svg": {
+    "sha256": "784dcffaf4552bdcd6bf92ce8a5f1ac21f7cd8873a7eb27de3d5993086a48568",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-phone-apple-iphone-symbolic.svg"
+  },
+  "icons/symbolic/xsi-phone-old-symbolic.svg": {
+    "sha256": "fa231a3b27647ce43d5e51ec35ad71e57316e5391463e535688b248b4f1918cf",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-phone-old-symbolic.svg"
+  },
+  "icons/symbolic/xsi-phone-symbolic.svg": {
+    "sha256": "18d7cd748623c0ad4aabcf0cd3210494dce71849e586758a711be707f112b7ca",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-phone-symbolic.svg"
+  },
+  "icons/symbolic/xsi-physics-amps-symbolic.svg": {
+    "sha256": "6f40ac52553d0e12049a6b06916e92b06e52c3e5e919d322a6e63ac5d9edc89f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-physics-amps-symbolic.svg"
+  },
+  "icons/symbolic/xsi-physics-volts-symbolic.svg": {
+    "sha256": "21f11d9632be4f98ca7c2d6f14daf244b8ff957ff5bb27268fd4f0051cb135d2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-physics-volts-symbolic.svg"
+  },
+  "icons/symbolic/xsi-physics-watts-symbolic.svg": {
+    "sha256": "feb6786db50e9c5efdf043a35eca31938d6a49967da5d9d8266681e7974855b5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-physics-watts-symbolic.svg"
+  },
+  "icons/symbolic/xsi-physics-wave-symbolic.svg": {
+    "sha256": "ebaac86b2dc2528c97a521f9e0a44cebd254751d7131fe0f2523f04162235aa3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-physics-wave-symbolic.svg"
+  },
+  "icons/symbolic/xsi-physics-wavelength-symbolic.svg": {
+    "sha256": "c39f9427c050050932cb76afce8ee9e4cfa81b5a58b97586047a98d88478ff71",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-physics-wavelength-symbolic.svg"
+  },
+  "icons/symbolic/xsi-pin-symbolic.svg": {
+    "sha256": "00455aec9468614b19a848fac1258f53d1aef752957d7a41687dc1c3a3fa06f6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-pin-symbolic.svg"
+  },
+  "icons/symbolic/xsi-power-profile-balanced-symbolic-rtl.svg": {
+    "sha256": "c9a88fbbc6c62f79ff9ba0e34984d99f1182e9aa2e6aa6f7aff55532bfdd687c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-balanced-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-power-profile-balanced-symbolic.svg": {
+    "sha256": "85e9897978157e55c9f370ebc010fcd0f737ce9d505c35ecd4fb86d6c45701da",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-balanced-symbolic.svg"
+  },
+  "icons/symbolic/xsi-power-profile-performance-symbolic-rtl.svg": {
+    "sha256": "1a5fd7cb005872c76b76ba3e2ffe3f06b8103fb02a3a7681f93794f0399fd06d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-performance-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-power-profile-performance-symbolic.svg": {
+    "sha256": "6eb45fc60d15145aa6de7a93699bb7e8105bbea16f3439749d005647a395bc35",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-performance-symbolic.svg"
+  },
+  "icons/symbolic/xsi-power-profile-power-saver-symbolic-rtl.svg": {
+    "sha256": "ebb7885163ba55db9a2e76bc7d7f63b2477190ece2d8640ab5c6a480fa2d8e75",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-power-saver-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-power-profile-power-saver-symbolic.svg": {
+    "sha256": "ca3efdd953bf62857338aaa0e2cc455cb201180ca27d07b2d418c4f74335f626",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-profile-power-saver-symbolic.svg"
+  },
+  "icons/symbolic/xsi-power-symbolic.svg": {
+    "sha256": "5c1ad6704b497893a6a2efed1b5fbbeee17981876fdb4286342786d2f2e82fab",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-power-symbolic.svg"
+  },
+  "icons/symbolic/xsi-preferences-symbolic.svg": {
+    "sha256": "287a3f6c2dbdb1d90899680cf843a2b563b2f0025134bc23d99f23cdc1e2137c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-preferences-symbolic.svg"
+  },
+  "icons/symbolic/xsi-preview-symbolic.svg": {
+    "sha256": "119a1b5c8040ac496d68c714f367b270ac6b188a565d243f33985619954e5f62",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-preview-symbolic.svg"
+  },
+  "icons/symbolic/xsi-printer-error-symbolic.svg": {
+    "sha256": "911db8aedc79ec1eaed6fbd3642955c9854b5b3548f2f82f249fa3e264507bb1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-printer-error-symbolic.svg"
+  },
+  "icons/symbolic/xsi-printer-network-symbolic.svg": {
+    "sha256": "67f5a3c11958e3ac8c7c9a92fd696ad6bf128281aa1441e6587a80b3988d1911",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-printer-network-symbolic.svg"
+  },
+  "icons/symbolic/xsi-printer-printing-symbolic.svg": {
+    "sha256": "cdfb44e001493bbc89b85916f6a3b53e3acce6f91403d4df5332ab9b5ade9ce0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-printer-printing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-printer-symbolic.svg": {
+    "sha256": "cdfb44e001493bbc89b85916f6a3b53e3acce6f91403d4df5332ab9b5ade9ce0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-printer-symbolic.svg"
+  },
+  "icons/symbolic/xsi-printer-warning-symbolic.svg": {
+    "sha256": "5bed14efd09f6817023df8d10277afe4595a83eafe42d7ef26d9c549bcd3044f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-printer-warning-symbolic.svg"
+  },
+  "icons/symbolic/xsi-privacy-symbolic.svg": {
+    "sha256": "618d46f3b728398a1bd69dcaae7a1c7e399511f89d954435c4c4285ca3a2bf81",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-privacy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-process-stop-symbolic.svg": {
+    "sha256": "4746e75eeb13268759e4b4f3d5521baa81bd0bd74375a7326a01ad44fbbe8d0a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-process-stop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-radio-checked-symbolic.svg": {
+    "sha256": "acdd20b8a1eeeb04ff8373baaf5b65a4a60e9f4f750c6a1a07b8c4eb31c84222",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-radio-checked-symbolic.svg"
+  },
+  "icons/symbolic/xsi-radio-mixed-symbolic.svg": {
+    "sha256": "49cd5d6b1f2dbe7de90a782cf6f0454558bc9fa050ab6181f57c3d2ed063f8ab",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-radio-mixed-symbolic.svg"
+  },
+  "icons/symbolic/xsi-radio-symbolic.svg": {
+    "sha256": "9f19e604fad06b57b8f0cdb3664be440bcc6ba92d835cfa76ed2f3f0ef32eb8f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-radio-symbolic.svg"
+  },
+  "icons/symbolic/xsi-ram-symbolic.svg": {
+    "sha256": "8d41f512f8aad4231e3bf299761f32e5bb4a14a373ff3661e151884f26f50b52",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-ram-symbolic.svg"
+  },
+  "icons/symbolic/xsi-reboot-symbolic.svg": {
+    "sha256": "96d92eab20846ac99549065f3c0bde461232fdd0a51b546ba682ddcb7e122986",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-reboot-symbolic.svg"
+  },
+  "icons/symbolic/xsi-remote-desktop-symbolic.svg": {
+    "sha256": "5c47b3e02d9d79820b22f4ed016619327181d1950da76e69e24070e9801e9f43",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-remote-desktop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-rotation-allowed-symbolic.svg": {
+    "sha256": "b74c38e89806dac880b4c5b4f07617447bb8ed7617c65842e703fdaf2e41c014",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-rotation-allowed-symbolic.svg"
+  },
+  "icons/symbolic/xsi-rotation-locked-symbolic.svg": {
+    "sha256": "e72c0b5783092c1664673b56d523e0593ee2be93c73ad3d61f3701dec1c0a3f1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-rotation-locked-symbolic.svg"
+  },
+  "icons/symbolic/xsi-rss-symbolic.svg": {
+    "sha256": "d87c79b96e92e53aa5aa511c8debb87aeb787ec56d10415b5286920816eeb9cd",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-rss-symbolic.svg"
+  },
+  "icons/symbolic/xsi-run-symbolic.svg": {
+    "sha256": "183e0581d915797469c04e03a832fac6d05d69d718ed9167edd047cab6349d99",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-run-symbolic.svg"
+  },
+  "icons/symbolic/xsi-scanner-symbolic.svg": {
+    "sha256": "c81a82b7196effd5a7f962a11d9daae0508c3d14f576cbb3b9b2ea6bcf5fe22f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-scanner-symbolic.svg"
+  },
+  "icons/symbolic/xsi-science-symbolic.svg": {
+    "sha256": "685e75d53d03f1f48671904b10fa43bf1fbf4450609386afc5d8deb92bdc80b5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-science-symbolic.svg"
+  },
+  "icons/symbolic/xsi-screen-shared-symbolic.svg": {
+    "sha256": "6d5589db0d4cbdf413ee3a7a1f49340a22b70c7bc1019a651cac6aaddac1799e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-screen-shared-symbolic.svg"
+  },
+  "icons/symbolic/xsi-screensaver-symbolic.svg": {
+    "sha256": "9a7295790de571da73201727870fcd8dea6932f7fd22dae3f26081a87d067c13",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-screensaver-symbolic.svg"
+  },
+  "icons/symbolic/xsi-screenshooter-symbolic.svg": {
+    "sha256": "0ae483e38a33f1fb7a3c26505ca1faf68c9ba7f539b7b89b2ffb423f4fb546b9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-screenshooter-symbolic.svg"
+  },
+  "icons/symbolic/xsi-search-entire-word-symbolic.svg": {
+    "sha256": "d6a5bfc94d9b7130974a676ee6eaaf62877bc89a71c1699f0c62b8c459ad3b6e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-search-entire-word-symbolic.svg"
+  },
+  "icons/symbolic/xsi-search-symbolic.svg": {
+    "sha256": "a11c462c3d3d315bcc63cd5d0bf6ac3e76c0f8b9664eebb8d9efaa11e7ca98b9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-search-symbolic.svg"
+  },
+  "icons/symbolic/xsi-search-wrap-symbolic.svg": {
+    "sha256": "121fe68cc577f202aa80eabf2b5f0db1b105a4a264fae464b46e4ce84b8b6e14",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-search-wrap-symbolic.svg"
+  },
+  "icons/symbolic/xsi-security-high-symbolic.svg": {
+    "sha256": "d42aa316175f20b2e4bde64176ad70b6c4f56c319ccaede46a194a1a1d0b773a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-security-high-symbolic.svg"
+  },
+  "icons/symbolic/xsi-security-low-symbolic.svg": {
+    "sha256": "9fd97ca446c1640e558814fc6a9acb423db2f085b430d6649780d6a8c5edaf03",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-security-low-symbolic.svg"
+  },
+  "icons/symbolic/xsi-security-medium-symbolic-rtl.svg": {
+    "sha256": "2ba14d311eab1e73a2620b39b907ce0481b7199bd2f2990bddf9627809b9da51",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-security-medium-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-security-medium-symbolic.svg": {
+    "sha256": "424812313300a8b779862d2e34d72878674da800af2754722bb5a89e7d553e50",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-security-medium-symbolic.svg"
+  },
+  "icons/symbolic/xsi-selection-end-symbolic-rtl.svg": {
+    "sha256": "97a4e4158f0fd4ad8c9b3c5a615394f46c24a61c69879a4d5a2cdcceb800b864",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-selection-end-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-selection-end-symbolic.svg": {
+    "sha256": "a0dfbf03578647785f36748bc77c90165121758e2a42f761d23d9644d270bc0f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-selection-end-symbolic.svg"
+  },
+  "icons/symbolic/xsi-selection-mode-symbolic.svg": {
+    "sha256": "e17c29e7533ec4cfc520480a073872b46736b59b3631c7cd09f7d904ec0ce454",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-selection-mode-symbolic.svg"
+  },
+  "icons/symbolic/xsi-selection-start-symbolic-rtl.svg": {
+    "sha256": "a0dfbf03578647785f36748bc77c90165121758e2a42f761d23d9644d270bc0f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-selection-start-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-selection-start-symbolic.svg": {
+    "sha256": "97a4e4158f0fd4ad8c9b3c5a615394f46c24a61c69879a4d5a2cdcceb800b864",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-selection-start-symbolic.svg"
+  },
+  "icons/symbolic/xsi-semi-starred-symbolic-rtl.svg": {
+    "sha256": "36f5036e29375fc2b75b3f99c84523936c60457decfc234e847637d21a49af4a",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-semi-starred-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-semi-starred-symbolic.svg": {
+    "sha256": "119fb1e7734ba8681bd73f9b2d7d2c3a1413ecbb36e0cc08c7c24a63e273b7d4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-semi-starred-symbolic.svg"
+  },
+  "icons/symbolic/xsi-send-to-symbolic.svg": {
+    "sha256": "c3d46642026b1d28d36215c03a9bbd00ba5aa1a442f9257beffb076106419c03",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-send-to-symbolic.svg"
+  },
+  "icons/symbolic/xsi-share-symbolic.svg": {
+    "sha256": "876fa3c377bfbb9cb8ae10a8d803988460e6bd0dbad1c26384025815585cf052",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-share-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sharedlib-symbolic.svg": {
+    "sha256": "0ba1786db82f22e162d80f06d09f050e844f4d266cc28df38194de5cbf36dcd0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sharedlib-symbolic.svg"
+  },
+  "icons/symbolic/xsi-shutdown-symbolic.svg": {
+    "sha256": "f486625bee93179b337afe78325c76268b479588898a17002f9604814ebbe65f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-shutdown-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sidebar-show-right-symbolic-rtl.svg": {
+    "sha256": "92bf2dbe5b3fcb05ba3c6c8f2d4aa60270a89391226c7b8a645411535cd7df68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sidebar-show-right-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-sidebar-show-right-symbolic.svg": {
+    "sha256": "a56d857f9d26699d62b29f6c16ad8f79f0e3795fe3bbbc0b3cebc569e9103493",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sidebar-show-right-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sidebar-show-symbolic-rtl.svg": {
+    "sha256": "a56d857f9d26699d62b29f6c16ad8f79f0e3795fe3bbbc0b3cebc569e9103493",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sidebar-show-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-sidebar-show-symbolic.svg": {
+    "sha256": "92bf2dbe5b3fcb05ba3c6c8f2d4aa60270a89391226c7b8a645411535cd7df68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sidebar-show-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sign-at-symbolic.svg": {
+    "sha256": "c3f3c0e6c00910d11449bd49d612b2b572e08832132955208d69d2f5a33afc69",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sign-at-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sign-forbidden-symbolic.svg": {
+    "sha256": "b5520aac221d55535e3ef21db5724c780afe7101c92db4ce2c13b653f45447f6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sign-forbidden-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sign-info-symbolic.svg": {
+    "sha256": "66dd1f913a30e5d56667e32c1288d3cdbacb562357083425e7b03f68f45831b3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sign-info-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sim-locked-symbolic.svg": {
+    "sha256": "81ec05af1c16f8dfcf63389c69d77de2dd90dd6e47032fee08b6a7e6cc4b1f38",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sim-locked-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sim-missing-symbolic.svg": {
+    "sha256": "eae49575c07ec8ff4bbeda584a76c830b2c6b33f5816b0ca7e5bdf804f95ee5d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sim-missing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-sim-symbolic.svg": {
+    "sha256": "01e42890afdc3082b248295d8a4ba61d91af8b836ee808f7fbfbd0002de4d9ae",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-sim-symbolic.svg"
+  },
+  "icons/symbolic/xsi-smartcard-symbolic.svg": {
+    "sha256": "d21b22c0fb7b8a72adb2c3f543c0461f44a5867dc13fd49d7515b36744a1e1ea",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-smartcard-symbolic.svg"
+  },
+  "icons/symbolic/xsi-software-install-symbolic.svg": {
+    "sha256": "99a153d614b578b7df327f25ebb900c3e259e2d871d48786fa4b4ccda3f18eed",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-software-install-symbolic.svg"
+  },
+  "icons/symbolic/xsi-software-update-available-symbolic.svg": {
+    "sha256": "cafe5fe46c98998a969e0fb14fdf63eb022d5888a42c4960b9990f9f685a54e5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-software-update-available-symbolic.svg"
+  },
+  "icons/symbolic/xsi-software-update-urgent-symbolic.svg": {
+    "sha256": "283aec483eea7c67f15ab5ef896580c5a8861e5228dd8a023f7d4aab572a429e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-software-update-urgent-symbolic.svg"
+  },
+  "icons/symbolic/xsi-star-new-symbolic.svg": {
+    "sha256": "9a22cb48c228e13d2408716be8ab60742caade6ad7f1259e3dd9a0561f1b8fb5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-star-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-starred-symbolic.svg": {
+    "sha256": "ff070bd852a68a8f3002c4fdf73ab659e3819228e3d441e8a46af70a2964ec20",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-starred-symbolic.svg"
+  },
+  "icons/symbolic/xsi-swiss-knife-symbolic.svg": {
+    "sha256": "ff5b0e3444eb40e0a7bedaf296ff4215af6056bb4f06365abd1a87a112e008bb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-swiss-knife-symbolic.svg"
+  },
+  "icons/symbolic/xsi-switch-user-symbolic-rtl.svg": {
+    "sha256": "a930aa8b78b8b77008b1114efc2313af0e53407df5f2618d0c2348bf29d1831d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-switch-user-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-switch-user-symbolic.svg": {
+    "sha256": "68919cee738333b0abd21ffb2ee87a6bf007ec2d7ff0823a41005e3b4e7cb3db",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-switch-user-symbolic.svg"
+  },
+  "icons/symbolic/xsi-tab-new-symbolic.svg": {
+    "sha256": "85fc8c41e54d700c15ea5a54eadf31fa83813eacf6da02dac3455bd54703fd4f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-tab-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-tablet-symbolic.svg": {
+    "sha256": "9adf8ae9526d1090f4ed76f3ae7251356cb8a1e2c19c17dee2b761d95b75739e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-tablet-symbolic.svg"
+  },
+  "icons/symbolic/xsi-tag-symbolic.svg": {
+    "sha256": "cf66807e19492d7ca2ebba88517f68e076b6064836e4faf10ef9527bb40895f9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-tag-symbolic.svg"
+  },
+  "icons/symbolic/xsi-task-due-symbolic.svg": {
+    "sha256": "faba55f5dae78d6e4098b480409d6e20b63b73b0bbeff7c280a5b0cb63dd684b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-task-due-symbolic.svg"
+  },
+  "icons/symbolic/xsi-task-past-due-symbolic.svg": {
+    "sha256": "bf315b32d93e1ee008f594a2685a5ab8f58f1832c0f7c03b308ae74fbddd0666",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-task-past-due-symbolic.svg"
+  },
+  "icons/symbolic/xsi-temperature-symbolic.svg": {
+    "sha256": "4ef0a730d2bb043c6bb393134af301fe93cdce28d21f21bf60c6dd614a9d92b2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-temperature-symbolic.svg"
+  },
+  "icons/symbolic/xsi-text-case-symbolic.svg": {
+    "sha256": "72f4a6ad433228cf4fa0f5b078354b2ab79cdb8b8e44f63fb99c9c64db2ec627",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-text-case-symbolic.svg"
+  },
+  "icons/symbolic/xsi-text-editor-symbolic.svg": {
+    "sha256": "34624e87572aaf6f661fb059d867ea1754191f7cfa07281f3847139dc9add958",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-text-editor-symbolic.svg"
+  },
+  "icons/symbolic/xsi-text-x-generic-symbolic.svg": {
+    "sha256": "5f1399508d2ade833996642a95799f95b9e732e02158b1a02d10b4459a4ebb39",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-text-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-thunderbolt-acquiring-symbolic.svg": {
+    "sha256": "51cfdcfefcd399388f5fa65dc563a0575845a90877d155ebf86bccbf84537976",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-thunderbolt-acquiring-symbolic.svg"
+  },
+  "icons/symbolic/xsi-thunderbolt-symbolic.svg": {
+    "sha256": "defb05dd147cb36088e933f76b58c30129e7db2966714ebe104241dd28a3d107",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-thunderbolt-symbolic.svg"
+  },
+  "icons/symbolic/xsi-time-symbolic.svg": {
+    "sha256": "542045712c27be965b97b3586883baab982d5eecea30383a89b84d3cf590d8d4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-time-symbolic.svg"
+  },
+  "icons/symbolic/xsi-toolbar-symbolic.svg": {
+    "sha256": "7de63db4be625bdaae11a833a8b2a6ad6c4a783ed39825645100c98bdd84bb0b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-toolbar-symbolic.svg"
+  },
+  "icons/symbolic/xsi-toolbox-symbolic.svg": {
+    "sha256": "1de86972988254e374158314ad0cfaa826b2448f409cb6f3aa4d1d891b084fe6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-toolbox-symbolic.svg"
+  },
+  "icons/symbolic/xsi-tools-symbolic.svg": {
+    "sha256": "26b069ad21997d1210a5f8e6c34a71595a0c88184597fdf32ac182c39e5352a9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-tools-symbolic.svg"
+  },
+  "icons/symbolic/xsi-touch-disabled-symbolic.svg": {
+    "sha256": "5a12040457917285f8593cd2084023c84556fcd008a2f5221c14389ef3389758",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-touch-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-touchpad-disabled-symbolic.svg": {
+    "sha256": "a5e0ceb25c51fd03335223441d4488885c83ff679017c17905333ff9b4240e71",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-touchpad-disabled-symbolic.svg"
+  },
+  "icons/symbolic/xsi-tv-symbolic.svg": {
+    "sha256": "edbcdcbca98efa81f57cdfda0ce01a03c324e27e1d224f82a3b640a5443cbe68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-tv-symbolic.svg"
+  },
+  "icons/symbolic/xsi-unfavorite-symbolic.svg": {
+    "sha256": "23323db75292d806d5544740da6e3c25a635742034fd9be2da8a7d5275410cd0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-unfavorite-symbolic.svg"
+  },
+  "icons/symbolic/xsi-uninterruptible-power-supply-symbolic.svg": {
+    "sha256": "02fe7a8a9dba1cdf552021a781a2916ecec3469c71c792a5b3cd6b6d785da943",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-uninterruptible-power-supply-symbolic.svg"
+  },
+  "icons/symbolic/xsi-unpin-symbolic.svg": {
+    "sha256": "334f102f5badeb035f1b5255d0b659ac3d0e5be4def19d3a19f7e5c98a511755",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-unpin-symbolic.svg"
+  },
+  "icons/symbolic/xsi-usb-stick-symbolic.svg": {
+    "sha256": "5360d9aa663c4d2f565a5ccb0427f701a737b6d4f1e5a030367dd09eb14ac633",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-usb-stick-symbolic.svg"
+  },
+  "icons/symbolic/xsi-usb-symbolic.svg": {
+    "sha256": "89f7c56b584ccc21a11680cad5b42ed235bc44fe5aab734626716c9cb37c1f0d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-usb-symbolic.svg"
+  },
+  "icons/symbolic/xsi-use-regex-symbolic.svg": {
+    "sha256": "df6128d66a0366726ef0bcba9c78dece32627c3b146a4382b9e809b80376a8c0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-use-regex-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-available-symbolic.svg": {
+    "sha256": "1f24167dc238048962af0e025693e993cc8415450ac71015c508d55debce51c6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-available-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-away-symbolic.svg": {
+    "sha256": "87e8b342c0fb2e919b07383df828eb990a9e21be6882774fd112532888713ced",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-away-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-bookmarks-symbolic.svg": {
+    "sha256": "f35766ea541d74a7a21de47e3ddc280d184f3107fa1ebe8cd232774a2b8895d6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-bookmarks-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-busy-symbolic.svg": {
+    "sha256": "0099f8e5c001762f60fa1b6492f0bc3da85cbb19f84c22f845b3920c31e2ee73",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-busy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-desktop-symbolic.svg": {
+    "sha256": "d5fbf420bca60ec27f41296e00d517cd66bbbeb3622a89643c70808dfa204c6f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-desktop-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-favorites-symbolic.svg": {
+    "sha256": "a693a05a046e23aa53b492ae3260bf9f0ff94212bf8f7059a5687fd4e6abe916",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-favorites-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-home-symbolic.svg": {
+    "sha256": "057dc63d111737fda0852f927858905808712106b09bb8f46e54d0abb38afc86",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-home-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-idle-symbolic.svg": {
+    "sha256": "d4f5af7e64b4d54dac1ce7e3d5b269157c5a85681d93b49cd7183443e9947cd7",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-idle-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-info-symbolic.svg": {
+    "sha256": "8191a1c1d5e29e59cad491cbbd04c1f3198642ea8ab061b12713ae079a857f87",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-info-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-invisible-symbolic.svg": {
+    "sha256": "3de16b24435d55f7f1a8123a79915eb3c7f7cf4f0d64a49293b7c9ef27b7cc9b",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-invisible-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-not-tracked-symbolic.svg": {
+    "sha256": "fe2aa2f8565bc4eecba9075781e71714a0ede89cfd8e66c8e0b4e8531555b6e3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-not-tracked-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-offline-symbolic.svg": {
+    "sha256": "3dad479aed5b58bcda77c0026fb04f8aa351fef42d6b10ad62fcaed72aee19db",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-offline-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-status-pending-symbolic.svg": {
+    "sha256": "fbe2f86780f4aa7be810cf6e327460b8fa89f4911e5f37f3152653a056a8d441",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-status-pending-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-trash-full-symbolic.svg": {
+    "sha256": "34db57295d78ddca41a1358eadf2a952393297ebbe98b533ae7d5037ebe6a237",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-trash-full-symbolic.svg"
+  },
+  "icons/symbolic/xsi-user-trash-symbolic.svg": {
+    "sha256": "a9fb4acd59659187fc705cc7bae5de6aa074da2d648731778025f5e69840ae95",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-user-trash-symbolic.svg"
+  },
+  "icons/symbolic/xsi-users-symbolic.svg": {
+    "sha256": "37889c016a1d12dc51653d6f48994a5caa3eb8447acc4a62d8ddeed56c0ed18e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-users-symbolic.svg"
+  },
+  "icons/symbolic/xsi-utilities-terminal-symbolic.svg": {
+    "sha256": "136411618c7625e771cef9cdfab9c49606ae414d2dacd89bb4b3fe23c757b8b1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-utilities-terminal-symbolic.svg"
+  },
+  "icons/symbolic/xsi-value-decrease-symbolic.svg": {
+    "sha256": "b895440526175b8b9bb91ecd00a3bba8c16f1499cbe0a8343a228842fae87e9f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-value-decrease-symbolic.svg"
+  },
+  "icons/symbolic/xsi-value-increase-symbolic.svg": {
+    "sha256": "1906f29a4554ec453d656ca6d14d4bb70051a48a77f460c1fb88c5ba63fffc2c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-value-increase-symbolic.svg"
+  },
+  "icons/symbolic/xsi-video-display-symbolic.svg": {
+    "sha256": "edbcdcbca98efa81f57cdfda0ce01a03c324e27e1d224f82a3b640a5443cbe68",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-video-display-symbolic.svg"
+  },
+  "icons/symbolic/xsi-video-joined-displays-symbolic.svg": {
+    "sha256": "aba7946755c0a9c7b4f4b94776f3c480b4195329792ef895cc118488df1a7f94",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-video-joined-displays-symbolic.svg"
+  },
+  "icons/symbolic/xsi-video-single-display-symbolic.svg": {
+    "sha256": "462d1dff0630f1701accca260244935317bbdc41845da46420b0ef03f8a7dad6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-video-single-display-symbolic.svg"
+  },
+  "icons/symbolic/xsi-video-x-generic-symbolic.svg": {
+    "sha256": "187ea5995032967301e3c2ac03daf4d922a2e6aad436ee67c55f50d591e64751",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-video-x-generic-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-app-grid-symbolic.svg": {
+    "sha256": "00c03be95b93581e3418ae9ed7d59ddc26d9afff6da551c9b990776ed381b049",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-app-grid-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-bottom-pane-symbolic.svg": {
+    "sha256": "c2829b538d33e4b09290d802aff0e11d6653d614195d84cb9085e75bda289d45",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-bottom-pane-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-compact-symbolic.svg": {
+    "sha256": "4bec4ad8d8d40ed7ebe1b6590c79c5fb1bb78ecc0a3da04b165f58e4ee39a2c8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-compact-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-conceal-symbolic.svg": {
+    "sha256": "fe2aa2f8565bc4eecba9075781e71714a0ede89cfd8e66c8e0b4e8531555b6e3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-conceal-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-continuous-symbolic.svg": {
+    "sha256": "1895d4163a866e8f5baef46ec5767032f008cc13d2bd9a4ce7b08e39ffe10920",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-continuous-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-dual-symbolic.svg": {
+    "sha256": "5b222237c5093ab4e487046677a3dfb828e3d419b00539a7a7fb8cb45536e559",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-dual-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-fit-height-symbolic.svg": {
+    "sha256": "fe2c5489873e2609d3682d4c0fb557612fa336e62a57b43b6e15d4da93eb18c2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-fit-height-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-fit-width-symbolic.svg": {
+    "sha256": "c465fa6d9772f4c27c6e64e872bcceb52644e315c4b084590dadbd6b371dcae8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-fit-width-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-fullscreen-symbolic.svg": {
+    "sha256": "4c62bf4bea9990e5c67fca9513e619576d23e2aa6addf9e5d31c330a5195c103",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-fullscreen-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-grid-symbolic.svg": {
+    "sha256": "a2995ba7ecafd0a11d654fae79409a158f0132abfe6bdf67edc84892ca7f78a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-grid-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-left-pane-symbolic-rtl.svg": {
+    "sha256": "ac8db1baae9018d7952ca52a2e2be027416843d4c94cfa4f358c914e04e24d38",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-left-pane-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-left-pane-symbolic.svg": {
+    "sha256": "801361d60dcbccaf7f267be84cb8951ea29abb59003d1e548a1eb101ef332e71",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-left-pane-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-list-bullet-symbolic-rtl.svg": {
+    "sha256": "502ec33b90526fac223086c36a687d20270c719c97ede30177cd3e35977704cb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-bullet-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-list-bullet-symbolic.svg": {
+    "sha256": "8e5bcebefdcffe9e6a8c06009a71e1e76837f92393fc0084483b0479d47bea2f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-bullet-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-list-ordered-symbolic-rtl.svg": {
+    "sha256": "ca525e2e07d3e9dfe5eb102c4f61f169a861b02f066a69863f76625b6b0dac72",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-ordered-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-list-ordered-symbolic.svg": {
+    "sha256": "a4abf36fc68bc1ba0633b49c82e62db1a7b8486fc35091eb3260a1c7750c5223",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-ordered-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-list-symbolic-rtl.svg": {
+    "sha256": "21e51197354dca274735cc2c71dd2ebebe6a13702ebb7da19f5af2b25e6e08c3",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-list-symbolic.svg": {
+    "sha256": "e736c7be180b6aabb34b42cfef6f2ebbe92548a51a0e75a16349a67760c1db40",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-list-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-mirror-symbolic.svg": {
+    "sha256": "015fa3532bad06dfcbefb1c784c85303bfc91cedc07279e8779f1b71e468c180",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-mirror-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-more-horizontal-symbolic.svg": {
+    "sha256": "898465e4c8c1510b4d903fa05dae422dd74f4e82e964956baf3b653f9f7166d4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-more-horizontal-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-more-symbolic.svg": {
+    "sha256": "893d9632d431965c9c3a8e495dba47a0be62bc374f3ec8e11875016b14420be1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-more-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-paged-symbolic-rtl.svg": {
+    "sha256": "acf295a2e9f17ffebf75fcfae808cbc8098833225bbd7e0e0def899421f640dc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-paged-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-paged-symbolic.svg": {
+    "sha256": "a7800f8c15abd0415d1e905866108341a3bbc5151b37c2a540ae06fcfa87b3eb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-paged-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-pin-symbolic.svg": {
+    "sha256": "77e752dfe16ea7b6cc54bc2e0328099ee58831f8b8042d25778c90f081e3737f",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-pin-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-refresh-symbolic.svg": {
+    "sha256": "43281dccb17fe4ef2d2fd459de33debf0fbd9294dac9275c0f047c9fe7d9ae5c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-refresh-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-restore-symbolic.svg": {
+    "sha256": "6b42ac1a8f64ee11e4dba7c2c621dd05cfd082313feeeb068cf0433c6ec58cea",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-restore-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-reveal-symbolic.svg": {
+    "sha256": "a5864e035c230d35ecdfb5ea7ecf48361d883d71fff41e49c989b9c0882405db",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-reveal-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-right-pane-symbolic-rtl.svg": {
+    "sha256": "801361d60dcbccaf7f267be84cb8951ea29abb59003d1e548a1eb101ef332e71",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-right-pane-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-right-pane-symbolic.svg": {
+    "sha256": "f91775aa8b436f854efa7cb72ef2ac747752e8bb8de86ed71120f2cd879d86c1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-right-pane-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-sort-ascending-symbolic-rtl.svg": {
+    "sha256": "021259eafb1fac909a02f9ef48deca0982416bb192ac02f77ce95f5218d7c984",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-sort-ascending-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-sort-ascending-symbolic.svg": {
+    "sha256": "27bac8242ef732c89ea04bacd752427ec1e133a281e8e96eaebccb0fdc2c41a2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-sort-ascending-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-sort-descending-symbolic-rtl.svg": {
+    "sha256": "4d18a682c415c7cda9ba235f1d1f6906141d3f4391781449c038557401d7b273",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-sort-descending-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-sort-descending-symbolic.svg": {
+    "sha256": "a893730a83b825622496cd989b2b411fa6cefb0798e04b9767399211110cbffb",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-sort-descending-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-top-pane-symbolic.svg": {
+    "sha256": "50e6c7a597a190d6ba0509d538143bcfcf01d6424cd9125dcc997ce0b192f880",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-top-pane-symbolic.svg"
+  },
+  "icons/symbolic/xsi-view-wrapped-symbolic-rtl.svg": {
+    "sha256": "04a52735013ab63448fcaf4a8736f6a4b47dce1e3347a5072b59a3b66cf71ffe",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-wrapped-symbolic-rtl.svg"
+  },
+  "icons/symbolic/xsi-view-wrapped-symbolic.svg": {
+    "sha256": "56b1fffe426970537dfc235923255bea9bf66e5151b318cd345f04a9a2e0a558",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-view-wrapped-symbolic.svg"
+  },
+  "icons/symbolic/xsi-wallpaper-symbolic.svg": {
+    "sha256": "64ea084df5480281960b2101c4a1f3ccc28c396120eedb7bd5421bc916985737",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-wallpaper-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-clear-night-symbolic.svg": {
+    "sha256": "3848b8dac8090560c593cf29154be59dff51bf7bb7f21e4860be0d59dab16cd8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-clear-night-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-clear-symbolic.svg": {
+    "sha256": "3c31c11ae926ddc3b5415b1de890433213546afdc4cff4496dce1ebd33e79a03",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-clear-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-few-clouds-night-symbolic.svg": {
+    "sha256": "f308a31450a11d91b0dedd03504733ccee7af7e9ce498839808ab7418d4da159",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-few-clouds-night-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-few-clouds-symbolic.svg": {
+    "sha256": "b17d6a7795874cd5727423a5f65b1b780ee1ff51667762591a1c27f015cb18ee",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-few-clouds-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-fog-symbolic.svg": {
+    "sha256": "4d8038590810df1201bbe1b86f9dcbd4f2caf179850689ce789b9ff792580049",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-fog-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-overcast-symbolic.svg": {
+    "sha256": "217657af86a2ca47a4e7d468ad7060c2c4ef3468f7459f71afc04d894afd72ee",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-overcast-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-severe-alert-symbolic.svg": {
+    "sha256": "95746a3c0f727eff41fb5bd440b3a8296b2ab41ecc8ff1077e915492ddbb78a2",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-severe-alert-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-showers-scattered-symbolic.svg": {
+    "sha256": "4203377b4740bcc94599c08abdb2ebe9b97acfb1f524c817648918ee0f43fb7c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-showers-scattered-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-showers-symbolic.svg": {
+    "sha256": "49a866c358ca56ba1aa0961238d1a2088ac7f86f68ebb03c44939569d63b72d9",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-showers-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-snow-symbolic.svg": {
+    "sha256": "1b30f52893a269b9ba1a0761d19b5e972c55e0be6ef257bea08d99c9b96553c4",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-snow-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-storm-symbolic.svg": {
+    "sha256": "4869156b8b5bf6aed75a1e15227bb55f5a2193208d070808d6f3229278f4886e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-storm-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-tornado-symbolic.svg": {
+    "sha256": "c7649c292aacefdffb3c57d75b1687d3b4cc3280dbaaec1f0b30150ac9514517",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-tornado-symbolic.svg"
+  },
+  "icons/symbolic/xsi-weather-windy-symbolic.svg": {
+    "sha256": "9d55f8937eeb3801f3a4afcd69110870ee37d5ff14ea06ed99f6e457f44f8d61",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-weather-windy-symbolic.svg"
+  },
+  "icons/symbolic/xsi-web-browser-symbolic.svg": {
+    "sha256": "67947218c4dddb27730b88e7e2d21f104693c8aa063a0c45a39da565f21a7772",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-web-browser-symbolic.svg"
+  },
+  "icons/symbolic/xsi-window-close-symbolic.svg": {
+    "sha256": "75668d97d7466b1fafea21767c5de1ba31efd48fb319f43a6e16ddbf455d6465",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-window-close-symbolic.svg"
+  },
+  "icons/symbolic/xsi-window-maximize-symbolic.svg": {
+    "sha256": "f03e30ee9ef31cf97ac532b757b69ea298fbbb1b784a2faa44349a2247e96ef1",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-window-maximize-symbolic.svg"
+  },
+  "icons/symbolic/xsi-window-minimize-symbolic.svg": {
+    "sha256": "1a34fe49dfb151c80573c947c382bbeca3ac648e2fc3364d8a2d384ab836b54e",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-window-minimize-symbolic.svg"
+  },
+  "icons/symbolic/xsi-window-new-symbolic.svg": {
+    "sha256": "520ff24efa2150937f0748c503b4984fa4deedb94e9ced48aef96e11f2d582ad",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-window-new-symbolic.svg"
+  },
+  "icons/symbolic/xsi-window-restore-symbolic.svg": {
+    "sha256": "b2ef5aeee55b6c8b7973db95f0314fbf953bdceefb072e28f5470008ac6b7a52",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-window-restore-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-address-book-symbolic.svg": {
+    "sha256": "e56f7c113bbb6a778e30f3b95bd269465d977d17a3c4ff9524a2884486d200a8",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-address-book-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-calendar-symbolic.svg": {
+    "sha256": "dd8f3a3f44987bfa1ae39aafe783c26011883d03e61f80c34db866322e11798c",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-calendar-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-document-symbolic.svg": {
+    "sha256": "9f265bc483433503c43910d98938bf9b03de57a054b190aa9e543d800c173cbc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-document-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-drawing-symbolic.svg": {
+    "sha256": "1bd23a9e6a38985fc93b330e908fc5dc0b8467b489a9c4def03700fb7a97812d",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-drawing-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-presentation-symbolic.svg": {
+    "sha256": "87d5e1837f95189387c0b7f477d3a33ce53d2558749dcffb7f5ea2b7930597fc",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-presentation-symbolic.svg"
+  },
+  "icons/symbolic/xsi-x-office-spreadsheet-symbolic.svg": {
+    "sha256": "ab26c7a735bf7d8ecd37336cc3b91f15d6e3579a88591b3e1bb3b7ac3a9fc471",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-x-office-spreadsheet-symbolic.svg"
+  },
+  "icons/symbolic/xsi-zoom-fit-best-symbolic.svg": {
+    "sha256": "a19e89856b88e88c3f3cf2e36e458347db506337cb0426d1c5289a0b0af887db",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-zoom-fit-best-symbolic.svg"
+  },
+  "icons/symbolic/xsi-zoom-in-symbolic.svg": {
+    "sha256": "ef1185e21d06435d6cae8a2c4c61ab2f0eadadc780aeb7a933000ef7312d70c6",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-zoom-in-symbolic.svg"
+  },
+  "icons/symbolic/xsi-zoom-original-symbolic.svg": {
+    "sha256": "7ffc8d687ee590c58018af10e4898841c55544b21800ecc08a7c53b5b20665b5",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-zoom-original-symbolic.svg"
+  },
+  "icons/symbolic/xsi-zoom-out-symbolic.svg": {
+    "sha256": "695554ce5f23a275d3c25c27410d0cfbf8a83156807daa3a601635e4e5d8aed0",
+    "source": "/usr/share/icons/hicolor/scalable/actions/xsi-zoom-out-symbolic.svg"
+  }
+}

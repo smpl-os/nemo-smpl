@@ -312,10 +312,20 @@ create_nsr_box (NemoWindowSlot *slot)
     slot->no_results_label = widget;
 }
 
+#ifdef NEMO_SMPL
+static void mtp_unlock_overlay_set_visible (NemoWindowSlot *slot, gboolean visible);
+#endif
+
 static void
 view_begin_loading_cb (NemoView       *view,
                        NemoWindowSlot *slot)
 {
+#ifdef NEMO_SMPL
+    if (view != slot->content_view) {
+        return;
+    }
+    mtp_unlock_overlay_set_visible (slot, FALSE);
+#endif
     if (gtk_revealer_get_reveal_child (GTK_REVEALER (slot->filter_bar_revealer))) {
         gtk_revealer_set_reveal_child (GTK_REVEALER (slot->filter_bar_revealer), FALSE);
         nemo_filter_bar_set_text (NEMO_FILTER_BAR (slot->filter_bar), "");
@@ -384,14 +394,22 @@ create_mtp_unlock_box (void)
 	widget = gtk_image_new_from_icon_name ("smartphone-symbolic", GTK_ICON_SIZE_DIALOG);
 	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
+#ifdef NEMO_SMPL
+	widget = gtk_label_new (_("Cannot read this phone folder"));
+#else
 	widget = gtk_label_new (_("Phone is locked"));
+#endif
 	attrs = pango_attr_list_new ();
 	pango_attr_list_insert (attrs, pango_attr_size_new (18 * PANGO_SCALE));
 	gtk_label_set_attributes (GTK_LABEL (widget), attrs);
 	pango_attr_list_unref (attrs);
 	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
+#ifdef NEMO_SMPL
+	widget = gtk_label_new (_("Check that your phone is unlocked and allows file access.\nNemo will retry automatically."));
+#else
 	widget = gtk_label_new (_("Unlock your phone and keep it awake.\nNemo will reconnect automatically."));
+#endif
 	gtk_label_set_justify (GTK_LABEL (widget), GTK_JUSTIFY_CENTER);
 	gtk_box_pack_start (GTK_BOX (box), widget, FALSE, FALSE, 0);
 
@@ -408,7 +426,29 @@ create_mtp_unlock_box (void)
 static gboolean
 uri_is_mtp_location (const char *uri)
 {
+#ifdef NEMO_SMPL
+	if (uri == NULL) {
+		return FALSE;
+	}
+	if (g_str_has_prefix (uri, "mtp://")) {
+		return TRUE;
+	}
+	const char *runtime = g_getenv ("XDG_RUNTIME_DIR");
+	if (!g_str_has_prefix (uri, "file://") || runtime == NULL || !g_path_is_absolute (runtime)) {
+		return FALSE;
+	}
+	GFile *file = g_file_new_for_uri (uri);
+	char *path = g_file_get_path (file);
+	char *prefix = g_build_filename (runtime, "gvfs", "mtp:host=", NULL);
+	gboolean is_mtp = path != NULL && g_str_has_prefix (path, prefix) &&
+	                  path[strlen (prefix)] != '\0';
+	g_free (prefix);
+	g_free (path);
+	g_object_unref (file);
+	return is_mtp;
+#else
 	return (uri != NULL && g_str_has_prefix (uri, "mtp://"));
+#endif
 }
 
 static gboolean
@@ -420,8 +460,25 @@ error_looks_like_locked_mtp (GError *error)
 	if (error == NULL || error->message == NULL) {
 		return FALSE;
 	}
+#ifdef NEMO_SMPL
+	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+		return FALSE;
+	}
+#endif
 
 	lower = g_ascii_strdown (error->message, -1);
+#ifdef NEMO_SMPL
+	/* Permission errors and generic libmtp failures do not establish that
+	 * the phone is locked; normal load-error reporting handles those. */
+	looks_locked =
+		(g_strstr_len (lower, -1, "device is locked") != NULL) ||
+		(g_strstr_len (lower, -1, "phone is locked") != NULL) ||
+		(g_strstr_len (lower, -1, "screen is locked") != NULL) ||
+		(g_strstr_len (lower, -1, "unlock your phone") != NULL) ||
+		(g_strstr_len (lower, -1, "unlock the phone") != NULL) ||
+		(g_strstr_len (lower, -1, "unlock your device") != NULL) ||
+		(g_strstr_len (lower, -1, "unlock the device") != NULL);
+#else
 	looks_locked =
 		(g_strstr_len (lower, -1, "locked") != NULL) ||
 		(g_strstr_len (lower, -1, "unlock") != NULL) ||
@@ -431,6 +488,7 @@ error_looks_like_locked_mtp (GError *error)
 		(g_strstr_len (lower, -1, "unable to open mtp device") != NULL) ||
 		(g_strstr_len (lower, -1, "cannot open mtp device") != NULL) ||
 		(g_strstr_len (lower, -1, "libmtp") != NULL);
+#endif
 	g_free (lower);
 
 	return looks_locked;
@@ -448,6 +506,13 @@ mtp_unlock_retry_cb (gpointer user_data)
 		slot->mtp_retry_timeout_id = 0;
 		return G_SOURCE_REMOVE;
 	}
+#ifdef NEMO_SMPL
+	if (slot->pending_location != NULL &&
+	    !g_file_equal (slot->pending_location, slot->location)) {
+		mtp_unlock_overlay_set_visible (slot, FALSE);
+		return G_SOURCE_REMOVE;
+	}
+#endif
 
 	uri = g_file_get_uri (slot->location);
 	if (!uri_is_mtp_location (uri)) {
@@ -492,10 +557,22 @@ view_load_error_cb (NemoView *view,
 		return;
 	}
 
+#ifdef NEMO_SMPL
+	if (view != slot->content_view ||
+	    (slot->pending_location != NULL &&
+	     !g_file_equal (slot->pending_location, slot->location))) {
+		return;
+	}
+#endif
 	uri = g_file_get_uri (slot->location);
+#ifdef NEMO_SMPL
+	mtp_unlock_overlay_set_visible (slot,
+		uri_is_mtp_location (uri) && error_looks_like_locked_mtp (error));
+#else
 	if (uri_is_mtp_location (uri) && error_looks_like_locked_mtp (error)) {
 		mtp_unlock_overlay_set_visible (slot, TRUE);
 	}
+#endif
 	g_free (uri);
 }
 
@@ -564,10 +641,17 @@ view_end_loading_cb (NemoView       *view,
 		     		 gboolean        all_files_seen,
 		     		 NemoWindowSlot *slot)
 {
+#ifndef NEMO_SMPL
 	gboolean show_mtp_unlock = FALSE;
 	char *uri = NULL;
+#endif
 	NemoDirectory *directory;
 
+#ifdef NEMO_SMPL
+	if (view != slot->content_view || slot->viewed_file == NULL) {
+		return;
+	}
+#endif
 	if (slot->needs_reload) {
 		nemo_window_slot_queue_reload (slot, FALSE);
 		slot->needs_reload = FALSE;
@@ -583,17 +667,27 @@ view_end_loading_cb (NemoView       *view,
 		gtk_widget_hide (slot->no_search_results_box);
 	}
 
+#ifndef NEMO_SMPL
 	uri = slot->location ? g_file_get_uri (slot->location) : NULL;
 	if (uri_is_mtp_location (uri)) {
 		if (!nemo_directory_is_not_empty (directory)) {
 			show_mtp_unlock = TRUE;
 		}
 	}
+#endif
 
 	nemo_directory_unref (directory);
+#ifdef NEMO_SMPL
+	/* A successful empty listing is not a lock error. Only load_error may
+	 * enable access guidance/retries; success also ends a previous retry. */
+	if (all_files_seen) {
+		mtp_unlock_overlay_set_visible (slot, FALSE);
+	}
+#else
 	g_free (uri);
 
 	mtp_unlock_overlay_set_visible (slot, show_mtp_unlock);
+#endif
 }
 
 static void
@@ -857,6 +951,9 @@ nemo_window_slot_set_content_view_widget (NemoWindowSlot *slot,
 
 	window = nemo_window_slot_get_window (slot);
 
+#ifdef NEMO_SMPL
+	mtp_unlock_overlay_set_visible (slot, FALSE);
+#endif
 	if (slot->content_view != NULL) {
 		/* disconnect old view */
         g_signal_handlers_disconnect_by_func (slot->content_view, G_CALLBACK (view_end_loading_cb), slot);

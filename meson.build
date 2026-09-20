@@ -1,13 +1,13 @@
 # Meson build file
 
 # https://github.com/linuxmint/nemo
-project('nemo', 'c', version : '1.4.43', meson_version : '>=0.64.0')
+project('nemo', 'c', version : '1.4.44', meson_version : '>=0.64.0')
 
 # 1. If the library code has changed at all since last release, then increment revision.
 # 2. If any interfaces have been added, then increment current and set revision to 0.
 # Interface break is not allowed.
 nemo_extension_current  = 5
-nemo_extension_revision = 0
+nemo_extension_revision = 1
 
 # We need to decrement current by one in the calculation of the age because
 # the library was started with version "1:0:0" instead of "0:0:0"
@@ -83,7 +83,8 @@ glib_version = '>=2.45.7'
 
 math    = cc.find_library('m', required: true)
 
-gtk     = dependency('gtk+-3.0',                    version: '>=3.10.0')
+gtk_version = smpl_features_enabled ? '>=3.14.0' : '>=3.10.0'
+gtk     = dependency('gtk+-3.0',                    version: gtk_version)
 gio     = dependency('gio-2.0',                     version: glib_version)
 gio_unix= dependency('gio-unix-2.0',                version: glib_version)
 glib    = dependency('glib-2.0',                    version: glib_version)

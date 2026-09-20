@@ -26,6 +26,7 @@
 #include "nemo-file-utilities.h"
 
 #include "nemo-global-preferences.h"
+#include "nemo-icon-fallback.h"
 #include "nemo-lib-self-check-functions.h"
 #include "nemo-metadata.h"
 #include "nemo-file.h"
@@ -1607,6 +1608,32 @@ get_best_name (GtkIconTheme *icon_theme,
         gint i;
 
         names = g_themed_icon_get_names (G_THEMED_ICON (gicon));
+#ifdef NEMO_SMPL
+        /* Prefer a real themed spelling, including standard names, before
+         * falling back to embedded XSI artwork. has_icon() alone can report
+         * unusable entries from an incomplete hicolor index. */
+        for (gint fallback = 0; fallback < 2 && icon_name == NULL; fallback++) {
+            for (i = 0; names[i] != NULL && icon_name == NULL; i++) {
+                if (!g_str_has_suffix (names[i], "-symbolic")) {
+                    continue;
+                }
+                for (gint prefix = 0; prefix < 2 && icon_name == NULL; prefix++) {
+                    gchar *candidate = prefix == 0 ? g_strconcat ("xsi-", names[i], NULL)
+                                                   : g_strdup (names[i]);
+                    GtkIconInfo *info = gtk_icon_theme_lookup_icon (icon_theme, candidate, 16, 0);
+                    if (info != NULL) {
+                        const gchar *filename = gtk_icon_info_get_filename (info);
+                        if (fallback || filename == NULL ||
+                            !g_str_has_prefix (filename, NEMO_ICON_FALLBACK_RESOURCE_PATH "/")) {
+                            icon_name = g_steal_pointer (&candidate);
+                        }
+                        g_object_unref (info);
+                    }
+                    g_free (candidate);
+                }
+            }
+        }
+#else
         for (i = 0; i != g_strv_length ((gchar **) names); i++) {
             const gchar *name = names[i];
 
@@ -1622,6 +1649,7 @@ get_best_name (GtkIconTheme *icon_theme,
                 break;
             }
         }
+#endif
     }
 
     // Don't ever allow a non-symbolic icon

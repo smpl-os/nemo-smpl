@@ -68,6 +68,19 @@ Double Commander-style instant file viewer:
 - Configurable via GSettings key `show-dual-pane-location-labels` (default: on)
 - Preference checkbox under Views → Behavior
 
+### Embedded Icon Defaults
+
+- Flat XSI symbolic artwork and Adwaita file/place icons are built into Nemo, including dynamic device names and Nemo's own sidebar/layout/progress icons
+- Missing or incomplete themes need no installed icon package or generated symlink cache; usable themed icons retain precedence
+- Device selection checks actual lookup results rather than trusting an icon-cache name alone
+- Artwork sources, hashes, and license/attribution notices are maintained in `gresources/default-icons/` and installed with Nemo
+
+### MTP Empty Folders
+
+- Successful empty phone folders remain ordinary empty folders, without an unlock warning or repeated two-second reloads
+- Access guidance is driven by explicit load errors, not file counts or generic permission/libmtp messages
+- Successful loads and navigation end pending access retries; both MTP URIs and their local GVfs aliases are recognized without synchronous device queries
+
 ### Preview Pane (Alt+F3)
 
 - Live image/video preview with EXIF metadata display (works on both X11 and Wayland)

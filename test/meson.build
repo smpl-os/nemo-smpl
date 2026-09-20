@@ -2,6 +2,29 @@ if smpl_features_enabled
   hardening_python = find_program('python3')
   hardening_runner = files('run-isolated-regression.py')
 
+  test('MTP empty folder state', hardening_python,
+    args: hardening_runner + [hardening_python.full_path(), files('test-mtp-empty.py')[0]],
+    suite: 'mtp-state',
+    timeout: 60,
+  )
+
+  test('Icon fallback inventory', hardening_python,
+    args: files('test-icon-inventory.py'),
+    suite: 'icons',
+  )
+  icon_fallback_test = executable('test-icon-fallback',
+    'test-icon-fallback.c',
+    include_directories: [rootInclude],
+    dependencies: [gtk, nemo_private],
+    c_args: nemo_definitions,
+    link_args: ['-Wl,--wrap=gtk_icon_theme_has_icon'],
+  )
+  test('Embedded icon fallbacks', hardening_python,
+    args: hardening_runner + [icon_fallback_test],
+    suite: 'icons',
+    timeout: 60,
+  )
+
   test('Sidebar async hardening', hardening_python,
     args: files('test-sidebar-async.py'),
     suite: 'hardening',
