@@ -58,6 +58,11 @@ typedef struct NemoViewClass NemoViewClass;
 
 typedef struct NemoViewDetails NemoViewDetails;
 
+void nemo_view_setup_copy_drag (NemoView *view, GtkWidget *widget);
+void nemo_view_drop_items (NemoView *view, const GList *item_uris,
+                          GArray *relative_item_points, const char *target_uri,
+                          int copy_action, int x, int y);
+
 struct NemoView {
 	GtkScrolledWindow parent;
 

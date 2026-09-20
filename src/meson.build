@@ -77,7 +77,6 @@ nemoCommon_sources = [
   'nemo-tree-sidebar.c',
   'nemo-view-dnd.c',
   'nemo-view-factory.c',
-  'nemo-view.c',
   'nemo-window-bookmarks.c',
   'nemo-window-manage-views.c',
   'nemo-window-menus.c',
@@ -139,15 +138,19 @@ if libraw_enabled
 endif
 
 nemo = executable('nemo',
-  nemoCommon_sources + nemoWindow_sources,
+  nemoCommon_sources + nemoWindow_sources + ['nemo-view.c'],
   include_directories: [ rootInclude ],
   c_args: nemo_definitions,
   dependencies: nemo_deps,
   install: true
 )
 
+if smpl_features_enabled
+  copy_selection_objects = nemo.extract_objects(nemoCommon_sources + ['nemo-main-application.c'])
+endif
+
 nemoDesktop = executable('nemo-desktop',
-  nemoCommon_sources + nemoDesktop_sources,
+  nemoCommon_sources + nemoDesktop_sources + ['nemo-view.c'],
   include_directories: [ rootInclude],
   c_args: nemo_definitions,
   dependencies: nemo_deps,

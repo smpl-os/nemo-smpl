@@ -2230,7 +2230,7 @@ icon_view_move_copy_items (NemoIconContainer *container,
 	nemo_clipboard_clear_if_colliding_uris (GTK_WIDGET (view),
 						    item_uris,
 						    nemo_view_get_copied_files_atom (view));
-	nemo_view_move_copy_items (view, item_uris, relative_item_points, target_dir,
+	nemo_view_drop_items (view, item_uris, relative_item_points, target_dir,
 				       copy_action, x, y);
 }
 
@@ -2413,6 +2413,7 @@ create_icon_container (NemoIconView *icon_view)
     }
 
 	icon_view->details->icon_container = GTK_WIDGET (icon_container);
+    nemo_view_setup_copy_drag (NEMO_VIEW (icon_view), GTK_WIDGET (icon_container));
 	g_object_add_weak_pointer (G_OBJECT (icon_container),
 				   (gpointer *) &icon_view->details->icon_container);
 
@@ -2948,4 +2949,3 @@ nemo_icon_view_compact_register (void)
 	TRANSLATE_VIEW_INFO (nemo_compact_view)
 		nemo_view_factory_register (&nemo_compact_view);
 }
-

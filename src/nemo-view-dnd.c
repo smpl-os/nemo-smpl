@@ -243,7 +243,7 @@ nemo_view_handle_netscape_url_drop (NemoView  *view,
 
 		uri_list = g_list_append (uri_list, url);
 
-		nemo_view_move_copy_items (view, uri_list, points,
+		nemo_view_drop_items (view, uri_list, points,
                                                target_uri,
                                                action, x, y);
 
@@ -328,7 +328,7 @@ nemo_view_handle_uri_list_drop (NemoView  *view,
 
 	view_widget_to_file_operation_position_xy (view, &x, &y);
 
-	nemo_view_move_copy_items (view, real_uri_list, points,
+	nemo_view_drop_items (view, real_uri_list, points,
 				       target_uri != NULL ? target_uri : container_uri,
 				       action, x, y);
 

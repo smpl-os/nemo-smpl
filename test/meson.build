@@ -189,6 +189,21 @@ if smpl_features_enabled
     'NO_AT_BRIDGE': '1',
     'TMPDIR': meson.current_build_dir(),
   }
+  copy_selection_test = executable('test-copy-selection',
+    'test-copy-selection.c',
+    objects: copy_selection_objects,
+    include_directories: [rootInclude, include_directories('../src')],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions,
+  )
+  test('Copy source selection', hardening_python,
+    args: hardening_runner + [copy_selection_test],
+    env: copy_integrity_base_env,
+    depends: copy_integrity_schemas,
+    suite: 'copy-selection',
+    timeout: 60,
+    is_parallel: false,
+  )
   dbus_run_session = find_program('dbus-run-session', required: false)
   xvfb_run = find_program('xvfb-run', required: false)
 

@@ -2000,7 +2000,7 @@ move_copy_items_callback (NemoTreeViewDragDest *dest,
 	nemo_clipboard_clear_if_colliding_uris (GTK_WIDGET (view),
 						    item_uris,
 						    nemo_view_get_copied_files_atom (view));
-	nemo_view_move_copy_items (view,
+	nemo_view_drop_items (view,
 				       item_uris,
 				       NULL,
 				       target_uri,
@@ -2663,6 +2663,8 @@ create_and_set_up_tree_view (NemoListView *view)
 	gchar **default_column_order, **default_visible_columns;
 
 	view->details->tree_view = GTK_TREE_VIEW (gtk_tree_view_new ());
+
+    nemo_view_setup_copy_drag (NEMO_VIEW (view), GTK_WIDGET (view->details->tree_view));
 
     gtk_tree_view_set_rubber_banding (GTK_TREE_VIEW (view->details->tree_view), TRUE);
 

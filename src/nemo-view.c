@@ -193,8 +193,29 @@ static GdkAtom copied_files_atom;
 static char *scripts_directory_uri = NULL;
 static int scripts_directory_uri_length;
 
+#ifdef NEMO_SMPL
+typedef struct {
+    guint refs;
+    GWeakRef view;
+    guint64 generation;
+    char *location;
+    GList *selection;
+    GList *transfer;
+    gboolean revoked;
+} CopySelection;
+static void copy_selection_changed (NemoView *view);
+static void copy_selection_unref (CopySelection *selection);
+#endif
+
 struct NemoViewDetails
 {
+#ifdef NEMO_SMPL
+    guint64 selection_generation;
+    gboolean selection_disposed;
+    CopySelection *drop_selection;
+    GtkWidget *copy_drag_widget;
+    GSignalInvocationHint *drop_emission;
+#endif
 	NemoWindow *window;
 	NemoWindowSlot *slot;
 	NemoDirectory *model;
@@ -471,6 +492,9 @@ static void
 nemo_view_call_set_selection (NemoView *view, GList *selection)
 {
 	g_return_if_fail (NEMO_IS_VIEW (view));
+#ifdef NEMO_SMPL
+    copy_selection_changed (view);
+#endif
 
 	NEMO_VIEW_CLASS (G_OBJECT_GET_CLASS (view))->set_selection (view, selection);
 }
@@ -2895,6 +2919,10 @@ nemo_view_destroy (GtkWidget *object)
 
 	view = NEMO_VIEW (object);
 
+#ifdef NEMO_SMPL
+    view->details->selection_disposed = TRUE;
+#endif
+
 	disconnect_model_handlers (view);
 
     if (view->details->bookmarks_changed_id != 0) {
@@ -3010,6 +3038,13 @@ nemo_view_finalize (GObject *object)
 
     reset_filter_state (view);
 
+#ifdef NEMO_SMPL
+    g_clear_pointer (&view->details->drop_selection, copy_selection_unref);
+    if (view->details->copy_drag_widget != NULL) {
+        g_object_remove_weak_pointer (G_OBJECT (view->details->copy_drag_widget),
+                                     (gpointer *) &view->details->copy_drag_widget);
+    }
+#endif
 	g_hash_table_destroy (view->details->non_ready_files);
 	g_hash_table_destroy (view->details->filter_score_cache);
 
@@ -3408,7 +3443,242 @@ debuting_files_add_file_callback (NemoView *view,
 typedef struct {
 	GList		*added_files;
 	NemoView *directory_view;
+#ifdef NEMO_SMPL
+    CopySelection *source_selection;
+#endif
 } CopyMoveDoneData;
+
+#ifdef NEMO_SMPL
+static void
+copy_selection_changed (NemoView *view)
+{
+    /* Saturation permanently opts this view out rather than reusing an epoch. */
+    if (view->details->selection_generation != G_MAXUINT64) {
+        view->details->selection_generation++;
+    }
+}
+
+static GList *
+copy_selection_uris (GList *files)
+{
+    GList *uris = NULL;
+
+    for (GList *l = files; l != NULL; l = l->next) {
+        uris = g_list_prepend (uris, nemo_file_get_uri (l->data));
+    }
+    return g_list_reverse (uris);
+}
+
+static gboolean
+copy_selection_same_uris (const GList *a, const GList *b)
+{
+    GHashTable *files;
+    gboolean equal = TRUE;
+
+    if (g_list_length ((GList *) a) != g_list_length ((GList *) b)) {
+        return FALSE;
+    }
+    files = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
+                                  g_object_unref, NULL);
+    for (const GList *l = a; l != NULL; l = l->next) {
+        g_hash_table_add (files, g_file_new_for_uri (l->data));
+    }
+    for (const GList *l = b; l != NULL; l = l->next) {
+        GFile *file = g_file_new_for_uri (l->data);
+        if (!g_hash_table_remove (files, file)) {
+            equal = FALSE;
+        }
+        g_object_unref (file);
+    }
+    equal = equal && g_hash_table_size (files) == 0;
+    g_hash_table_unref (files);
+    return equal;
+}
+
+static CopySelection *
+copy_selection_ref (CopySelection *selection)
+{
+    if (selection != NULL) {
+        selection->refs++;
+    }
+    return selection;
+}
+
+static void
+copy_selection_unref (CopySelection *selection)
+{
+    if (selection == NULL || --selection->refs != 0) {
+        return;
+    }
+    g_weak_ref_clear (&selection->view);
+    g_free (selection->location);
+    g_list_free_full (selection->selection, g_free);
+    g_list_free_full (selection->transfer, g_free);
+    g_free (selection);
+}
+
+static CopySelection *
+copy_selection_new (NemoView *view)
+{
+    CopySelection *selection;
+    GList *files;
+
+    if (view->details->selection_disposed || view->details->model == NULL ||
+        view->details->selection_generation == G_MAXUINT64) {
+        return NULL;
+    }
+    selection = g_new0 (CopySelection, 1);
+    selection->refs = 1;
+    g_weak_ref_init (&selection->view, view);
+    selection->generation = view->details->selection_generation;
+    selection->location = nemo_view_get_uri (view);
+    files = nemo_view_get_selection (view);
+    selection->selection = copy_selection_uris (files);
+    nemo_file_list_free (files);
+    files = nemo_view_get_selection_for_file_transfer (view);
+    selection->transfer = copy_selection_uris (files);
+    nemo_file_list_free (files);
+    return selection;
+}
+
+static void
+copy_selection_complete (CopySelection *selection, gboolean success)
+{
+    NemoView *view;
+    char *location;
+    GList *files, *uris;
+    gboolean unchanged;
+
+    if (selection == NULL || !success || selection->revoked) {
+        return;
+    }
+    view = g_weak_ref_get (&selection->view);
+    if (view == NULL) {
+        return;
+    }
+    if (view->details->selection_disposed ||
+        selection->generation != view->details->selection_generation) {
+        g_object_unref (view);
+        return;
+    }
+    location = nemo_view_get_uri (view);
+    files = nemo_view_get_selection (view);
+    uris = copy_selection_uris (files);
+    unchanged = g_strcmp0 (location, selection->location) == 0 &&
+                copy_selection_same_uris (uris, selection->selection);
+    g_free (location);
+    g_list_free_full (uris, g_free);
+    nemo_file_list_free (files);
+    if (unchanged) {
+        /* Consume before calling subclass code, including overlapping copies. */
+        nemo_view_call_set_selection (view, NULL);
+    }
+    g_object_unref (view);
+}
+
+static void
+copy_selection_revoke (gpointer data)
+{
+    CopySelection *selection = data;
+    selection->revoked = TRUE;
+    copy_selection_unref (selection);
+}
+
+static void
+copy_clipboard_changed (NemoClipboardMonitor *monitor,
+                        NemoClipboardInfo *info, gpointer unused)
+{
+    g_object_set_data (G_OBJECT (monitor), "nemo-copy-selection", NULL);
+}
+
+static void
+copy_clipboard_set_source (NemoView *view)
+{
+    NemoClipboardMonitor *monitor = nemo_clipboard_monitor_get ();
+
+    if (g_object_get_data (G_OBJECT (monitor), "nemo-copy-selection-connected") == NULL) {
+        g_signal_connect (monitor, "clipboard-info",
+                          G_CALLBACK (copy_clipboard_changed), NULL);
+        g_object_set_data (G_OBJECT (monitor), "nemo-copy-selection-connected",
+                           GINT_TO_POINTER (1));
+    }
+    g_object_set_data_full (G_OBJECT (monitor), "nemo-copy-selection",
+                            copy_selection_new (view), copy_selection_revoke);
+}
+
+static CopySelection *
+copy_clipboard_get_source (void)
+{
+    return g_object_get_data (G_OBJECT (nemo_clipboard_monitor_get ()),
+                              "nemo-copy-selection");
+}
+
+static void
+copy_drag_begin (GtkWidget *widget, GdkDragContext *context, NemoView *view)
+{
+    g_object_set_data_full (G_OBJECT (widget), "nemo-copy-drag-selection",
+                            copy_selection_new (view),
+                            (GDestroyNotify) copy_selection_unref);
+}
+
+static void
+copy_drag_end (GtkWidget *widget, GdkDragContext *context, NemoView *view)
+{
+    g_object_set_data (G_OBJECT (widget), "nemo-copy-drag-selection", NULL);
+}
+
+static void
+copy_drop_received (GtkWidget *widget, GdkDragContext *context,
+                    int x, int y, GtkSelectionData *data,
+                    guint info, guint time, NemoView *view)
+{
+    GtkWidget *source = gtk_drag_get_source_widget (context);
+
+    g_clear_pointer (&view->details->drop_selection, copy_selection_unref);
+    view->details->drop_emission = g_signal_get_invocation_hint (widget);
+    if (source != NULL) {
+        view->details->drop_selection = copy_selection_ref (
+            g_object_get_data (G_OBJECT (source), "nemo-copy-drag-selection"));
+    }
+}
+
+static void
+copy_drop_received_after (GtkWidget *widget, GdkDragContext *context,
+                          int x, int y, GtkSelectionData *data,
+                          guint info, guint time, NemoView *view)
+{
+    g_clear_pointer (&view->details->drop_selection, copy_selection_unref);
+    view->details->drop_emission = NULL;
+}
+#endif
+
+void
+nemo_view_setup_copy_drag (NemoView *view, GtkWidget *widget)
+{
+#ifdef NEMO_SMPL
+    g_assert (view->details->copy_drag_widget == NULL);
+    view->details->copy_drag_widget = widget;
+    g_object_add_weak_pointer (G_OBJECT (widget),
+                               (gpointer *) &view->details->copy_drag_widget);
+    /* Install before the widget's drop handlers; source is the actual context,
+     * never whichever Nemo window happens to have matching files selected. */
+    g_signal_connect_object (widget, "drag-begin", G_CALLBACK (copy_drag_begin), view, 0);
+    g_signal_connect_object (widget, "drag-end", G_CALLBACK (copy_drag_end), view, 0);
+    g_signal_connect_object (widget, "drag-data-received",
+                             G_CALLBACK (copy_drop_received), view, 0);
+    g_signal_connect_object (widget, "drag-data-received",
+                             G_CALLBACK (copy_drop_received_after), view, G_CONNECT_AFTER);
+#endif
+}
+
+static void
+move_copy_items_with_source (NemoView *view, const GList *item_uris,
+                            GArray *relative_item_points, const char *target_uri,
+                            int copy_action, int x, int y
+#ifdef NEMO_SMPL
+                            , CopySelection *source_selection
+#endif
+                            );
 
 static void
 copy_move_done_data_free (CopyMoveDoneData *data)
@@ -3421,6 +3691,9 @@ copy_move_done_data_free (CopyMoveDoneData *data)
 	}
 
 	nemo_file_list_free (data->added_files);
+#ifdef NEMO_SMPL
+    copy_selection_unref (data->source_selection);
+#endif
 	g_free (data);
 }
 
@@ -3515,6 +3788,17 @@ copy_move_done_callback (GHashTable *debuting_files,
 
 	copy_move_done_data = (CopyMoveDoneData *) data;
 	directory_view = copy_move_done_data->directory_view;
+
+#ifdef NEMO_SMPL
+    /* Do this first: same-folder copies must keep the new destination selection. */
+    copy_selection_complete (copy_move_done_data->source_selection, success);
+    directory_view = copy_move_done_data->directory_view;
+    if (directory_view != NULL && directory_view->details->selection_disposed) {
+        g_signal_handlers_disconnect_by_func (directory_view,
+                                              pre_copy_move_add_file_callback, data);
+        directory_view = NULL;
+    }
+#endif
 
 	if (directory_view != NULL) {
 		g_assert (NEMO_IS_VIEW (directory_view));
@@ -4950,13 +5234,15 @@ reset_open_with_menu (NemoView *view, GList *selection, gboolean filter_default)
 }
 
 static void
-move_copy_selection_to_location (NemoView *view,
-                 int copy_action,
-                 char *target_uri)
+move_copy_files_to_location (NemoView *view, GList *selection,
+                            int copy_action, char *target_uri
+#ifdef NEMO_SMPL
+                            , CopySelection *source_selection
+#endif
+                            )
 {
-    GList *selection, *uris, *l;
+    GList *uris, *l;
 
-    selection = nemo_view_get_selection_for_file_transfer (view);
     if (selection == NULL) {
         return;
     }
@@ -4968,11 +5254,32 @@ move_copy_selection_to_location (NemoView *view,
     }
     uris = g_list_reverse (uris);
 
-    nemo_view_move_copy_items (view, uris, NULL, target_uri,
-                       copy_action,
-                       0, 0);
+    move_copy_items_with_source (view, uris, NULL, target_uri,
+                                copy_action, 0, 0
+#ifdef NEMO_SMPL
+                                , source_selection
+#endif
+                                );
 
     g_list_free_full (uris, g_free);
+}
+
+static void
+move_copy_selection_to_location (NemoView *view,
+                                int copy_action, char *target_uri)
+{
+    GList *selection = nemo_view_get_selection_for_file_transfer (view);
+#ifdef NEMO_SMPL
+    CopySelection *source = copy_action == GDK_ACTION_COPY ? copy_selection_new (view) : NULL;
+#endif
+    move_copy_files_to_location (view, selection, copy_action, target_uri
+#ifdef NEMO_SMPL
+                                , source
+#endif
+                                );
+#ifdef NEMO_SMPL
+    copy_selection_unref (source);
+#endif
     nemo_file_list_free (selection);
 }
 
@@ -6714,7 +7021,7 @@ copy_or_cut_files (NemoView *view,
 
     clipboard = nemo_clipboard_get (GTK_WIDGET (view));
 
-    gtk_clipboard_set_with_data (clipboard,
+    G_GNUC_UNUSED gboolean clipboard_owned = gtk_clipboard_set_with_data (clipboard,
                                  targets, n_targets,
                                  nemo_get_clipboard_callback, nemo_clear_clipboard_callback,
                                  NULL);
@@ -6722,6 +7029,11 @@ copy_or_cut_files (NemoView *view,
     gtk_target_table_free (targets, n_targets);
 
 	nemo_clipboard_monitor_set_clipboard_info (nemo_clipboard_monitor_get (), &info);
+#ifdef NEMO_SMPL
+    if (!cut && clipboard_owned) {
+        copy_clipboard_set_source (view);
+    }
+#endif
 
 	count = g_list_length (clipboard_contents);
 	if (count == 1) {
@@ -6851,6 +7163,10 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 		return;
 	}
 
+#ifdef NEMO_SMPL
+    CopySelection *source_selection = copy_selection_new (view);
+    g_object_ref (view);
+#endif
 	count = g_list_length (selection);
 	dest_file = g_file_new_for_uri (dest_location);
 	dest_basename = g_file_get_basename (dest_file);
@@ -6874,22 +7190,50 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 
 	/* Verify checkbox — remembers state across invocations */
 	static gboolean copy_verify_checked = FALSE;
+#ifdef NEMO_SMPL
+    GtkWidget *verify_check = gtk_check_button_new_with_label (_("Verify copied and existing files"));
+#else
 	GtkWidget *verify_check = gtk_check_button_new_with_label (_("Verify after copy"));
+#endif
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (verify_check), copy_verify_checked);
+#ifdef NEMO_SMPL
+    gtk_widget_set_tooltip_text (verify_check, _("Compare files using SHA-256. Keep matching existing files; ask before replacing different contents. Verify newly copied data before publication. Unreadable files are reported, not overwritten."));
+#else
 	gtk_widget_set_tooltip_text (verify_check, _("Re-read files from disk and compare SHA-256 checksums to confirm a successful copy"));
+#endif
 	gtk_box_pack_start (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))),
 	                    verify_check, FALSE, FALSE, 6);
 	gtk_widget_show (verify_check);
 
+#ifdef NEMO_SMPL
+    g_object_ref (dialog);
+    g_object_ref (verify_check);
+#endif
 	response = gtk_dialog_run (GTK_DIALOG (dialog));
 	copy_verify_checked = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (verify_check));
 	gtk_widget_destroy (dialog);
+#ifdef NEMO_SMPL
+    g_object_unref (verify_check);
+    g_object_unref (dialog);
+#endif
 
 	if (response == GTK_RESPONSE_OK) {
+#ifdef NEMO_SMPL
+        if (!view->details->selection_disposed) {
+            nemo_file_operations_set_verify_copies (copy_verify_checked);
+            move_copy_files_to_location (view, selection, GDK_ACTION_COPY,
+                                        dest_location, source_selection);
+        }
+#else
 		nemo_file_operations_set_verify_copies (copy_verify_checked);
 		move_copy_selection_to_location (view, GDK_ACTION_COPY, dest_location);
+#endif
 	}
 
+#ifdef NEMO_SMPL
+    copy_selection_unref (source_selection);
+    g_object_unref (view);
+#endif
 	g_free (primary);
 	g_free (dest_basename);
 	g_object_unref (dest_file);
@@ -7121,10 +7465,22 @@ action_cut_files_callback (GtkAction *action,
 	nemo_file_list_free (selection);
 }
 
+typedef struct {
+    NemoView *view;
+    NemoFile *target;
+#ifdef NEMO_SMPL
+    CopySelection *source_selection;
+#endif
+} PasteIntoData;
+
 static void
 paste_clipboard_data (NemoView *view,
 		      GtkSelectionData *selection_data,
-		      char *destination_uri)
+		      char *destination_uri
+#ifdef NEMO_SMPL
+              , CopySelection *source_selection
+#endif
+              )
 {
 	gboolean cut;
 	GList *item_uris;
@@ -7139,9 +7495,13 @@ paste_clipboard_data (NemoView *view,
 						 NULL,
                          FALSE);
 	} else {
-		nemo_view_move_copy_items (view, item_uris, NULL, destination_uri,
-					       cut ? GDK_ACTION_MOVE : GDK_ACTION_COPY,
-					       0, 0);
+        move_copy_items_with_source (view, item_uris, NULL, destination_uri,
+                                     cut ? GDK_ACTION_MOVE : GDK_ACTION_COPY, 0, 0
+#ifdef NEMO_SMPL
+                                     , source_selection == copy_clipboard_get_source ()
+                                       ? source_selection : NULL
+#endif
+                                     );
 
 		/* If items are cut then remove from clipboard */
 		if (cut) {
@@ -7159,24 +7519,28 @@ paste_clipboard_received_callback (GtkClipboard     *clipboard,
 {
 	NemoView *view;
 	char *view_uri;
+    PasteIntoData *request = data;
 
-	view = NEMO_VIEW (data);
+	view = request->view;
 
 	view_uri = nemo_view_get_backing_uri (view);
 
 	if (view->details->window != NULL) {
-		paste_clipboard_data (view, selection_data, view_uri);
+		paste_clipboard_data (view, selection_data, view_uri
+#ifdef NEMO_SMPL
+                             , request->source_selection
+#endif
+                             );
 	}
 
 	g_free (view_uri);
 
 	g_object_unref (view);
+#ifdef NEMO_SMPL
+    copy_selection_unref (request->source_selection);
+#endif
+    g_free (request);
 }
-
-typedef struct {
-	NemoView *view;
-	NemoFile *target;
-} PasteIntoData;
 
 static void
 paste_into_clipboard_received_callback (GtkClipboard     *clipboard,
@@ -7194,13 +7558,20 @@ paste_into_clipboard_received_callback (GtkClipboard     *clipboard,
 	if (view->details->window != NULL) {
 		directory_uri = nemo_file_get_activation_uri (data->target);
 
-		paste_clipboard_data (view, selection_data, directory_uri);
+		paste_clipboard_data (view, selection_data, directory_uri
+#ifdef NEMO_SMPL
+                             , data->source_selection
+#endif
+                             );
 
 		g_free (directory_uri);
 	}
 
 	g_object_unref (view);
 	nemo_file_unref (data->target);
+#ifdef NEMO_SMPL
+    copy_selection_unref (data->source_selection);
+#endif
 	g_free (data);
 }
 
@@ -7209,14 +7580,19 @@ action_paste_files_callback (GtkAction *action,
 			     gpointer callback_data)
 {
 	NemoView *view;
+    PasteIntoData *data;
 
 	view = NEMO_VIEW (callback_data);
 
-	g_object_ref (view);
+    data = g_new0 (PasteIntoData, 1);
+    data->view = g_object_ref (view);
+#ifdef NEMO_SMPL
+    data->source_selection = copy_selection_ref (copy_clipboard_get_source ());
+#endif
 	gtk_clipboard_request_contents (nemo_clipboard_get (GTK_WIDGET (view)),
 					copied_files_atom,
 					paste_clipboard_received_callback,
-					view);
+					data);
 }
 
 static void
@@ -7232,6 +7608,9 @@ paste_into (NemoView *view,
 
 	data->view = g_object_ref (view);
 	data->target = nemo_file_ref (target);
+#ifdef NEMO_SMPL
+    data->source_selection = copy_selection_ref (copy_clipboard_get_source ());
+#endif
 
 	gtk_clipboard_request_contents (nemo_clipboard_get (GTK_WIDGET (view)),
 					copied_files_atom,
@@ -10500,6 +10879,9 @@ nemo_view_notify_selection_changed (NemoView *view)
 
 	g_return_if_fail (NEMO_IS_VIEW (view));
 
+#ifdef NEMO_SMPL
+    copy_selection_changed (view);
+#endif
 	selection = nemo_view_get_selection (view);
 	window = nemo_view_get_containing_window (view);
 	DEBUG_FILES (selection, "Selection changed in window %p", window);
@@ -10570,6 +10952,9 @@ load_directory (NemoView *view,
 	g_assert (NEMO_IS_VIEW (view));
 	g_assert (NEMO_IS_DIRECTORY (directory));
 
+#ifdef NEMO_SMPL
+    copy_selection_changed (view);
+#endif
 	nemo_view_stop_loading (view);
 
     /* Clear any active filter when navigating to a new directory */
@@ -11240,13 +11625,17 @@ nemo_view_get_uri (NemoView *view)
 	return nemo_directory_get_uri (view->details->model);
 }
 
-void
-nemo_view_move_copy_items (NemoView *view,
+static void
+move_copy_items_with_source (NemoView *view,
 			       const GList *item_uris,
 			       GArray *relative_item_points,
 			       const char *target_uri,
 			       int copy_action,
-			       int x, int y)
+			       int x, int y
+#ifdef NEMO_SMPL
+                   , CopySelection *source_selection
+#endif
+                   )
 {
 	NemoFile *target_file;
 
@@ -11310,10 +11699,67 @@ nemo_view_move_copy_items (NemoView *view,
 	}
 	nemo_file_unref (target_file);
 
+    CopyMoveDoneData *done = pre_copy_move (view);
+#ifdef NEMO_SMPL
+    if (copy_action == GDK_ACTION_COPY && source_selection != NULL &&
+        !source_selection->revoked && item_uris != NULL &&
+        copy_selection_same_uris (source_selection->transfer, item_uris)) {
+        done->source_selection = copy_selection_ref (source_selection);
+    }
+#endif
 	nemo_file_operations_copy_move
 		(item_uris, relative_item_points,
 		 target_uri, copy_action, GTK_WIDGET (view),
-		 copy_move_done_callback, pre_copy_move (view));
+		 copy_move_done_callback, done);
+}
+
+void
+nemo_view_move_copy_items (NemoView *view, const GList *item_uris,
+                          GArray *relative_item_points, const char *target_uri,
+                          int copy_action, int x, int y)
+{
+    move_copy_items_with_source (view, item_uris, relative_item_points,
+                                target_uri, copy_action, x, y
+#ifdef NEMO_SMPL
+                                , NULL
+#endif
+                                );
+}
+
+void
+nemo_view_drop_items (NemoView *view, const GList *item_uris,
+                     GArray *relative_item_points, const char *target_uri,
+                     int copy_action, int x, int y)
+{
+#ifdef NEMO_SMPL
+    GSignalInvocationHint *hint = view->details->copy_drag_widget != NULL
+        ? g_signal_get_invocation_hint (view->details->copy_drag_widget) : NULL;
+    CopySelection *source = NULL;
+
+    /* GtkTreeView stops drag-data-received; icons forward it via nested signals
+     * on the same widget. A nested list emission must not replace the outer
+     * drag's origin, even when both sources selected identical URI sets. */
+    if (hint != NULL) {
+        const char *signal = g_signal_name (hint->signal_id);
+        if ((g_str_equal (signal, "drag-data-received") &&
+             hint == view->details->drop_emission) ||
+            (NEMO_IS_ICON_CONTAINER (view->details->copy_drag_widget) &&
+             (g_str_equal (signal, "move-copy-items") ||
+              g_str_equal (signal, "handle-uri-list") ||
+              g_str_equal (signal, "handle-netscape-url")))) {
+            source = g_steal_pointer (&view->details->drop_selection);
+        }
+    }
+#endif
+    move_copy_items_with_source (view, item_uris, relative_item_points,
+                                target_uri, copy_action, x, y
+#ifdef NEMO_SMPL
+                                , source
+#endif
+                                );
+#ifdef NEMO_SMPL
+    copy_selection_unref (source);
+#endif
 }
 
 static void
