@@ -30,6 +30,8 @@
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 
+/* smpl copy/move jobs report success only when no item failed or was skipped.
+ * An incomplete transaction may leave a published destination and its source. */
 typedef void (* NemoCopyCallback)      (GHashTable *debuting_uris,
 					    gboolean    success,
 					    gpointer    callback_data);
@@ -148,6 +150,8 @@ void nemo_file_mark_desktop_file_trusted (GFile           *file,
 					      NemoOpCallback done_callback,
 					      gpointer          done_callback_data);
 
+/* Applies to the next copy/move job. In smpl builds, copy-and-delete moves
+ * always verify before deleting their source, independently of this flag. */
 void nemo_file_operations_set_verify_copies (gboolean verify);
 
 

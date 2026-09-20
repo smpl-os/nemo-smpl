@@ -41,6 +41,11 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <errno.h>
+#ifdef NEMO_SMPL
+#include <sys/stat.h>
+#include <gio/gfiledescriptorbased.h>
+#include <gio/gunixinputstream.h>
+#endif
 
 #include "nemo-file-operations.h"
 
@@ -126,9 +131,14 @@ typedef struct {
 	NemoCopyCallback  done_callback;
 	gpointer done_callback_data;
 	gboolean verify_after_copy;
-	/* Sticky "skip all" for the verification prompt, so an unverifiable
-	 * source cannot produce one dialog per file. */
+#ifndef NEMO_SMPL
+	/* Legacy verification-dialog preference, never used to bypass safety
+	 * checks in a transactional copy. */
 	gboolean verify_skip_all;
+#endif
+#ifdef NEMO_SMPL
+	gboolean had_errors;
+#endif
 } CopyMoveJob;
 
 /* Static flag: when TRUE the next copy/move job will verify checksums.
@@ -824,11 +834,14 @@ static char *
 custom_basename_to_string (char *format, va_list va)
 {
 	GFile *file;
+#ifndef NEMO_SMPL
 	GFileInfo *info;
+#endif
 	char *name, *basename, *tmp;
 
 	file = va_arg (va, GFile *);
 
+#ifndef NEMO_SMPL
 	info = g_file_query_info (file,
 				  G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME,
 				  0,
@@ -840,6 +853,10 @@ custom_basename_to_string (char *format, va_list va)
 		name = g_strdup (g_file_info_get_display_name (info));
 		g_object_unref (info);
 	}
+#else
+	/* Formatting an error must not repeat the metadata request that failed. */
+	name = NULL;
+#endif
 
     if (name == NULL) {
         basename = g_file_get_basename (file);
@@ -1009,6 +1026,11 @@ _g_local_file_delete (GFile         *file,
 {
     gchar *path;
 
+#ifdef NEMO_SMPL
+    if (g_cancellable_set_error_if_cancelled (cancellable, error)) {
+        return FALSE;
+    }
+#endif
     path = g_file_get_path (file);
 
     if (g_remove (path) == -1) {
@@ -3573,7 +3595,8 @@ get_unique_target_file (GFile *src,
 			GFile *dest_dir,
 			gboolean same_fs,
 			const char *dest_fs_type,
-			int count)
+			int count,
+			GCancellable *cancellable)
 {
 	const char *editname, *end;
 	char *basename, *new_name;
@@ -3586,7 +3609,7 @@ get_unique_target_file (GFile *src,
 	dest = NULL;
 	info = g_file_query_info (src,
 				  G_FILE_ATTRIBUTE_STANDARD_EDIT_NAME,
-				  0, NULL, NULL);
+				  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, cancellable, NULL);
 	if (info != NULL) {
 		editname = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_EDIT_NAME);
 
@@ -3631,7 +3654,8 @@ static GFile *
 get_target_file_for_link (GFile *src,
 			  GFile *dest_dir,
 			  const char *dest_fs_type,
-			  int count)
+			  int count,
+			  GCancellable *cancellable)
 {
 	const char *editname;
 	char *basename, *new_name;
@@ -3644,7 +3668,7 @@ get_target_file_for_link (GFile *src,
 	dest = NULL;
 	info = g_file_query_info (src,
 				  G_FILE_ATTRIBUTE_STANDARD_EDIT_NAME,
-				  0, NULL, NULL);
+				  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, cancellable, NULL);
 	if (info != NULL) {
 		editname = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_EDIT_NAME);
 
@@ -3691,7 +3715,8 @@ get_target_file_with_custom_name (GFile *src,
 				  GFile *dest_dir,
 				  const char *dest_fs_type,
 				  gboolean same_fs,
-				  const gchar *custom_name)
+				  const gchar *custom_name,
+				  GCancellable *cancellable)
 {
 	char *basename;
 	GFile *dest;
@@ -3712,7 +3737,7 @@ get_target_file_with_custom_name (GFile *src,
 		info = g_file_query_info (src,
 					  G_FILE_ATTRIBUTE_STANDARD_COPY_NAME ","
 					  G_FILE_ATTRIBUTE_TRASH_ORIG_PATH,
-					  0, NULL, NULL);
+					  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, cancellable, NULL);
 
 		if (info) {
 			copyname = NULL;
@@ -3750,13 +3775,14 @@ static GFile *
 get_target_file (GFile *src,
 		 GFile *dest_dir,
 		 const char *dest_fs_type,
-		 gboolean same_fs)
+		 gboolean same_fs,
+		 GCancellable *cancellable)
 {
-	return get_target_file_with_custom_name (src, dest_dir, dest_fs_type, same_fs, NULL);
+	return get_target_file_with_custom_name (src, dest_dir, dest_fs_type, same_fs, NULL, cancellable);
 }
 
 static gboolean
-has_fs_id (GFile *file, const char *fs_id)
+has_fs_id (GFile *file, const char *fs_id, GCancellable *cancellable)
 {
 	const char *id;
 	GFileInfo *info;
@@ -3766,7 +3792,7 @@ has_fs_id (GFile *file, const char *fs_id)
 	info = g_file_query_info (file,
 				  G_FILE_ATTRIBUTE_ID_FILESYSTEM,
 				  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-				  NULL, NULL);
+				  cancellable, NULL);
 
 	if (info) {
 		id = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
@@ -3781,8 +3807,9 @@ has_fs_id (GFile *file, const char *fs_id)
 	return res;
 }
 
+#ifndef NEMO_SMPL
 static gboolean
-is_dir (GFile *file)
+is_dir (GFile *file, GCancellable *cancellable)
 {
 	GFileInfo *info;
 	gboolean res;
@@ -3791,7 +3818,7 @@ is_dir (GFile *file)
 	info = g_file_query_info (file,
 				  G_FILE_ATTRIBUTE_STANDARD_TYPE,
 				  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-				  NULL, NULL);
+				  cancellable, NULL);
 	if (info) {
 		res = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 		g_object_unref (info);
@@ -3799,6 +3826,7 @@ is_dir (GFile *file)
 
 	return res;
 }
+#endif
 
 static void copy_move_file (CopyMoveJob *job,
 			    GFile *src,
@@ -3814,6 +3842,37 @@ static void copy_move_file (CopyMoveJob *job,
 			    gboolean overwrite,
 			    gboolean *skipped_file,
 			    gboolean readonly_source_fs);
+
+#ifdef NEMO_SMPL
+static int open_copy_directory (GFile *dir, GCancellable *cancellable, GError **error);
+static int open_dest_directory (GFile *file, GCancellable *cancellable, GError **error);
+static gboolean sync_copy_fd (int fd, GCancellable *cancellable, GError **error);
+static gboolean copy_errno (int err, GError **error);
+static gboolean copy_optional_attributes (GFile *src, GFile *dest, GFileCopyFlags flags,
+                                         GCancellable *cancellable, GError **error);
+
+static void
+directory_copy_failed (CopyMoveJob *copy_job, GFile *src, GError *error)
+{
+	CommonJob *job = &copy_job->common;
+	int response;
+
+	copy_job->had_errors = TRUE;
+	if (!job_aborted (job) && !job->skip_all_error) {
+		response = run_warning (
+			job, f (_("The operation on \"%B\" was not completed."), src),
+			g_strdup (_("The destination folder could not be made durable. "
+			            "Any remaining source files have been retained.")),
+			error->message, TRUE, GTK_STOCK_CANCEL, SKIP_ALL, SKIP, NULL);
+		if (response == 0 || response == GTK_RESPONSE_DELETE_EVENT) {
+			abort_job (job);
+		} else if (response == 1) {
+			job->skip_all_error = TRUE;
+		}
+	}
+	g_error_free (error);
+}
+#endif
 
 typedef enum {
 	CREATE_DEST_DIR_RETRY,
@@ -3856,7 +3915,7 @@ create_dest_dir (CommonJob *job,
 			if (dest_dir != NULL) {
 				*dest_fs_type = query_fs_type (dest_dir, job->cancellable);
 
-				new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs);
+				new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs, job->cancellable);
 				g_object_unref (dest_dir);
 
 				if (!g_file_equal (*dest, new_dest)) {
@@ -3942,12 +4001,29 @@ copy_move_directory (CopyMoveJob *copy_job,
 	gboolean local_skipped_file;
 	CommonJob *job;
 	GFileCopyFlags flags;
+#ifdef NEMO_SMPL
+	int parent_fd = -1, dest_fd = -1;
+#endif
 
 	job = (CommonJob *)copy_job;
 
 	if (create_dest) {
+#ifdef NEMO_SMPL
+		error = NULL;
+		parent_fd = open_dest_directory (*dest, job->cancellable, &error);
+		if (error != NULL) {
+			directory_copy_failed (copy_job, src, error);
+			*skipped_file = TRUE;
+			return TRUE;
+		}
+#endif
 		switch (create_dest_dir (job, src, dest, same_fs, parent_dest_fs_type)) {
 			case CREATE_DEST_DIR_RETRY:
+#ifdef NEMO_SMPL
+				if (parent_fd >= 0) {
+					close (parent_fd);
+				}
+#endif
 				/* next time copy_move_directory() is called,
 				 * create_dest will be FALSE if a directory already
 				 * exists under the new name (i.e. WOULD_RECURSE)
@@ -3955,6 +4031,12 @@ copy_move_directory (CopyMoveJob *copy_job,
 				return FALSE;
 
 			case CREATE_DEST_DIR_FAILED:
+#ifdef NEMO_SMPL
+				if (parent_fd >= 0) {
+					close (parent_fd);
+				}
+				copy_job->had_errors = TRUE;
+#endif
 				*skipped_file = TRUE;
 				return TRUE;
 
@@ -3962,6 +4044,19 @@ copy_move_directory (CopyMoveJob *copy_job,
 			default:
 				break;
 		}
+#ifdef NEMO_SMPL
+		if (parent_fd >= 0) {
+			gboolean synced = sync_copy_fd (parent_fd, job->cancellable, &error);
+			if (close (parent_fd) < 0 && synced) {
+				synced = copy_errno (errno, &error);
+			}
+			if (!synced) {
+				directory_copy_failed (copy_job, src, error);
+				*skipped_file = TRUE;
+				return TRUE;
+			}
+		}
+#endif
 
 		if (debuting_files) {
 			g_hash_table_replace (debuting_files, g_object_ref (*dest), GINT_TO_POINTER (TRUE));
@@ -3969,10 +4064,22 @@ copy_move_directory (CopyMoveJob *copy_job,
 
 	}
 
+#ifdef NEMO_SMPL
+	error = NULL;
+	dest_fd = open_copy_directory (*dest, job->cancellable, &error);
+	if (error != NULL) {
+		directory_copy_failed (copy_job, src, error);
+		*skipped_file = TRUE;
+		return TRUE;
+	}
+#endif
 	local_skipped_file = FALSE;
 	dest_fs_type = NULL;
 
 	skip_error = should_skip_readdir_error (job, src);
+#ifdef NEMO_SMPL
+	local_skipped_file = skip_error;
+#endif
  retry:
 	error = NULL;
 	enumerator = g_file_enumerate_children (src,
@@ -4089,16 +4196,42 @@ copy_move_directory (CopyMoveJob *copy_job,
 			flags |= G_FILE_COPY_ALL_METADATA;
 		}
 
+#ifdef NEMO_SMPL
+		error = NULL;
+		if (!copy_optional_attributes (src, *dest, flags, job->cancellable, &error)) {
+			directory_copy_failed (copy_job, src, error);
+			local_skipped_file = TRUE;
+		}
+#else
 		/* Ignore errors here. Failure to copy metadata is not a hard error */
 		g_file_copy_attributes (src, *dest,
 					flags,
 					job->cancellable, NULL);
+#endif
 	}
 
+	error = NULL;
+#ifdef NEMO_SMPL
+	if (dest_fd >= 0) {
+		gboolean synced = TRUE;
+		if (!job_aborted (job)) {
+			synced = sync_copy_fd (dest_fd, job->cancellable, &error);
+		}
+		if (close (dest_fd) < 0 && synced) {
+			synced = copy_errno (errno, &error);
+		}
+		if (!synced) {
+			directory_copy_failed (copy_job, src, error);
+			error = NULL;
+			local_skipped_file = TRUE;
+		}
+	}
+#endif
 	if (!job_aborted (job) && copy_job->is_move &&
 	    /* Don't delete source if there was a skipped file */
 	    !local_skipped_file) {
 		if (!file_delete_wrapper (src, job->cancellable, &error)) {
+			local_skipped_file = TRUE;
 			if (job->skip_all_error) {
 				goto skip;
 			}
@@ -4130,14 +4263,18 @@ copy_move_directory (CopyMoveJob *copy_job,
 		}
 	}
 
-	if (local_skipped_file) {
+	if (local_skipped_file || job_aborted (job)) {
 		*skipped_file = TRUE;
+#ifdef NEMO_SMPL
+		copy_job->had_errors = TRUE;
+#endif
 	}
 
 	g_free (dest_fs_type);
 	return TRUE;
 }
 
+#ifndef NEMO_SMPL
 static gboolean
 remove_target_recursively (CommonJob *job,
 			   GFile *src,
@@ -4264,6 +4401,7 @@ remove_target_recursively (CommonJob *job,
 	return TRUE;
 
 }
+#endif
 
 /* Interval (in bytes) for periodic page cache flushing during
  * cross-filesystem copies.  Every FLUSH_CHUNK_SIZE bytes, the progress
@@ -4293,12 +4431,8 @@ typedef enum {
 
 /* Compute the SHA-256 of a file.
  *
- * Local files are read through a plain fd with posix_fadvise(DONTNEED)
- * around the read loop, so the bytes come off the physical media rather than
- * the page cache we just filled writing them. Files with no local path
- * (mtp://, gphoto2://, smb://, ...) are read through GIO instead: slower and
- * without the cache-bypass guarantee, but it means verification works for
- * those sources at all.
+ * DONTNEED is only an advisory cache eviction, not a physical-media read
+ * guarantee. Files with no local path are read through GIO.
  *
  * Returns NULL if the file could not be read or the job was cancelled. */
 static gchar *
@@ -4316,17 +4450,38 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable)
 	path = g_file_get_path (file);
 
 	if (path != NULL) {
+#ifdef NEMO_SMPL
+		int fd = -1;
+		struct stat st;
+
+		if (!g_cancellable_is_cancelled (cancellable)) {
+			fd = open (path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+		}
+#else
 		int fd = open (path, O_RDONLY);
+#endif
 
 		g_free (path);
 
 		if (fd < 0) {
 			failed = TRUE;
 		} else {
-			/* Drop any cached pages so the kernel reads from disk */
+#ifdef NEMO_SMPL
+			if (fstat (fd, &st) != 0 || !S_ISREG (st.st_mode)) {
+				close (fd);
+				g_checksum_free (cksum);
+				g_free (buf);
+				return NULL;
+			}
+#endif
+			/* Request eviction of clean cached pages (advisory only). */
 			posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
 
 			for (;;) {
+				if (g_cancellable_is_cancelled (cancellable)) {
+					failed = TRUE;
+					break;
+				}
 				ssize_t nread = read (fd, buf, VERIFY_BUF_SIZE);
 
 				if (nread < 0) {
@@ -4398,16 +4553,16 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable)
 	return result;
 }
 
-/* Verify a copied file by comparing SHA-256 checksums.
- * The destination is fsync'd first to ensure data is on disk. */
+/* The transactional caller flushes its writer before comparing checksums. */
 static VerifyResult
 verify_copied_file (CommonJob *job, GFile *src, GFile *dest)
 {
-	char *dest_path;
-	int fd;
 	gchar *src_sum, *dest_sum;
 	VerifyResult result;
 
+#ifndef NEMO_SMPL
+	char *dest_path;
+	int fd;
 	/* fsync the destination to flush to physical media */
 	dest_path = g_file_get_path (dest);
 	if (dest_path) {
@@ -4418,6 +4573,7 @@ verify_copied_file (CommonJob *job, GFile *src, GFile *dest)
 		}
 		g_free (dest_path);
 	}
+#endif
 
 	src_sum  = checksum_file_bypass_cache (src,  job->cancellable);
 	dest_sum = checksum_file_bypass_cache (dest, job->cancellable);
@@ -4457,13 +4613,13 @@ typedef struct {
 	TransferInfo *transfer_info;
 	/* Page cache flush state for cross-filesystem copies */
 	GFile *dest;           /* dest file, or NULL to skip flushing */
-	int    dest_fd;        /* lazily opened O_RDONLY fd for dest */
+	int    dest_fd;        /* borrowed writer fd for transactional copies */
 	goffset last_flush_offset; /* last offset where we kicked writeback */
 	int    flush_errno;    /* first real writeback failure seen, else 0 */
 } ProgressData;
 
 /* sync_file_range() reports EINVAL/ENOSYS/EOPNOTSUPP on filesystems that
- * simply do not implement it (and EBADF would be our own bug). None of those
+ * simply do not implement it. None of those
  * mean the user's data is at risk. Anything else -- ENOSPC, EIO, ENODEV from
  * a yanked USB stick -- means writeback genuinely failed and the copy must
  * not be reported as successful. */
@@ -4474,12 +4630,36 @@ flush_error_is_fatal (int err)
 	case EINVAL:
 	case ENOSYS:
 	case EOPNOTSUPP:
+#ifndef NEMO_SMPL
 	case EBADF:
+#endif
 		return FALSE;
 	default:
 		return TRUE;
 	}
 }
+
+#ifdef NEMO_SMPL
+static int
+pace_copy_writeback (int fd, goffset offset, goffset length, GCancellable *cancellable)
+{
+	int result;
+
+	do {
+		if (g_cancellable_is_cancelled (cancellable)) {
+			return ECANCELED;
+		}
+		/* Wait for this range, not the next (as yet unwritten) range.
+		 * This bounds dirty data without mistaking writeback for fsync. */
+		result = sync_file_range (fd, offset, length,
+		                          SYNC_FILE_RANGE_WAIT_BEFORE |
+		                          SYNC_FILE_RANGE_WRITE |
+		                          SYNC_FILE_RANGE_WAIT_AFTER);
+	} while (result < 0 && errno == EINTR);
+
+	return result < 0 && flush_error_is_fatal (errno) ? errno : 0;
+}
+#endif
 
 static void
 copy_file_progress_callback (goffset current_num_bytes,
@@ -4501,6 +4681,21 @@ copy_file_progress_callback (goffset current_num_bytes,
 				      pdata->transfer_info);
 	}
 
+#ifdef NEMO_SMPL
+	if (pdata->dest_fd >= 0 && pdata->flush_errno == 0 &&
+	    current_num_bytes - pdata->last_flush_offset >= FLUSH_CHUNK_SIZE) {
+		pdata->flush_errno = pace_copy_writeback (
+			pdata->dest_fd, pdata->last_flush_offset,
+			current_num_bytes - pdata->last_flush_offset,
+			pdata->job->common.cancellable);
+		if (pdata->flush_errno == 0) {
+			posix_fadvise (pdata->dest_fd, pdata->last_flush_offset,
+			               current_num_bytes - pdata->last_flush_offset,
+			               POSIX_FADV_DONTNEED);
+		}
+		pdata->last_flush_offset = current_num_bytes;
+	}
+#else
 	/* Periodically flush dest pages to prevent dirty page accumulation
 	 * on slow devices (e.g. USB).  Without this, splice() fills the
 	 * page cache at RAM speed and the kernel hits dirty_ratio, blocking
@@ -4548,6 +4743,7 @@ copy_file_progress_callback (goffset current_num_bytes,
 
 		pdata->last_flush_offset = current_num_bytes;
 	}
+#endif
 }
 
 static gboolean
@@ -4746,104 +4942,745 @@ get_target_file_for_display_name (GFile *dir,
 }
 
 #ifdef NEMO_SMPL
-/* smplOS safe cross-fs copy: build a visible staging file name for `dest`.
- *
- * Shape:   "<real basename>.nemo-partial-XXXXXXXX"
- *          where XXXXXXXX is 8 hex chars of randomness.
- *
- * The staging name is visible (no leading dot) and self-describing so that
- * a user who yanks a USB drive mid-copy or closes Nemo mid-copy sees a file
- * with an obviously-wrong name and knows not to trust it. The 8 hex chars
- * make collisions between concurrent copies effectively impossible.
- *
- * Returns a newly-owned GFile (caller must g_object_unref), or NULL if the
- * parent directory cannot be determined.
- */
 static GFile *
 make_safe_copy_staging_file (GFile *dest)
 {
 	GFile *parent, *staging;
-	char  *basename, *staging_name;
+	char *uuid, *staging_name;
 
 	parent = g_file_get_parent (dest);
 	if (parent == NULL) {
 		return NULL;
 	}
 
-	basename = g_file_get_basename (dest);
-	staging_name = g_strdup_printf ("%s.nemo-partial-%08x",
-	                                basename ? basename : "unnamed",
-	                                g_random_int ());
+	/* Independent of the final basename, which may already be NAME_MAX. */
+	uuid = g_uuid_string_random ();
+	staging_name = g_strconcat ("copy.nemo-partial-", uuid, NULL);
 	staging = g_file_get_child (parent, staging_name);
 
+	g_free (uuid);
 	g_free (staging_name);
-	g_free (basename);
 	g_object_unref (parent);
 	return staging;
 }
 
-/* smplOS safe cross-fs copy: drop a staging file we are about to abandon.
- *
- * Every path that gives up on a staged copy -- a retry after a conflict, an
- * error, a cancellation -- must come through here. Merely unreffing the GFile
- * leaves a full-size ".nemo-partial-" file behind, and on a long copy those
- * accumulate until the destination runs out of space, at which point later
- * files in the same batch really do get truncated.
- *
- * Deliberately passes a NULL cancellable: by the time we get here the job may
- * already be cancelled, and that is exactly when the cleanup matters most. */
 static void
-discard_staging_file (GFile **staging)
+discard_staging_file (CopyMoveJob *copy_job, GFile *staging)
 {
-	if (*staging == NULL) {
-		return;
-	}
+	CommonJob *job = &copy_job->common;
+	GError *error = NULL;
 
-	/* Errors are ignored on purpose -- the file often does not exist
-	 * (directory copies never create one), and there is nothing useful to
-	 * tell the user about a failed cleanup of a temporary. */
-	g_file_delete (*staging, NULL, NULL);
-	g_clear_object (staging);
+	/* Only called for an exclusively created, unpublished staging entry.
+	 * Do not issue an uncancellable remote RPC after cancellation. */
+	if (!g_file_delete (staging, g_file_is_native (staging) ? NULL : job->cancellable, &error) &&
+	    !IS_IO_ERROR (error, NOT_FOUND)) {
+		char *name = g_file_get_parse_name (staging);
+		copy_job->had_errors = TRUE;
+		g_warning ("Could not remove incomplete copy %s: %s", name, error->message);
+		if (!job_aborted (job)) {
+			run_warning (job, g_strdup (_("Could not remove the incomplete copy.")),
+			             g_strdup_printf (_("The temporary file \"%s\" was left behind. "
+			                                "It is not a completed copy."), name),
+			             error->message, FALSE, GTK_STOCK_OK, NULL);
+		}
+		g_free (name);
+	}
+	g_clear_error (&error);
 }
 
-/* smplOS safe cross-fs copy: flush the directory entry created by rename(2).
- *
- * fsync() on the file makes its *contents* durable; the name only becomes
- * durable once the parent directory is flushed too. Without this, pulling a
- * USB stick right after a copy can leave the data on disk under no name at
- * all -- which is precisely the failure the staging dance exists to prevent.
- *
- * Best effort: the data is already safe here, so a failure is worth a note in
- * the log but not worth failing the copy over. */
-static void
-sync_dest_directory (GFile *file)
+static gboolean
+copy_errno (int err, GError **error)
 {
-	GFile *parent;
+	g_set_error (error, G_IO_ERROR, g_io_error_from_errno (err),
+	             _("Error while writing to the destination: %s"), g_strerror (err));
+	return FALSE;
+}
+
+static gboolean
+copy_optional_attributes (GFile *src, GFile *dest, GFileCopyFlags flags,
+                          GCancellable *cancellable, GError **error)
+{
+	GError *attribute_error = NULL;
+
+	if (g_file_copy_attributes (src, dest, flags, cancellable, &attribute_error)) {
+		return !g_cancellable_set_error_if_cancelled (cancellable, error);
+	}
+	/* Ownership/extended attributes are not supported by every backend.
+	 * Actual I/O and space errors must not disappear with optional metadata. */
+	if (IS_IO_ERROR (attribute_error, NOT_SUPPORTED) ||
+	    IS_IO_ERROR (attribute_error, PERMISSION_DENIED)) {
+		g_debug ("Could not copy optional file attributes: %s", attribute_error->message);
+		g_error_free (attribute_error);
+		return !g_cancellable_set_error_if_cancelled (cancellable, error);
+	}
+	g_propagate_error (error, attribute_error);
+	return FALSE;
+}
+
+static gboolean
+sync_copy_fd (int fd, GCancellable *cancellable, GError **error)
+{
+	int result;
+	do {
+		if (g_cancellable_set_error_if_cancelled (cancellable, error)) {
+			return FALSE;
+		}
+		result = fsync (fd);
+	} while (result < 0 && errno == EINTR);
+	return result == 0 || copy_errno (errno, error);
+}
+
+static int
+open_copy_directory (GFile *dir, GCancellable *cancellable, GError **error)
+{
 	char *path;
 	int fd;
 
-	parent = g_file_get_parent (file);
-	if (parent == NULL) {
-		return;
+	if (g_cancellable_set_error_if_cancelled (cancellable, error)) {
+		return -1;
+	}
+	path = g_file_get_path (dir);
+	if (path == NULL) {
+		/* GIO backends provide close/rename acknowledgements, not a
+		 * portable remote directory-fsync API. */
+		return -1;
 	}
 
-	path = g_file_get_path (parent);
+	do {
+		fd = open (path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	} while (fd < 0 && errno == EINTR && !g_cancellable_is_cancelled (cancellable));
+	if (fd < 0) {
+		copy_errno (errno, error);
+	}
+	g_free (path);
+	return fd;
+}
+
+static int
+open_dest_directory (GFile *file, GCancellable *cancellable, GError **error)
+{
+	GFile *parent = g_file_get_parent (file);
+	int fd;
+
+	if (parent == NULL) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("The destination has no parent folder."));
+		return -1;
+	}
+	fd = open_copy_directory (parent, cancellable, error);
 	g_object_unref (parent);
+	return fd;
+}
+
+#define COPY_SOURCE_ATTRIBUTES G_FILE_ATTRIBUTE_STANDARD_TYPE "," \
+	G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET "," \
+	G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ETAG_VALUE
+
+static GFileInfo *
+query_copy_source (GFile *src, GCancellable *cancellable, GError **error)
+{
+	GFileInfo *info = g_file_query_info (src, COPY_SOURCE_ATTRIBUTES,
+	                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+	                                    cancellable, error);
+	if (info && (!g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_TYPE) ||
+	             g_file_info_get_file_type (info) == G_FILE_TYPE_UNKNOWN)) {
+		g_clear_object (&info);
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("Could not determine the source file type."));
+	}
+	return info;
+}
+
+static gboolean
+move_without_fallback (GFile *src, GFile *dest, GFileCopyFlags flags,
+                       GCancellable *cancellable, GError **error)
+{
+	if (flags & G_FILE_COPY_OVERWRITE) {
+		GFileInfo *src_info = query_copy_source (src, cancellable, error);
+		GFileInfo *dest_info;
+		gboolean incompatible;
+		gboolean source_is_dir;
+
+		if (src_info == NULL) {
+			return FALSE;
+		}
+		source_is_dir = g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY;
+		dest_info = query_copy_source (dest, cancellable, error);
+		if (dest_info == NULL) {
+			g_object_unref (src_info);
+			if (!IS_IO_ERROR (*error, NOT_FOUND)) {
+				return FALSE;
+			}
+			g_clear_error (error);
+		} else {
+			incompatible = source_is_dir !=
+			               (g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY);
+			g_object_unref (src_info);
+			g_object_unref (dest_info);
+			if (incompatible) {
+				/* GIO may unlink a non-directory target before discovering
+				 * EXDEV, even with NO_FALLBACK_FOR_MOVE. */
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+				                     _("A file and a folder cannot safely replace each other. "
+				                       "Choose a different name for the copy."));
+				return FALSE;
+			}
+			if (source_is_dir) {
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE,
+				                     _("The folder contents must be copied individually."));
+				return FALSE;
+			}
+		}
+		if (source_is_dir) {
+			/* A destination appearing after the check must not be unlinked
+			 * by GIO before an EXDEV result either. */
+			flags &= ~G_FILE_COPY_OVERWRITE;
+		}
+	}
+	return g_file_move (src, dest, flags | G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
+	                    cancellable, NULL, NULL, error);
+}
+
+static gboolean
+copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest, gboolean *is_merge)
+{
+	CommonJob *job = &copy_job->common;
+	GError *error = NULL;
+	GFileInfo *src_info = query_copy_source (src, job->cancellable, &error);
+	GFileInfo *dest_info = NULL;
+	gboolean ok;
+
+	if (src_info) {
+		dest_info = query_copy_source (dest, job->cancellable, &error);
+	}
+	ok = src_info != NULL && dest_info != NULL;
+	if (ok) {
+		*is_merge = g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY &&
+		            g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY;
+	} else {
+		copy_job->had_errors = TRUE;
+		if (!job_aborted (job) && !job->skip_all_error) {
+			int response = run_warning (
+				job, g_strdup (_("Could not inspect the conflicting files.")),
+				g_strdup (_("The existing destination has not been changed.")),
+				error->message, TRUE, GTK_STOCK_CANCEL, SKIP_ALL, SKIP, NULL);
+			if (response == 0 || response == GTK_RESPONSE_DELETE_EVENT) {
+				abort_job (job);
+			} else if (response == 1) {
+				job->skip_all_error = TRUE;
+			}
+		}
+		g_clear_error (&error);
+	}
+	g_clear_object (&src_info);
+	g_clear_object (&dest_info);
+	return ok;
+}
+
+static gboolean
+copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable, GError **error)
+{
+	GFileInfo *after = query_copy_source (src, cancellable, error);
+	gboolean same;
+
+	if (after == NULL) {
+		return FALSE;
+	}
+	same = g_file_info_get_file_type (before) == g_file_info_get_file_type (after) &&
+	       g_file_info_get_attribute_uint64 (before, G_FILE_ATTRIBUTE_STANDARD_SIZE) ==
+	       g_file_info_get_attribute_uint64 (after, G_FILE_ATTRIBUTE_STANDARD_SIZE) &&
+	       g_strcmp0 (g_file_info_get_attribute_string (before, G_FILE_ATTRIBUTE_ETAG_VALUE),
+	                  g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ETAG_VALUE)) == 0 &&
+	       g_strcmp0 (g_file_info_get_attribute_string (before, G_FILE_ATTRIBUTE_ID_FILE),
+	                  g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ID_FILE)) == 0;
+	if (same && g_file_info_get_file_type (before) == G_FILE_TYPE_SYMBOLIC_LINK) {
+		same = g_strcmp0 (g_file_info_get_attribute_byte_string (before, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET),
+		                  g_file_info_get_attribute_byte_string (after, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET)) == 0;
+	}
+	g_object_unref (after);
+	if (!same) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                     _("The source changed while it was being copied. The source was not removed."));
+	}
+	return same;
+}
+
+static GInputStream *
+open_copy_source (GFile *src, GCancellable *cancellable, GError **error)
+{
+	char *path = g_file_get_path (src);
+	int fd;
+	struct stat st;
 
 	if (path == NULL) {
-		return;
+		return G_INPUT_STREAM (g_file_read (src, cancellable, error));
+	}
+	if (g_cancellable_set_error_if_cancelled (cancellable, error)) {
+		g_free (path);
+		return NULL;
+	}
+	do {
+		fd = open (path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	} while (fd < 0 && errno == EINTR && !g_cancellable_is_cancelled (cancellable));
+	g_free (path);
+	if (fd < 0) {
+		g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+		             _("Could not open the source: %s"), g_strerror (errno));
+		return NULL;
+	}
+	if (fstat (fd, &st) < 0 || !S_ISREG (st.st_mode)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                     _("The source is no longer a regular file."));
+		close (fd);
+		return NULL;
+	}
+	return g_unix_input_stream_new (fd, TRUE);
+}
+
+/* Keep the actual writer open from exclusive creation through fsync. A new
+ * read-only fd opened after copying can miss an already-consumed writeback
+ * error. Stream close errors are part of the transaction too. */
+static gboolean
+write_copy_contents (GFile *src, GFile *staging, GFileInfo *info,
+                     GFileOutputStream *output, GFileCopyFlags flags,
+                     ProgressData *pdata, GError **error)
+{
+	GCancellable *cancellable = pdata->job->common.cancellable;
+	GInputStream *input;
+	guchar *buffer = NULL;
+	goffset copied = 0;
+	gboolean ok = FALSE;
+	struct stat st;
+	GError *close_error = NULL;
+
+	input = open_copy_source (src, cancellable, error);
+	if (input == NULL) {
+		return FALSE;
+	}
+	if (G_IS_FILE_DESCRIPTOR_BASED (output)) {
+		pdata->dest_fd = g_file_descriptor_based_get_fd (G_FILE_DESCRIPTOR_BASED (output));
+		if (fstat (pdata->dest_fd, &st) < 0 || !S_ISREG (st.st_mode)) {
+			g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+			                     _("The incomplete copy is not a regular file."));
+			goto out;
+		}
+	} else if (g_file_is_native (staging)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("The local copy cannot be flushed through its writer."));
+		goto out;
 	}
 
-	fd = open (path, O_RDONLY | O_DIRECTORY);
-	if (fd >= 0) {
-		if (fsync (fd) != 0) {
-			g_debug ("safe-copy: could not flush directory %s: %s",
-			         path, g_strerror (errno));
+	buffer = g_malloc (VERIFY_BUF_SIZE);
+	for (;;) {
+		gssize count = g_input_stream_read (input, buffer, VERIFY_BUF_SIZE, cancellable, error);
+		if (count < 0) {
+			break;
 		}
+		if (count == 0) {
+			ok = TRUE;
+			break;
+		}
+		if (!g_output_stream_write_all (G_OUTPUT_STREAM (output), buffer, count,
+		                                NULL, cancellable, error)) {
+			break;
+		}
+		copied += count;
+		copy_file_progress_callback (copied,
+		                             g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE),
+		                             pdata);
+		if (pdata->flush_errno != 0) {
+			copy_errno (pdata->flush_errno, error);
+			break;
+		}
+	}
+	if (ok) {
+		ok = copy_optional_attributes (src, staging, flags, cancellable, error) &&
+		     g_output_stream_flush (G_OUTPUT_STREAM (output), cancellable, error);
+	}
+	if (ok && pdata->dest_fd >= 0) {
+		nemo_progress_info_set_details (pdata->job->common.progress, _("Flushing the copy to storage"));
+		int err = pace_copy_writeback (pdata->dest_fd, 0, 0, cancellable);
+		ok = err == 0 || copy_errno (err, error);
+		if (ok) {
+			ok = sync_copy_fd (pdata->dest_fd, cancellable, error);
+		}
+	}
+out:
+	g_free (buffer);
+	/* Explicitly close even on cancellation. Stream disposal otherwise
+	 * performs close(NULL), which can hang on an unresponsive backend. */
+	if (!g_input_stream_close (input, cancellable, &close_error)) {
+		if (ok) {
+			g_propagate_error (error, close_error);
+			ok = FALSE;
+		} else {
+			if (!IS_IO_ERROR (close_error, CANCELLED)) {
+				g_warning ("Could not close copy source: %s", close_error->message);
+			}
+			g_error_free (close_error);
+		}
+	}
+	g_object_unref (input);
+	return ok;
+}
+
+static void
+native_copy_progress_callback (goffset current, goffset total, gpointer data)
+{
+	ProgressData *pdata = data;
+
+	if (pdata->dest_fd < 0 && pdata->flush_errno == 0 &&
+	    current - pdata->last_flush_offset >= FLUSH_CHUNK_SIZE &&
+	    !job_aborted (&pdata->job->common)) {
+		char *path = g_file_get_path (pdata->dest);
+		struct stat st;
+		int fd = open (path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+		int err = errno;
+		g_free (path);
+
+		if (fd >= 0) {
+			if (fstat (fd, &st) == 0 && S_ISREG (st.st_mode)) {
+				pdata->dest_fd = fd;
+				pdata->last_flush_offset = 0;
+			} else {
+				close (fd);
+				pdata->flush_errno = EIO;
+			}
+		} else if (err != ENOENT && err != EINTR) {
+			pdata->flush_errno = err;
+		} else {
+			/* A backend may itself stage under another name. Do not
+			 * repeatedly probe it between writeback intervals. */
+			pdata->last_flush_offset = current;
+		}
+	}
+	copy_file_progress_callback (current, total, pdata);
+}
+
+/* Some GVfs sources implement pull but not stream reads. Their writer is
+ * opaque to us: an early filesystem error-tracking fd plus checked syncfs
+ * is required, not a newly opened read-only fd alone. Keep the backend's
+ * output inside an exclusively created private directory until it is ready. */
+static gboolean
+copy_with_native_backend (GFile *src, GFile *staging, GFileCopyFlags flags,
+                          ProgressData *pdata, int filesystem_fd, GError **error)
+{
+	CommonJob *job = &pdata->job->common;
+	GFile *container = NULL, *payload = NULL;
+	gboolean owned = FALSE, ok = FALSE;
+	int fd = -1, result;
+	struct stat st;
+	ProgressData backend_progress = *pdata;
+
+	for (int attempt = 0; attempt < 16; attempt++) {
+		char *path;
+		int err;
+
+		if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+			goto out;
+		}
+		g_clear_object (&container);
+		container = make_safe_copy_staging_file (staging);
+		path = g_file_get_path (container);
+		result = g_mkdir (path, 0700);
+		err = errno;
+		g_free (path);
+		if (result == 0) {
+			owned = TRUE;
+			break;
+		}
+		if (err != EEXIST || attempt == 15) {
+			copy_errno (err, error);
+			goto out;
+		}
+	}
+	payload = g_file_get_child (container, "payload");
+	backend_progress.dest = payload;
+	backend_progress.dest_fd = -1;
+	backend_progress.last_flush_offset = 0;
+	if (!g_file_copy (src, payload, flags & ~G_FILE_COPY_OVERWRITE,
+	                  job->cancellable, native_copy_progress_callback, &backend_progress, error)) {
+		goto out;
+	}
+	if (backend_progress.flush_errno != 0) {
+		copy_errno (backend_progress.flush_errno, error);
+		goto out;
+	}
+	nemo_progress_info_set_details (job->progress, _("Flushing the copy to storage"));
+	do {
+		if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+			goto out;
+		}
+		result = syncfs (filesystem_fd);
+	} while (result < 0 && errno == EINTR);
+	if (result < 0) {
+		copy_errno (errno, error);
+		goto out;
+	}
+
+	char *path = g_file_get_path (payload);
+	do {
+		fd = open (path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+	} while (fd < 0 && errno == EINTR && !g_cancellable_is_cancelled (job->cancellable));
+	g_free (path);
+	if (fd < 0) {
+		copy_errno (errno, error);
+		goto out;
+	}
+	if (fstat (fd, &st) != 0 || !S_ISREG (st.st_mode)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+		                     _("The backend did not produce a regular file."));
+		goto out;
+	}
+	if (!sync_copy_fd (fd, job->cancellable, error)) {
+		goto out;
+	}
+	result = close (fd);
+	fd = -1;
+	if (result < 0) {
+		copy_errno (errno, error);
+		goto out;
+	}
+	ok = g_file_move (payload, staging,
+	                  G_FILE_COPY_OVERWRITE | G_FILE_COPY_NOFOLLOW_SYMLINKS |
+	                  G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
+	                  job->cancellable, NULL, NULL, error);
+out:
+	pdata->last_size = backend_progress.last_size;
+	if (backend_progress.dest_fd >= 0) {
+		close (backend_progress.dest_fd);
+	}
+	if (fd >= 0) {
 		close (fd);
 	}
+	if (owned) {
+		if (payload && !ok) {
+			discard_staging_file (pdata->job, payload);
+		}
+		discard_staging_file (pdata->job, container);
+	}
+	g_clear_object (&payload);
+	g_clear_object (&container);
+	return ok;
+}
 
-	g_free (path);
+/* FALSE always means not completed: before publication both names are
+ * untouched, and after publication the source remains until directory sync,
+ * verification and cancellation checks have all succeeded. */
+static gboolean
+copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
+                       gboolean same_fs, GFileCopyFlags flags, ProgressData *pdata,
+                       gboolean *published, GError **error)
+{
+	CommonJob *job = &copy_job->common;
+	GFileInfo *info = NULL, *dest_info = NULL;
+	GFile *staging = NULL;
+	GFileOutputStream *output = NULL;
+	GFileType type;
+	gboolean ok = FALSE, owned = FALSE;
+	gboolean must_verify = copy_job->verify_after_copy || copy_job->is_move;
+	int parent_fd = -1;
+
+	if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+		return FALSE;
+	}
+	info = query_copy_source (src, job->cancellable, error);
+	if (info == NULL) {
+		goto out;
+	}
+	type = g_file_info_get_file_type (info);
+	if (copy_job->is_move) {
+		if (move_without_fallback (src, dest, flags, job->cancellable, error)) {
+			ok = TRUE;
+			goto out;
+		}
+		if (!IS_IO_ERROR (*error, NOT_SUPPORTED) &&
+		    !IS_IO_ERROR (*error, WOULD_RECURSE) &&
+		    !IS_IO_ERROR (*error, WOULD_MERGE) &&
+		    !IS_IO_ERROR (*error, IS_DIRECTORY)) {
+			goto out;
+		}
+		g_clear_error (error);
+		flags |= G_FILE_COPY_ALL_METADATA;
+	}
+	dest_info = query_copy_source (dest, job->cancellable, error);
+	if (dest_info == NULL && *error) {
+		if (!IS_IO_ERROR (*error, NOT_FOUND)) {
+			goto out;
+		}
+		g_clear_error (error);
+	}
+	if (dest_info != NULL && !(flags & G_FILE_COPY_OVERWRITE)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_EXISTS, _("File exists"));
+		goto out;
+	}
+	/* Never delete an existing tree (or file) to make room for a different
+	 * type before the replacement is ready. Folder-to-folder is a merge. */
+	if (dest_info && (type == G_FILE_TYPE_DIRECTORY) !=
+	                 (g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY)) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("A file and a folder cannot safely replace each other. "
+		                       "Choose a different name for the copy."));
+		goto out;
+	}
+	if (type == G_FILE_TYPE_DIRECTORY) {
+		g_set_error_literal (error, G_IO_ERROR,
+		                     dest_info ? G_IO_ERROR_WOULD_MERGE : G_IO_ERROR_WOULD_RECURSE,
+		                     _("The folder contents must be copied individually."));
+		goto out;
+	}
+	if (type != G_FILE_TYPE_REGULAR && type != G_FILE_TYPE_SYMBOLIC_LINK) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("This file type cannot be safely copied."));
+		goto out;
+	}
+	if (!must_verify && (same_fs || !nemo_smpl_safe_cross_fs_copy ())) {
+		ok = g_file_copy (src, dest, flags, job->cancellable,
+		                  copy_file_progress_callback, pdata, error);
+		goto out;
+	}
+
+	/* Open the parent before writing so its error-tracking lifetime also
+	 * covers the rename, rather than opening a fresh fd after publication. */
+	parent_fd = open_dest_directory (dest, job->cancellable, error);
+	if (*error) {
+		goto out;
+	}
+	for (int attempt = 0; attempt < 16; attempt++) {
+		g_clear_object (&staging);
+		staging = make_safe_copy_staging_file (dest);
+		if (type == G_FILE_TYPE_SYMBOLIC_LINK) {
+			const char *target = g_file_info_get_attribute_byte_string (info, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET);
+			if (target == NULL) {
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+				                     _("Could not read the symbolic link target."));
+				goto out;
+			}
+			owned = g_file_make_symbolic_link (staging, target, job->cancellable, error);
+		} else {
+			output = g_file_create (staging, G_FILE_CREATE_PRIVATE, job->cancellable, error);
+			owned = output != NULL;
+		}
+		if (owned || !IS_IO_ERROR (*error, EXISTS)) {
+			break;
+		}
+		if (attempt < 15) {
+			g_clear_error (error);
+		}
+	}
+	if (!owned) {
+		goto out;
+	}
+	if (output) {
+		GError *close_error = NULL;
+		ok = write_copy_contents (src, staging, info, output, flags, pdata, error);
+		gboolean native_pull = !ok && IS_IO_ERROR (*error, NOT_SUPPORTED) && parent_fd >= 0;
+		if (!g_output_stream_close (G_OUTPUT_STREAM (output), job->cancellable, &close_error)) {
+			if (ok || native_pull) {
+				g_clear_error (error);
+				g_propagate_error (error, close_error);
+				ok = FALSE;
+			} else {
+				if (!IS_IO_ERROR (close_error, CANCELLED)) {
+					g_warning ("Could not close incomplete copy: %s", close_error->message);
+				}
+				g_error_free (close_error);
+			}
+			native_pull = FALSE;
+		}
+		pdata->dest_fd = -1;
+		g_clear_object (&output);
+		if (native_pull && !job_aborted (job)) {
+			g_clear_error (error);
+			ok = copy_with_native_backend (src, staging, flags, pdata, parent_fd, error);
+		}
+		if (!ok) {
+			goto out;
+		}
+		ok = FALSE;
+	} else if (!copy_optional_attributes (src, staging, flags, job->cancellable, error)) {
+		goto out;
+	}
+	if (!copy_source_unchanged (src, info, job->cancellable, error)) {
+		goto out;
+	}
+	if (must_verify && type == G_FILE_TYPE_REGULAR) {
+		nemo_progress_info_set_details (job->progress, _("Verifying the copy"));
+		VerifyResult result = verify_copied_file (job, src, staging);
+		if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+			goto out;
+		}
+		if (result != VERIFY_RESULT_MATCH) {
+			g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+			                     result == VERIFY_RESULT_MISMATCH
+			                     ? _("The copy's SHA-256 checksum does not match the source. "
+			                         "The destination was not replaced and the source was not removed.")
+			                     : _("The copy could not be verified. "
+			                         "The destination was not replaced and the source was not removed."));
+			goto out;
+		}
+	} else if (type == G_FILE_TYPE_SYMBOLIC_LINK) {
+		GFileInfo *link = query_copy_source (staging, job->cancellable, error);
+		if (link == NULL) {
+			goto out;
+		}
+		gboolean matches = g_file_info_get_file_type (link) == G_FILE_TYPE_SYMBOLIC_LINK &&
+		                   g_strcmp0 (g_file_info_get_attribute_byte_string (link, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET),
+		                              g_file_info_get_attribute_byte_string (info, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET)) == 0;
+		g_object_unref (link);
+		if (!matches) {
+			g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+			                     _("The copied symbolic link does not match the source."));
+			goto out;
+		}
+	}
+	if (!copy_source_unchanged (src, info, job->cancellable, error) ||
+	    g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+		goto out;
+	}
+	if (!g_file_move (staging, dest,
+	                  (flags & G_FILE_COPY_OVERWRITE) |
+	                  G_FILE_COPY_NOFOLLOW_SYMLINKS | G_FILE_COPY_NO_FALLBACK_FOR_MOVE,
+	                  job->cancellable, NULL, NULL, error)) {
+		goto out;
+	}
+	owned = FALSE;
+	*published = TRUE;
+	nemo_file_changes_queue_file_added (dest);
+	if (parent_fd >= 0 && !sync_copy_fd (parent_fd, job->cancellable, error)) {
+		goto out;
+	}
+	if (parent_fd >= 0) {
+		int result = close (parent_fd);
+		parent_fd = -1;
+		if (result < 0) {
+			copy_errno (errno, error);
+			goto out;
+		}
+	}
+	if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
+		goto out;
+	}
+	if (copy_job->is_move &&
+	    (!copy_source_unchanged (src, info, job->cancellable, error) ||
+	     !file_delete_wrapper (src, job->cancellable, error))) {
+		goto out;
+	}
+	ok = TRUE;
+
+out:
+	pdata->dest_fd = -1;
+	g_clear_object (&output);
+	if (parent_fd >= 0) {
+		close (parent_fd);
+	}
+	if (owned) {
+		discard_staging_file (copy_job, staging);
+	}
+	g_clear_object (&staging);
+	g_clear_object (&info);
+	g_clear_object (&dest_info);
+	return ok;
 }
 #endif /* NEMO_SMPL */
 
@@ -4877,21 +5714,16 @@ copy_move_file (CopyMoveJob *copy_job,
 	gboolean handled_invalid_filename;
     gboolean target_is_desktop, source_is_desktop;
 #ifdef NEMO_SMPL
-	/* smplOS safe cross-fs copy: write into staging_dest (visible
-	 * "<name>.nemo-partial-XXXXXXXX"), fsync, then atomically rename
-	 * to `dest`. See gschema org.nemo.preferences safe-cross-fs-copy. */
-	GFile   *write_dest      = NULL;   /* == staging_dest if active, else == dest */
-	GFile   *staging_dest    = NULL;   /* owned; NULL when not active */
-	gboolean safe_copy_active = FALSE;
-	gboolean dest_already_exists = FALSE;
-#else
-	GFile   *write_dest      = NULL;
+	gboolean published = FALSE;
 #endif
 
 	job = (CommonJob *)copy_job;
 
 	if (should_skip_file (job, src)) {
 		*skipped_file = TRUE;
+#ifdef NEMO_SMPL
+		copy_job->had_errors = TRUE;
+#endif
 		return;
 	}
 
@@ -4919,7 +5751,7 @@ copy_move_file (CopyMoveJob *copy_job,
 	handled_invalid_filename = *dest_fs_type != NULL;
 
 	if (unique_names) {
-		dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
+		dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++, job->cancellable);
 	} else if (precomputed_dest != NULL) {
 		/* Set by the cross-filesystem move fallback when the user already
 		 * picked a new name during move_file_prepare. Reuse that exact
@@ -4927,9 +5759,9 @@ copy_move_file (CopyMoveJob *copy_job,
 		dest = g_object_ref (precomputed_dest);
 	} else if (copy_job->target_name != NULL) {
 		dest = get_target_file_with_custom_name (src, dest_dir, *dest_fs_type, same_fs,
-							 copy_job->target_name);
+							 copy_job->target_name, job->cancellable);
 	} else {
-		dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs);
+		dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs, job->cancellable);
 	}
 
 	/* Don't allow recursive move/copy into itself.
@@ -5015,77 +5847,38 @@ copy_move_file (CopyMoveJob *copy_job,
 	pdata.last_size = 0;
 	pdata.source_info = source_info;
 	pdata.transfer_info = transfer_info;
-
-#ifdef NEMO_SMPL
-	/* Per-retry: decide whether to stage into ".nemo-partial-XXXXXXXX".
-	 * Cross-fs copies only (moves and same-fs renames are already atomic
-	 * / instant). If dest was rewritten by a retry, regenerate the
-	 * staging file so it lives next to the (possibly new) dest.
-	 *
-	 * Deleting rather than just unreffing matters: a retry happens after
-	 * a conflict or an error, and by then the previous staging file may
-	 * already hold a complete copy of the source. */
-	discard_staging_file (&staging_dest);
-	safe_copy_active = FALSE;
-	if (!copy_job->is_move && !same_fs && nemo_smpl_safe_cross_fs_copy ()) {
-		staging_dest = make_safe_copy_staging_file (dest);
-		if (staging_dest != NULL) {
-			safe_copy_active = TRUE;
-		}
-	}
-	write_dest = safe_copy_active ? staging_dest : dest;
-
-	/* A staged copy writes to a name that by construction cannot exist,
-	 * so GIO can no longer tell us the *real* destination is taken. Left
-	 * alone, the entire file transfers, the rename then fails with
-	 * EXISTS, and answering the conflict dialog costs a second full
-	 * transfer of the same file. Ask the destination directly instead.
-	 *
-	 * Only plain files are pre-checked: an existing destination directory
-	 * is a merge, and a directory source recurses, both of which GIO
-	 * signals separately below and which must keep going through their
-	 * own paths rather than the conflict dialog.
-	 *
-	 * The extra stat only ever happens when there really is a conflict,
-	 * so the common case costs nothing -- which matters when the source
-	 * is a phone and every query is a USB round trip. */
-	if (safe_copy_active && !overwrite) {
-		GFileType dest_type;
-
-		dest_type = g_file_query_file_type (dest,
-		                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-		                                    job->cancellable);
-
-		if (dest_type != G_FILE_TYPE_UNKNOWN &&
-		    dest_type != G_FILE_TYPE_DIRECTORY &&
-		    !is_dir (src)) {
-			discard_staging_file (&staging_dest);
-			safe_copy_active = FALSE;
-			dest_already_exists = TRUE;
-			write_dest = dest;
-		}
-	}
-#else
-	write_dest = dest;
-#endif
-
-	/* Enable incremental page cache flushing for cross-filesystem copies
-	 * of regular files (not moves, which are same-fs renames). */
-	pdata.dest = (!copy_job->is_move && !same_fs) ? write_dest : NULL;
+	pdata.dest = (!copy_job->is_move && !same_fs) ? dest : NULL;
 	pdata.dest_fd = -1;
 	pdata.last_flush_offset = 0;
 	pdata.flush_errno = 0;
 
 #ifdef NEMO_SMPL
-	if (dest_already_exists) {
-		/* Synthesised so the existing conflict handling below runs
-		 * unchanged -- without having moved a single byte. */
-		dest_already_exists = FALSE;
-		res = FALSE;
-		error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_EXISTS,
-		                             _("File exists"));
-	} else
-#endif
+	published = FALSE;
+	res = copy_move_transaction (copy_job, src, dest, same_fs, flags, &pdata,
+	                             &published, &error);
+	if (!res && !published) {
+		transfer_info->num_bytes -= pdata.last_size;
+	}
+	/* A post-publication failure must never enter a retry or replacement
+	 * path. The destination is real user data now, and the source stays. */
+	if (!res && published) {
+		copy_job->had_errors = TRUE;
+		if (!job_aborted (job) && !job->skip_all_error) {
+			response = run_warning (
+				job, g_strdup (_("The operation was not completed.")),
+				g_strdup (_("The destination was published, but its durability could not be "
+				            "confirmed or the source could not be removed. The source was retained.")),
+				error->message, TRUE, GTK_STOCK_CANCEL, SKIP_ALL, SKIP, NULL);
+			if (response == 0 || response == GTK_RESPONSE_DELETE_EVENT) {
+				abort_job (job);
+			} else if (response == 1) {
+				job->skip_all_error = TRUE;
+			}
+		}
+		g_clear_error (&error);
+		goto out;
+	}
+#else
 	if (copy_job->is_move) {
 		res = g_file_move (src, dest,
 				   flags,
@@ -5094,7 +5887,7 @@ copy_move_file (CopyMoveJob *copy_job,
 				   &pdata,
 				   &error);
 	} else {
-		res = g_file_copy (src, write_dest,
+		res = g_file_copy (src, dest,
 				   flags,
 				   job->cancellable,
 				   copy_file_progress_callback,
@@ -5119,66 +5912,6 @@ copy_move_file (CopyMoveJob *copy_job,
 	if (res && pdata.dest_fd >= 0) {
 		sync_file_range (pdata.dest_fd, 0, 0, SYNC_FILE_RANGE_WRITE);
 	}
-#ifdef NEMO_SMPL
-	/* smplOS safe cross-fs copy: block until the file is physically on
-	 * disk. sync_file_range(...WRITE) above only *starts* async writeback;
-	 * without this fsync the progress bar hits 100% while data can still
-	 * be sitting in the kernel page cache for tens of seconds on slow
-	 * removable media.
-	 *
-	 * For files smaller than FLUSH_CHUNK_SIZE the progress callback never
-	 * opened a fd on write_dest, so open one here. Any open fd works for
-	 * fsync(2) regardless of access mode.
-	 *
-	 * The descriptor the progress callback opened is reused when there is
-	 * one. That matters: the kernel reports a writeback error to a given
-	 * descriptor only if the error happened after that descriptor was
-	 * opened, so a freshly opened fd can silently miss a failure the
-	 * older one would have caught.
-	 *
-	 * A destination with no local path (smb://, sftp://) cannot be
-	 * fsync()ed at all; staging plus rename is the best available there,
-	 * and is not treated as an error. A local file that we cannot open or
-	 * flush *is* an error -- silently renaming it into place would hand
-	 * the user a durability guarantee that does not exist. */
-	if (res && safe_copy_active) {
-		char *fsync_path = g_file_get_path (write_dest);
-
-		if (fsync_path != NULL) {
-			gboolean borrowed = (pdata.dest_fd >= 0);
-			int fsync_fd = borrowed ? pdata.dest_fd
-			                        : open (fsync_path, O_RDONLY);
-			int e = 0;
-
-			if (fsync_fd < 0) {
-				e = errno;
-				g_warning ("safe-copy: could not open staging file to flush it: %s",
-				           g_strerror (e));
-			} else {
-				if (fsync (fsync_fd) != 0) {
-					e = errno;
-					g_warning ("safe-copy: fsync of staging file failed: %s",
-					           g_strerror (e));
-				}
-				if (!borrowed) {
-					close (fsync_fd);
-				}
-			}
-
-			if (e != 0) {
-				g_clear_error (&error);
-				error = g_error_new (G_IO_ERROR,
-				                     g_io_error_from_errno (e),
-				                     _("Could not flush the file to disk: %s"),
-				                     g_strerror (e));
-				res = FALSE;
-			}
-
-			g_free (fsync_path);
-		}
-	}
-#endif /* NEMO_SMPL */
-
 	/* Clean up the fd the progress callback may have opened.
 	 * On success, drop the page cache we no longer need. */
 	if (pdata.dest_fd >= 0) {
@@ -5190,46 +5923,10 @@ copy_move_file (CopyMoveJob *copy_job,
 		pdata.dest_fd = -1;
 	}
 
-#ifdef NEMO_SMPL
-	/* smplOS safe cross-fs copy: atomic rename now that data is on disk.
-	 * If the rename fails (very rare on same-fs move), leave the visible
-	 * ".nemo-partial" file in place so the user can inspect it, and
-	 * synthesize a copy failure so the standard error dialog runs. */
-	if (res && safe_copy_active) {
-		GError *ren_err = NULL;
-		GFileCopyFlags ren_flags = overwrite ? G_FILE_COPY_OVERWRITE
-		                                     : G_FILE_COPY_NONE;
-		if (g_file_move (write_dest, dest, ren_flags,
-		                 job->cancellable, NULL, NULL, &ren_err)) {
-			/* The staging name no longer exists, and `dest` is now
-			 * the real file. Forget both immediately so that no
-			 * later cleanup path can delete what we just put in
-			 * place. */
-			g_clear_object (&staging_dest);
-			write_dest = dest;
-			safe_copy_active = FALSE;
-
-			/* rename(2) is only durable once the directory entry
-			 * itself has been flushed. Without this the contents
-			 * survive a yanked drive but the name may not. */
-			sync_dest_directory (dest);
-		} else {
-			g_warning ("safe-copy: could not rename staging file into place: %s -> %s: %s",
-			           g_file_peek_path (write_dest),
-			           g_file_peek_path (dest),
-			           ren_err ? ren_err->message : "(no error)");
-			g_clear_error (&error);
-			error = ren_err;   /* transfers ownership to the retry/error path */
-			res = FALSE;
-		}
-	}
 #endif /* NEMO_SMPL */
 
 	if (res) {
-		/* Verify after copy: compare SHA-256 checksums, reading from disk
-		 * (page cache bypassed via posix_fadvise DONTNEED).
-		 * For moves across filesystems GIO does copy+delete, so src
-		 * is still available at this point. */
+#ifndef NEMO_SMPL
 		if (copy_job->verify_after_copy && !job_aborted (job) &&
 		    !copy_job->verify_skip_all) {
 			GFileType ft = g_file_query_file_type (src, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
@@ -5275,6 +5972,7 @@ copy_move_file (CopyMoveJob *copy_job,
 				}
 			}
 		}
+#endif
 		transfer_info->num_files ++;
 		report_copy_progress (copy_job, source_info, transfer_info);
 
@@ -5319,13 +6017,6 @@ copy_move_file (CopyMoveJob *copy_job,
 									    src, dest);
 		}
 
-#ifdef NEMO_SMPL
-		/* Already NULL: a successful staged copy clears it as soon as
-		 * the rename lands. Never discard_staging_file() here -- at
-		 * this point the "staging" name would be the user's real
-		 * file. */
-		g_clear_object (&staging_dest);
-#endif
 		g_object_unref (dest);
 		return;
 	}
@@ -5338,9 +6029,16 @@ copy_move_file (CopyMoveJob *copy_job,
 		*dest_fs_type = query_fs_type (dest_dir, job->cancellable);
 
 		if (unique_names) {
-			new_dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr);
+			new_dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr, job->cancellable);
 		} else {
-			new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs);
+#ifdef NEMO_SMPL
+			char *name = g_file_get_basename (dest);
+			new_dest = get_target_file_with_custom_name (
+				src, dest_dir, *dest_fs_type, same_fs, name, job->cancellable);
+			g_free (name);
+#else
+			new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs, job->cancellable);
+#endif
 		}
 
 		if (!g_file_equal (dest, new_dest)) {
@@ -5364,15 +6062,21 @@ copy_move_file (CopyMoveJob *copy_job,
 
 		if (unique_names || job->auto_rename_all) {
 			g_object_unref (dest);
-			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
+			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++, job->cancellable);
 			goto retry;
 		}
 
 		is_a_merge = FALSE;
 
-		if (is_dir (dest) && is_dir (src)) {
+#ifdef NEMO_SMPL
+		if (!copy_conflict_is_merge (copy_job, src, dest, &is_a_merge)) {
+			goto out;
+		}
+#else
+		if (is_dir (dest, job->cancellable) && is_dir (src, job->cancellable)) {
 			is_a_merge = TRUE;
 		}
+#endif
 
 		if ((is_a_merge && job->merge_all) ||
 		    (!is_a_merge && job->replace_all)) {
@@ -5424,6 +6128,7 @@ copy_move_file (CopyMoveJob *copy_job,
 		}
 	}
 
+#ifndef NEMO_SMPL
 	else if (overwrite &&
 		 IS_IO_ERROR (error, IS_DIRECTORY)) {
 
@@ -5433,6 +6138,7 @@ copy_move_file (CopyMoveJob *copy_job,
 			goto retry;
 		}
 	}
+#endif
 
 	/* Needs to recurse */
 	else if (IS_IO_ERROR (error, WOULD_RECURSE) ||
@@ -5441,29 +6147,7 @@ copy_move_file (CopyMoveJob *copy_job,
 		would_recurse = error->code == G_IO_ERROR_WOULD_RECURSE;
 		g_error_free (error);
 
-#ifdef NEMO_SMPL
-		/* GIO reports WOULD_MERGE only when the destination it was
-		 * handed already exists as a directory. A staged copy hands it
-		 * a name that never exists, so a genuine directory merge
-		 * arrives here disguised as WOULD_RECURSE.
-		 *
-		 * Left uncorrected that skips the merge prompt, drops the
-		 * same_fs=FALSE safety below, and -- once "replace all" is set
-		 * -- sends the user's existing directory straight to
-		 * file_delete_wrapper() a few lines down. */
-		if (safe_copy_active && would_recurse &&
-		    is_dir (src) && is_dir (dest)) {
-			is_merge = TRUE;
-			would_recurse = FALSE;
-		}
-
-		/* Directory copies never write through the staging file, so
-		 * this only releases the unused GFile. */
-		discard_staging_file (&staging_dest);
-		safe_copy_active = FALSE;
-		write_dest = dest;
-#endif
-
+#ifndef NEMO_SMPL
 		if (overwrite && would_recurse) {
 			error = NULL;
 
@@ -5513,6 +6197,7 @@ copy_move_file (CopyMoveJob *copy_job,
 			}
 			nemo_file_changes_queue_file_removed (dest);
 		}
+#endif
 
 		if (is_merge) {
 			/* On merge we now write in the target directory, which may not
@@ -5575,11 +6260,7 @@ copy_move_file (CopyMoveJob *copy_job,
  out:
 	*skipped_file = TRUE; /* Or aborted, but same-same */
 #ifdef NEMO_SMPL
-	/* Every way out of a staged copy that is not a successful rename ends
-	 * up here. The staging file must go: it is a full-size copy of the
-	 * source, and leaving one behind per skipped or failed file is how a
-	 * destination drive quietly fills up mid-transfer. */
-	discard_staging_file (&staging_dest);
+	copy_job->had_errors = TRUE;
 #endif
 	g_object_unref (dest);
 }
@@ -5614,7 +6295,7 @@ copy_files (CopyMoveJob *job,
 	/* Query the source dir, not the file because if its a symlink we'll follow it */
 	source_dir = g_file_get_parent ((GFile *) job->files->data);
 	if (source_dir) {
-		inf = g_file_query_filesystem_info (source_dir, "filesystem::readonly", NULL, NULL);
+		inf = g_file_query_filesystem_info (source_dir, "filesystem::readonly", common->cancellable, NULL);
 		if (inf != NULL) {
 			readonly_source_fs = g_file_info_get_attribute_boolean (inf, "filesystem::readonly");
 			g_object_unref (inf);
@@ -5638,7 +6319,7 @@ copy_files (CopyMoveJob *job,
 
 		same_fs = FALSE;
 		if (dest_fs_id) {
-			same_fs = has_fs_id (src, dest_fs_id);
+			same_fs = has_fs_id (src, dest_fs_id, common->cancellable);
 		}
 
 		if (job->destination) {
@@ -5673,7 +6354,11 @@ copy_job_done (gpointer user_data)
 	job = user_data;
 	if (job->done_callback) {
 		job->done_callback (job->debuting_files,
-				    !job_aborted ((CommonJob *) job),
+				    !job_aborted ((CommonJob *) job)
+#ifdef NEMO_SMPL
+				    && !job->had_errors
+#endif
+				    ,
 				    job->done_callback_data);
 	}
 
@@ -5944,6 +6629,9 @@ move_file_prepare (CopyMoveJob *move_job,
 	gboolean handled_invalid_filename;
     gboolean target_is_desktop, source_is_desktop;
 	int unique_name_nr = 1;
+#ifdef NEMO_SMPL
+	gboolean fallback_scheduled = FALSE;
+#endif
 
     target_is_desktop = (move_job->desktop_location != NULL &&
                          g_file_equal (move_job->desktop_location, dest_dir));
@@ -5966,7 +6654,7 @@ move_file_prepare (CopyMoveJob *move_job,
 
 	job = (CommonJob *)move_job;
 
-	dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs);
+	dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs, job->cancellable);
 
 
 	/* Don't allow recursive move/copy into itself.
@@ -6011,12 +6699,16 @@ move_file_prepare (CopyMoveJob *move_job,
 	}
 
 	error = NULL;
+#ifdef NEMO_SMPL
+	if (move_without_fallback (src, dest, flags, job->cancellable, &error)) {
+#else
 	if (g_file_move (src, dest,
 			 flags,
 			 job->cancellable,
 			 NULL,
 			 NULL,
 			 &error)) {
+#endif
 
 		if (debuting_files) {
 			g_hash_table_replace (debuting_files, g_object_ref (dest), GINT_TO_POINTER (TRUE));
@@ -6045,24 +6737,33 @@ move_file_prepare (CopyMoveJob *move_job,
 									    src, dest);
 		}
 
+		g_object_unref (dest);
 		return;
 	}
 
 	if (IS_IO_ERROR (error, INVALID_FILENAME) &&
 	    !handled_invalid_filename) {
-		g_error_free (error);
 		handled_invalid_filename = TRUE;
 
 		g_assert (*dest_fs_type == NULL);
 		*dest_fs_type = query_fs_type (dest_dir, job->cancellable);
 
-		new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs);
+#ifdef NEMO_SMPL
+		char *name = g_file_get_basename (dest);
+		new_dest = get_target_file_with_custom_name (
+			src, dest_dir, *dest_fs_type, same_fs, name, job->cancellable);
+		g_free (name);
+#else
+		new_dest = get_target_file (src, dest_dir, *dest_fs_type, same_fs, job->cancellable);
+#endif
 		if (!g_file_equal (dest, new_dest)) {
 			g_object_unref (dest);
 			dest = new_dest;
+			g_clear_error (&error);
 			goto retry;
 		} else {
 			g_object_unref (new_dest);
+			goto move_error;
 		}
 	}
 
@@ -6075,9 +6776,15 @@ move_file_prepare (CopyMoveJob *move_job,
 		g_error_free (error);
 
 		is_merge = FALSE;
-		if (is_dir (dest) && is_dir (src)) {
+#ifdef NEMO_SMPL
+		if (!copy_conflict_is_merge (move_job, src, dest, &is_merge)) {
+			goto out;
+		}
+#else
+		if (is_dir (dest, job->cancellable) && is_dir (src, job->cancellable)) {
 			is_merge = TRUE;
 		}
+#endif
 
 		if ((is_merge && job->merge_all) ||
 		    (!is_merge && job->replace_all)) {
@@ -6087,7 +6794,7 @@ move_file_prepare (CopyMoveJob *move_job,
 
 		if (job->auto_rename_all || auto_rename) {
 			g_object_unref (dest);
-			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++);
+			dest = get_unique_target_file (src, dest_dir, same_fs, *dest_fs_type, unique_name_nr++, job->cancellable);
 			goto retry;
 		}
 
@@ -6146,6 +6853,9 @@ move_file_prepare (CopyMoveJob *move_job,
 							overwrite,
 							position);
 		*fallback_files = g_list_prepend (*fallback_files, fallback);
+#ifdef NEMO_SMPL
+		fallback_scheduled = TRUE;
+#endif
 	}
 
 	else if (IS_IO_ERROR (error, CANCELLED)) {
@@ -6154,7 +6864,9 @@ move_file_prepare (CopyMoveJob *move_job,
 
 	/* Other error */
 	else {
-		if (job->skip_all_error) {
+	move_error:
+		if (job->skip_all_error || job_aborted (job)) {
+			g_error_free (error);
 			goto out;
 		}
 		primary = f (_("Error while moving \"%B\"."), src);
@@ -6183,6 +6895,11 @@ move_file_prepare (CopyMoveJob *move_job,
 	}
 
  out:
+#ifdef NEMO_SMPL
+	if (!fallback_scheduled) {
+		move_job->had_errors = TRUE;
+	}
+#endif
 	g_object_unref (dest);
 }
 
@@ -6221,7 +6938,7 @@ move_files_prepare (CopyMoveJob *job,
 
 		same_fs = FALSE;
 		if (dest_fs_id) {
-			same_fs = has_fs_id (src, dest_fs_id);
+			same_fs = has_fs_id (src, dest_fs_id, common->cancellable);
 		}
 
 		move_file_prepare (job, src, job->destination,
@@ -6274,7 +6991,7 @@ common = &job->common;
 
 		same_fs = FALSE;
 		if (dest_fs_id) {
-			same_fs = has_fs_id (src, dest_fs_id);
+			same_fs = has_fs_id (src, dest_fs_id, common->cancellable);
 		}
 
 		/* Set overwrite to true, as the user has
@@ -6300,7 +7017,11 @@ move_job_done (gpointer user_data)
 	job = user_data;
 	if (job->done_callback) {
 		job->done_callback (job->debuting_files,
-				    !job_aborted ((CommonJob *) job),
+				    !job_aborted ((CommonJob *) job)
+#ifdef NEMO_SMPL
+				    && !job->had_errors
+#endif
+				    ,
 				    job->done_callback_data);
 	}
 
@@ -6527,7 +7248,7 @@ link_file (CopyMoveJob *job,
 
 	handled_invalid_filename = *dest_fs_type != NULL;
 
-	dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count);
+	dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count, common->cancellable);
 
  retry:
 	error = NULL;
@@ -6571,7 +7292,7 @@ link_file (CopyMoveJob *job,
 		g_assert (*dest_fs_type == NULL);
 		*dest_fs_type = query_fs_type (dest_dir, common->cancellable);
 
-		new_dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count);
+		new_dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count, common->cancellable);
 
 		if (!g_file_equal (dest, new_dest)) {
 			g_object_unref (dest);
@@ -6586,7 +7307,7 @@ link_file (CopyMoveJob *job,
 	/* Conflict */
 	if (error != NULL && IS_IO_ERROR (error, EXISTS)) {
 		g_object_unref (dest);
-		dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count++);
+		dest = get_target_file_for_link (src, dest_dir, *dest_fs_type, count++, common->cancellable);
 		g_error_free (error);
 		goto retry;
 	}

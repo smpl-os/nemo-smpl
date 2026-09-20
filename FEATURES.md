@@ -51,10 +51,15 @@ Double Commander-style instant file viewer:
 ### Verify After Copy/Move
 
 - Checkbox in F5 (Copy) and F6 (Move) dialogs: "Verify after copy/move"
-- SHA-256 checksum comparison of source and destination after each file
-- Bypasses page cache with `posix_fadvise(DONTNEED)` for true on-disk verification
-- `fsync` before verification to ensure data is flushed to disk
-- Mismatch dialog with Cancel/Skip options
+- Requested SHA-256 verification compares the source with an unpublished staging file; mismatch or unavailable verification never replaces an existing destination
+- Cross-filesystem copy-and-delete moves always verify regular files before deleting their source; same-filesystem atomic renames remain fast
+- Transactional local stream copies keep the writer open through `fsync`, then publish the final name and flush its parent directory; errors after publication retain the source and report an incomplete operation
+- `posix_fadvise(DONTNEED)` requests cache eviction, but is not a physical-media read guarantee; remote destinations rely on backend close/rename acknowledgements
+- Cancel/Skip/Skip All retain unsafe items rather than disabling later verification
+- Visible `copy.nemo-partial-UUID` staging names support long final filenames; symbolic links are copied and compared without following their targets
+- Stream-copy staging files start private. Source permissions and timestamps are copied where supported; when a backend supplies no Unix permissions (or default target permissions are requested), a local stream-copy staging file conservatively keeps mode `0600`
+- Pull-only remote sources can still copy to local storage through GIO's native backend. Its output stays in a private temporary folder and uses checked filesystem-wide `syncfs` with an error-tracking descriptor opened before the transfer; requested verification still requires a readable source
+- Folder merges are incremental, with a conflict decision before copying children. File-to-folder or folder-to-file replacement requires a different destination name rather than deleting existing data before the replacement is ready
 
 ### Per-Pane Location Labels
 
