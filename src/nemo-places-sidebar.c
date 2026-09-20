@@ -150,6 +150,12 @@ typedef struct {
     guint update_places_on_idle_id;
     guint mtp_hint_refresh_id;
 
+#ifdef NEMO_SMPL
+    /* uri -> DiskFullEntry. Caches sidebar free-space readings so they can be
+     * refreshed asynchronously instead of blocking the main loop. */
+    GHashTable *disk_full_cache;
+#endif
+
 } NemoPlacesSidebar;
 
 typedef struct {
@@ -620,9 +626,236 @@ sidebar_update_restore_selection (NemoPlacesSidebar *sidebar,
 	}
 }
 
-static gint
-get_disk_full (GFile *file, gchar **tooltip_info)
+#ifdef NEMO_SMPL
+
+/* Sidebar free-space readings are gathered asynchronously.
+ *
+ * Every row in "Devices" wants a usage bar, which means one
+ * query_filesystem_info per mount each time update_places() runs. Done
+ * synchronously that is a blocking D-Bus round trip per gvfs mount, and an MTP
+ * phone whose backend is saturated (or wedged) never answers at all - the main
+ * loop then stops dead, which is what produced both the periodic "Nemo is not
+ * responding" dialogs and windows that never appeared in the first place.
+ *
+ * Instead each URI keeps a cached reading that update_places() can return
+ * instantly, refreshed in the background and re-rendered only when the value
+ * actually changes. */
+
+#define DISK_FULL_QUERY_TIMEOUT_SECONDS 10
+#define DISK_FULL_REFRESH_INTERVAL_US   (2 * G_USEC_PER_SEC)
+
+typedef struct {
+    gint          percent;       /* -1 when unknown */
+    gchar        *tooltip;       /* owned, may be NULL */
+    gboolean      in_flight;
+    GCancellable *cancellable;   /* owned while in flight */
+    guint         timeout_id;
+    gint64        last_finished; /* monotonic, 0 when never completed */
+} DiskFullEntry;
+
+typedef struct {
+    GWeakRef  sidebar_ref;
+    gchar    *uri;
+} DiskFullQuery;
+
+static void
+disk_full_entry_free (gpointer data)
 {
+    DiskFullEntry *entry = data;
+
+    g_clear_handle_id (&entry->timeout_id, g_source_remove);
+
+    if (entry->cancellable != NULL) {
+        g_cancellable_cancel (entry->cancellable);
+        g_clear_object (&entry->cancellable);
+    }
+
+    g_free (entry->tooltip);
+    g_free (entry);
+}
+
+static void
+disk_full_query_free (DiskFullQuery *query)
+{
+    g_weak_ref_clear (&query->sidebar_ref);
+    g_free (query->uri);
+    g_free (query);
+}
+
+static gboolean
+disk_full_query_timeout_cb (gpointer data)
+{
+    DiskFullEntry *entry = data;
+
+    entry->timeout_id = 0;
+
+    /* The backend never answered. Cancelling makes the completion callback run,
+     * which clears the in-flight flag so a later refresh can try again. */
+    if (entry->cancellable != NULL) {
+        g_cancellable_cancel (entry->cancellable);
+    }
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+disk_full_query_cb (GObject      *source,
+                    GAsyncResult *res,
+                    gpointer      user_data)
+{
+    DiskFullQuery *query = user_data;
+    NemoPlacesSidebar *sidebar;
+    DiskFullEntry *entry;
+    GFileInfo *info;
+    GError *error = NULL;
+    gint percent = -1;
+    gchar *tooltip = NULL;
+
+    info = g_file_query_filesystem_info_finish (G_FILE (source), res, &error);
+
+    sidebar = g_weak_ref_get (&query->sidebar_ref);
+
+    if (sidebar == NULL) {
+        /* The sidebar was destroyed while the query was in flight. */
+        g_clear_object (&info);
+        g_clear_error (&error);
+        disk_full_query_free (query);
+        return;
+    }
+
+    entry = sidebar->disk_full_cache != NULL
+            ? g_hash_table_lookup (sidebar->disk_full_cache, query->uri)
+            : NULL;
+
+    if (entry != NULL) {
+        entry->in_flight = FALSE;
+        entry->last_finished = g_get_monotonic_time ();
+        g_clear_handle_id (&entry->timeout_id, g_source_remove);
+        g_clear_object (&entry->cancellable);
+    }
+
+    if (info != NULL) {
+        guint64 k_used, k_total, k_free;
+
+        k_used = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED);
+        k_total = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+        k_free = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+
+        if (k_total > 0) {
+            gchar *size_string;
+            int prefix;
+
+            percent = (gint) rintf (((float) k_used / (float) k_total) * 100.0);
+
+            prefix = nemo_global_preferences_get_size_prefix_preference ();
+            size_string = g_format_size_full (k_free, prefix);
+            tooltip = g_strdup_printf (_("Free space: %s"), size_string);
+            g_free (size_string);
+        }
+    } else if (error != NULL &&
+               !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        DEBUG ("Couldn't get disk full info for %s: %s", query->uri, error->message);
+    }
+
+    /* Only a successful query updates the cache. A timeout or transient error
+     * must not blank out a reading that was previously good. */
+    if (entry != NULL && info != NULL) {
+        if (entry->percent != percent || g_strcmp0 (entry->tooltip, tooltip) != 0) {
+            entry->percent = percent;
+            g_free (entry->tooltip);
+            entry->tooltip = tooltip;
+            tooltip = NULL;
+
+            /* Re-render with the fresh numbers. The rebuild is served from the
+             * cache, so this cannot recurse indefinitely. */
+            update_places_on_idle (sidebar);
+        }
+    }
+
+    g_clear_object (&info);
+    g_clear_error (&error);
+    g_free (tooltip);
+    g_object_unref (sidebar);
+    disk_full_query_free (query);
+}
+
+static void
+start_disk_full_query (NemoPlacesSidebar *sidebar,
+                       GFile             *file,
+                       const gchar       *uri,
+                       DiskFullEntry     *entry)
+{
+    DiskFullQuery *query;
+
+    if (entry->in_flight) {
+        return;
+    }
+
+    /* Throttle refreshes. Free space moves constantly while a copy is running,
+     * and every change would otherwise rebuild the whole sidebar. */
+    if (entry->last_finished != 0 &&
+        g_get_monotonic_time () - entry->last_finished < DISK_FULL_REFRESH_INTERVAL_US) {
+        return;
+    }
+
+    entry->in_flight = TRUE;
+    entry->cancellable = g_cancellable_new ();
+    entry->timeout_id = g_timeout_add_seconds (DISK_FULL_QUERY_TIMEOUT_SECONDS,
+                                               disk_full_query_timeout_cb,
+                                               entry);
+
+    query = g_new0 (DiskFullQuery, 1);
+    g_weak_ref_init (&query->sidebar_ref, sidebar);
+    query->uri = g_strdup (uri);
+
+    g_file_query_filesystem_info_async (file,
+                                        "filesystem::*",
+                                        G_PRIORITY_DEFAULT,
+                                        entry->cancellable,
+                                        disk_full_query_cb,
+                                        query);
+}
+
+#endif /* NEMO_SMPL */
+
+static gint
+get_disk_full (NemoPlacesSidebar *sidebar, GFile *file, gchar **tooltip_info)
+{
+#ifdef NEMO_SMPL
+    /* The synchronous g_file_query_filesystem_info() below is a main-loop
+     * hazard: for a gvfs backend (most importantly MTP) it is a blocking,
+     * uncancellable D-Bus round trip. A phone whose gvfsd-mtp is busy or wedged
+     * simply never replies, which freezes the whole file manager - including
+     * during window construction, where it prevents the window from ever being
+     * mapped. Serve the last known value straight from the cache and refresh it
+     * in the background instead. */
+    DiskFullEntry *entry;
+    gchar *uri;
+
+    if (sidebar->disk_full_cache == NULL) {
+        /* Disposed. */
+        *tooltip_info = g_strdup (" ");
+        return -1;
+    }
+
+    uri = g_file_get_uri (file);
+
+    entry = g_hash_table_lookup (sidebar->disk_full_cache, uri);
+
+    if (entry == NULL) {
+        entry = g_new0 (DiskFullEntry, 1);
+        entry->percent = -1;
+        g_hash_table_insert (sidebar->disk_full_cache, g_strdup (uri), entry);
+    }
+
+    start_disk_full_query (sidebar, file, uri, entry);
+
+    *tooltip_info = g_strdup (entry->tooltip != NULL ? entry->tooltip : " ");
+
+    g_free (uri);
+
+    return entry->percent;
+#else
     GFileInfo *info;
     GError *error;
     guint64 k_used, k_total, k_free;
@@ -631,6 +864,8 @@ get_disk_full (GFile *file, gchar **tooltip_info)
     int prefix;
     gchar *size_string;
     gchar *out_string;
+
+    (void) sidebar;
 
     error = NULL;
     df_percent = -1;
@@ -674,6 +909,7 @@ get_disk_full (GFile *file, gchar **tooltip_info)
     *tooltip_info = out_string;
 
     return df_percent;
+#endif
 }
 
 static gboolean
@@ -943,7 +1179,7 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
     icon = get_icon_name (mount_uri);
 
     df_file = g_file_new_for_uri (mount_uri);
-    full = get_disk_full (df_file, &tooltip_info);
+    full = get_disk_full (sidebar, df_file, &tooltip_info);
     g_clear_object (&df_file);
 
     tooltip = g_strdup_printf (_("Open your personal folder\n%s"), tooltip_info);
@@ -1053,7 +1289,7 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
     icon = NEMO_ICON_SYMBOLIC_FILESYSTEM;
 
     df_file = g_file_new_for_uri (mount_uri);
-    full = get_disk_full (df_file, &tooltip_info);
+    full = get_disk_full (sidebar, df_file, &tooltip_info);
     g_clear_object (&df_file);
 
     tooltip = g_strdup_printf (_("Open the contents of the File System\n%s"), tooltip_info);
@@ -1211,7 +1447,7 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
 
         full_display_name = g_file_get_parse_name (root);
         df_file = g_file_new_for_uri (mount_uri);
-        full = get_disk_full (df_file, &tooltip_info);
+        full = get_disk_full (sidebar, df_file, &tooltip_info);
         g_clear_object (&df_file);
 
         tooltip = g_strdup_printf (_("%s\n%s"), full_display_name, tooltip_info);
@@ -1271,7 +1507,7 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
                     full_display_name = g_file_get_parse_name (root);
 
                     df_file = g_file_new_for_uri (mount_uri);
-                    full = get_disk_full (df_file, &tooltip_info);
+                    full = get_disk_full (sidebar, df_file, &tooltip_info);
                     g_clear_object (&df_file);
 
                     tooltip = g_strdup_printf (_("%s (%s)\n%s"),
@@ -1457,7 +1693,7 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
             mount_uri = g_file_get_uri (root);
 
             df_file = g_file_new_for_uri (mount_uri);
-            full = get_disk_full (df_file, &tooltip_info);
+            full = get_disk_full (sidebar, df_file, &tooltip_info);
             g_clear_object (&df_file);
 
             parse_name = g_file_get_parse_name (root);
@@ -4543,6 +4779,11 @@ nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
 
     sidebar->update_places_on_idle_id = 0;
 
+#ifdef NEMO_SMPL
+    sidebar->disk_full_cache = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                                      g_free, disk_full_entry_free);
+#endif
+
     sidebar->my_computer_expanded = g_settings_get_boolean (nemo_window_state,
                                                             NEMO_WINDOW_STATE_MY_COMPUTER_EXPANDED);
     sidebar->bookmarks_expanded = g_settings_get_boolean (nemo_window_state,
@@ -4839,6 +5080,11 @@ nemo_places_sidebar_dispose (GObject *object)
         g_source_remove (sidebar->mtp_hint_refresh_id);
         sidebar->mtp_hint_refresh_id = 0;
     }
+
+#ifdef NEMO_SMPL
+    /* Cancels and frees any free-space queries still in flight. */
+    g_clear_pointer (&sidebar->disk_full_cache, g_hash_table_destroy);
+#endif
 
 	g_clear_object (&sidebar->store);
 
