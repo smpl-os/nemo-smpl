@@ -88,6 +88,16 @@ char *   nemo_unique_temporary_file_name         (void);
 
 GFile *  nemo_find_existing_uri_in_hierarchy     (GFile *location);
 
+#ifdef NEMO_SMPL
+void     nemo_find_existing_uri_in_hierarchy_async (GFile               *location,
+                                                  GCancellable        *cancellable,
+                                                  GAsyncReadyCallback  callback,
+                                                  gpointer             user_data);
+GFile *  nemo_find_existing_uri_in_hierarchy_finish (GFile               *location,
+                                                   GAsyncResult        *result,
+                                                   GError             **error);
+#endif
+
 GFile *
 nemo_find_file_insensitive (GFile *parent, const gchar *name);
 

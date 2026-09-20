@@ -931,6 +931,79 @@ nemo_find_existing_uri_in_hierarchy (GFile *location)
 	return location;
 }
 
+#ifdef NEMO_SMPL
+static void
+find_existing_ancestor_ready (GObject      *source,
+                             GAsyncResult *result,
+                             gpointer      user_data)
+{
+    GTask *task = G_TASK (user_data);
+    GError *error = NULL;
+    GFileInfo *info;
+    GFile *parent;
+
+    info = g_file_query_info_finish (G_FILE (source), result, &error);
+    if (g_task_return_error_if_cancelled (task)) {
+        g_clear_object (&info);
+        g_clear_error (&error);
+    } else if (info != NULL) {
+        g_object_unref (info);
+        g_task_return_pointer (task, g_object_ref (source), g_object_unref);
+    } else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        g_task_return_error (task, error);
+    } else {
+        /* As in the synchronous helper, try the parent on any query failure. */
+        g_clear_error (&error);
+        parent = g_file_get_parent (G_FILE (source));
+        if (parent != NULL) {
+            g_file_query_info_async (parent, G_FILE_ATTRIBUTE_STANDARD_NAME,
+                                    G_FILE_QUERY_INFO_NONE, G_PRIORITY_DEFAULT,
+                                    g_task_get_cancellable (task),
+                                    find_existing_ancestor_ready, task);
+            g_object_unref (parent);
+            return;
+        }
+        g_task_return_pointer (task, NULL, NULL);
+    }
+    g_object_unref (task);
+}
+
+/* Returns the first queryable location (including location itself), or NULL
+ * when none exists. Cancellation is reported as G_IO_ERROR_CANCELLED. */
+void
+nemo_find_existing_uri_in_hierarchy_async (GFile               *location,
+                                           GCancellable        *cancellable,
+                                           GAsyncReadyCallback  callback,
+                                           gpointer             user_data)
+{
+    GTask *task;
+
+    g_return_if_fail (G_IS_FILE (location));
+
+    task = g_task_new (location, cancellable, callback, user_data);
+    g_task_set_source_tag (task, nemo_find_existing_uri_in_hierarchy_async);
+    if (g_task_return_error_if_cancelled (task)) {
+        g_object_unref (task);
+        return;
+    }
+    g_file_query_info_async (location, G_FILE_ATTRIBUTE_STANDARD_NAME,
+                            G_FILE_QUERY_INFO_NONE, G_PRIORITY_DEFAULT,
+                            cancellable, find_existing_ancestor_ready, task);
+}
+
+GFile *
+nemo_find_existing_uri_in_hierarchy_finish (GFile         *location,
+                                            GAsyncResult  *result,
+                                            GError       **error)
+{
+    g_return_val_if_fail (g_task_is_valid (result, location), NULL);
+    g_return_val_if_fail (g_async_result_is_tagged (result,
+                         nemo_find_existing_uri_in_hierarchy_async), NULL);
+
+    return g_task_propagate_pointer (G_TASK (result), error);
+}
+#endif
+
 /**
  * nemo_find_file_insensitive
  *

@@ -268,6 +268,123 @@ handle_go_elsewhere (NemoWindowSlot *slot,
 	}
 }
 
+#ifdef NEMO_SMPL
+#define EXISTING_PARENT_CANCELLABLE "nemo-existing-parent-cancellable"
+
+typedef struct {
+    GWeakRef slot;
+    GWeakRef window;
+    NemoFile *viewed_file;
+    GFile *location;
+    GCancellable *cancellable;
+} ExistingParentSearch;
+
+static void
+cancel_existing_parent_cancellable (gpointer data)
+{
+    g_cancellable_cancel (G_CANCELLABLE (data));
+    g_object_unref (data);
+}
+
+static void
+cancel_existing_parent_search (NemoWindowSlot *slot)
+{
+    g_object_set_data (G_OBJECT (slot), EXISTING_PARENT_CANCELLABLE, NULL);
+}
+
+static void
+existing_parent_ready (GObject      *source,
+                      GAsyncResult *result,
+                      gpointer      user_data)
+{
+    ExistingParentSearch *search = user_data;
+    NemoWindowSlot *slot = g_weak_ref_get (&search->slot);
+    NemoWindow *window = g_weak_ref_get (&search->window);
+    GError *error = NULL;
+    GFile *parent;
+
+    parent = nemo_find_existing_uri_in_hierarchy_finish (G_FILE (source), result, &error);
+    if (slot != NULL &&
+        g_object_get_data (G_OBJECT (slot), EXISTING_PARENT_CANCELLABLE) == search->cancellable) {
+        g_object_unref (g_object_steal_data (G_OBJECT (slot), EXISTING_PARENT_CANCELLABLE));
+
+        /* The cancellable is also a generation token: navigating away and
+         * back must not make an old completion valid again. */
+        if (window != NULL && !g_cancellable_is_cancelled (search->cancellable) &&
+            error == NULL && slot->pane != NULL &&
+            !gtk_widget_in_destruction (GTK_WIDGET (slot)) &&
+            !gtk_widget_in_destruction (GTK_WIDGET (window)) &&
+            nemo_window_slot_get_window (slot) == window &&
+            slot->pending_location == NULL &&
+            slot->viewed_file == search->viewed_file &&
+            slot->location != NULL && g_file_equal (slot->location, search->location)) {
+            if (parent != NULL) {
+                if (slot == slot->pane->active_slot) {
+                    nemo_path_bar_clear_buttons (NEMO_PATH_BAR (slot->pane->path_bar));
+                }
+                nemo_window_slot_open_location (slot, parent, 0);
+            } else {
+                nemo_window_slot_go_home (slot, FALSE);
+            }
+        }
+    }
+
+    g_clear_object (&parent);
+    g_clear_error (&error);
+    g_clear_object (&slot);
+    g_clear_object (&window);
+    g_weak_ref_clear (&search->slot);
+    g_weak_ref_clear (&search->window);
+    nemo_file_unref (search->viewed_file);
+    g_object_unref (search->location);
+    g_object_unref (search->cancellable);
+    g_free (search);
+}
+
+static void
+recover_existing_parent (NemoWindowSlot *slot,
+                         NemoFile      *file)
+{
+    ExistingParentSearch *search;
+    NemoWindow *window;
+    GFile *location, *parent;
+
+    /* Do not interrupt navigation already requested by the user, or restart a
+     * pending search on repeated disappearance notifications. */
+    if (slot->pending_location != NULL || slot->location == NULL ||
+        g_object_get_data (G_OBJECT (slot), EXISTING_PARENT_CANCELLABLE) != NULL) {
+        return;
+    }
+
+    end_location_change (slot);
+    location = nemo_file_get_location (file);
+    parent = g_file_get_parent (location);
+    g_object_unref (location);
+    if (parent == NULL) {
+        nemo_window_slot_go_home (slot, FALSE);
+        return;
+    }
+
+    window = nemo_window_slot_get_window (slot);
+    search = g_new0 (ExistingParentSearch, 1);
+    g_weak_ref_init (&search->slot, slot);
+    g_weak_ref_init (&search->window, window);
+    search->viewed_file = nemo_file_ref (file);
+    search->location = g_object_ref (slot->location);
+    search->cancellable = g_cancellable_new ();
+    g_object_set_data_full (G_OBJECT (slot), EXISTING_PARENT_CANCELLABLE,
+                            g_object_ref (search->cancellable),
+                            cancel_existing_parent_cancellable);
+    g_signal_connect_object (slot, "destroy", G_CALLBACK (g_cancellable_cancel),
+                             search->cancellable, G_CONNECT_SWAPPED);
+    g_signal_connect_object (window, "destroy", G_CALLBACK (g_cancellable_cancel),
+                             search->cancellable, G_CONNECT_SWAPPED);
+    nemo_find_existing_uri_in_hierarchy_async (parent, search->cancellable,
+                                               existing_parent_ready, search);
+    g_object_unref (parent);
+}
+#endif
+
 static void
 viewed_file_changed_callback (NemoFile *file,
                               NemoWindowSlot *slot)
@@ -310,6 +427,9 @@ viewed_file_changed_callback (NemoFile *file,
         * file was never seen in the first place.
         */
         if (slot->viewed_file_seen) {
+#ifdef NEMO_SMPL
+            recover_existing_parent (slot, file);
+#else
             /* auto-show existing parent. */
             GFile *go_to_file, *parent, *location;
 
@@ -354,8 +474,12 @@ viewed_file_changed_callback (NemoFile *file,
             } else {
                 nemo_window_slot_go_home (slot, FALSE);
             }
+#endif
         }
     } else {
+#ifdef NEMO_SMPL
+        cancel_existing_parent_search (slot);
+#endif
         new_location = nemo_file_get_location (file);
 
         /* If the file was renamed, update location and/or
@@ -407,6 +531,9 @@ cancel_viewed_file_changed_callback (NemoWindowSlot *slot)
 {
         NemoFile *file;
 
+#ifdef NEMO_SMPL
+        cancel_existing_parent_search (slot);
+#endif
         file = slot->viewed_file;
         if (file != NULL) {
                 g_signal_handlers_disconnect_by_func (G_OBJECT (file),
@@ -775,6 +902,9 @@ begin_location_change (NemoWindowSlot        *slot,
                   || type == NEMO_LOCATION_CHANGE_FORWARD
                   || distance == 0);
 
+#ifdef NEMO_SMPL
+        cancel_existing_parent_search (slot);
+#endif
 	/* If there is no new selection and the new location is
 	 * a (grand)parent of the old location then we automatically
 	 * select the folder the previous location was in */
@@ -1865,6 +1995,9 @@ cancel_location_change (NemoWindowSlot *slot)
 {
 	GList *selection;
 
+#ifdef NEMO_SMPL
+        cancel_existing_parent_search (slot);
+#endif
         if (slot->pending_location != NULL
             && slot->location != NULL
             && slot->content_view != NULL) {

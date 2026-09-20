@@ -88,6 +88,11 @@ struct _NemoQuickPreview {
 	gboolean     seek_lock;
 	gboolean     video_muted;
 	double       video_fps;
+#ifdef NEMO_SMPL
+	NemoPreviewMediaFrames *media_frames;
+	gboolean     media_ready;
+	gboolean     video_playing;
+#endif
 
 	/* Frame rendering (appsink → cairo) */
 	cairo_surface_t *frame_surface;
@@ -124,6 +129,12 @@ struct _NemoQuickPreview {
 	GtkWidget   *search_next_button;
 	GtkWidget   *search_match_label;
 	GtkWidget   *search_header_btn;  /* header-bar shortcut button */
+#ifdef NEMO_SMPL
+	GtkWidget   *status_label;
+	GCancellable *content_cancel;
+	GCancellable *navigation_cancel;
+	gboolean     destroyed;
+#endif
 };
 
 G_DEFINE_TYPE (NemoQuickPreview, nemo_quick_preview, GTK_TYPE_WINDOW)
@@ -138,6 +149,56 @@ static NemoQuickPreview *_instance = NULL;
 static void     preview_clear          (NemoQuickPreview *self);
 static void     preview_show_paged     (NemoQuickPreview *self, GFile *file, NemoViewerMode mode);
 static void     preview_show_image     (NemoQuickPreview *self, GFile *file);
+
+#ifdef NEMO_SMPL
+static void
+preview_set_status (NemoQuickPreview *self, const char *message)
+{
+	gtk_label_set_text (GTK_LABEL (self->status_label), message);
+	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "status");
+}
+
+static void
+image_load_failed (NemoImageViewer *viewer, const char *message,
+		   NemoQuickPreview *self)
+{
+	if (!self->destroyed && self->mode == PREVIEW_IMAGE && self->current_file != NULL) {
+		preview_show_paged (self, self->current_file, NEMO_VIEWER_MODE_HEX);
+		gtk_widget_set_tooltip_text (GTK_WIDGET (self->paged_viewer), message);
+	}
+}
+
+typedef struct {
+	GWeakRef preview;
+	GFile *file;
+} PreviewRequest;
+
+static PreviewRequest *
+preview_request_new (NemoQuickPreview *self, GFile *file)
+{
+	PreviewRequest *request = g_new0 (PreviewRequest, 1);
+	g_weak_ref_init (&request->preview, self);
+	request->file = g_object_ref (file);
+	return request;
+}
+
+static void
+preview_request_free (PreviewRequest *request)
+{
+	g_weak_ref_clear (&request->preview);
+	g_object_unref (request->file);
+	g_free (request);
+}
+
+static void
+cancel_request (GCancellable **cancellable)
+{
+	if (*cancellable != NULL) {
+		g_cancellable_cancel (*cancellable);
+		g_clear_object (cancellable);
+	}
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Search helpers                                                     */
@@ -177,6 +238,21 @@ update_search_match_label (NemoQuickPreview *self, gboolean found)
 
 	ctx = gtk_widget_get_style_context (self->search_match_label);
 	needle = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
+#ifdef NEMO_SMPL
+	const GError *error = nemo_paged_viewer_search_get_error (self->paged_viewer);
+	gtk_widget_set_tooltip_text (self->search_match_label, error != NULL ? error->message : NULL);
+	if (error != NULL) {
+		gtk_label_set_text (GTK_LABEL (self->search_match_label), _("Search failed"));
+		gtk_style_context_add_class (ctx, "search-no-match");
+		return;
+	}
+	found = nemo_paged_viewer_search_has_match (self->paged_viewer);
+	if (nemo_paged_viewer_search_is_pending (self->paged_viewer)) {
+		gtk_label_set_text (GTK_LABEL (self->search_match_label), _("Searching..."));
+		gtk_style_context_remove_class (ctx, "search-no-match");
+		return;
+	}
+#endif
 
 	if (!needle || needle[0] == '\0' || found) {
 		gtk_label_set_text (GTK_LABEL (self->search_match_label), "");
@@ -187,6 +263,26 @@ update_search_match_label (NemoQuickPreview *self, gboolean found)
 		gtk_style_context_add_class (ctx, "search-no-match");
 	}
 }
+
+#ifdef NEMO_SMPL
+static void
+paged_search_changed (NemoPagedViewer *viewer, NemoQuickPreview *self)
+{
+	update_search_match_label (self, nemo_paged_viewer_search_has_match (viewer));
+}
+
+static void
+paged_load_finished (NemoPagedViewer *viewer, GError *error, NemoQuickPreview *self)
+{
+	if (error == NULL && (self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX) &&
+	    gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
+		const char *text = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
+		nemo_paged_viewer_search_set_needle (viewer, text);
+		if (text[0] != '\0')
+			nemo_paged_viewer_search_find_next (viewer);
+	}
+}
+#endif
 
 static void
 on_search_changed (GtkSearchEntry *entry, gpointer data)
@@ -237,9 +333,11 @@ on_search_header_btn_clicked (GtkButton *button, gpointer data)
 static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
 static void     media_stop             (NemoQuickPreview *self);
 static gboolean video_area_draw_cb     (GtkWidget *widget, cairo_t *cr, gpointer data);
+#ifndef NEMO_SMPL
 static GstFlowReturn new_sample_cb     (GstAppSink *sink, gpointer data);
 static GstFlowReturn new_preroll_cb    (GstAppSink *sink, gpointer data);
 static gboolean redraw_idle_cb         (gpointer data);
+#endif
 static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
 static gboolean seek_press_cb          (GtkWidget *widget, GdkEventButton *event, gpointer data);
@@ -296,6 +394,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 #ifdef HAVE_GSTREAMER
 		/* In video preview: Left/Right seek ±20s, clamped to [0, duration]. */
 		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
+#ifdef NEMO_SMPL
+			if (!self->media_ready)
+				return GDK_EVENT_STOP;
+#endif
 			gint64 pos = 0, dur = -1;
 			gint64 delta = (event->keyval == GDK_KEY_Right)
 			                 ? (gint64) 20 * GST_SECOND
@@ -367,9 +469,20 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			                    event->keyval == GDK_KEY_bracketright);
 
 			/* Pause first if playing */
+#ifdef NEMO_SMPL
+			if (!self->media_ready)
+				return GDK_EVENT_STOP;
+			state = self->video_playing ? GST_STATE_PLAYING : GST_STATE_PAUSED;
+#else
 			gst_element_get_state (self->pipeline, &state, NULL, 0);
+#endif
 			if (state == GST_STATE_PLAYING) {
+#ifdef NEMO_SMPL
+				self->video_playing = FALSE;
+				nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED);
+#else
 				gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
+#endif
 				gtk_button_set_image (GTK_BUTTON (self->play_btn),
 					gtk_image_new_from_icon_name (
 						"media-playback-start-symbolic",
@@ -548,6 +661,12 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 
 	/* Stack for switching between views */
 	self->stack = gtk_stack_new ();
+#ifdef NEMO_SMPL
+	self->status_label = gtk_label_new (_("Loading..."));
+	gtk_label_set_line_wrap (GTK_LABEL (self->status_label), TRUE);
+	gtk_label_set_max_width_chars (GTK_LABEL (self->status_label), 70);
+	gtk_stack_add_named (GTK_STACK (self->stack), self->status_label, "status");
+#endif
 	gtk_stack_set_transition_type (GTK_STACK (self->stack),
 	                               GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_set_transition_duration (GTK_STACK (self->stack), 100);
@@ -610,6 +729,12 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 
 	/* --- Paged viewer (text + hex, handles files of any size) --- */
 	self->paged_viewer = nemo_paged_viewer_new ();
+#ifdef NEMO_SMPL
+	g_signal_connect (self->paged_viewer, "search-changed",
+			  G_CALLBACK (paged_search_changed), self);
+	g_signal_connect (self->paged_viewer, "load-finished",
+			  G_CALLBACK (paged_load_finished), self);
+#endif
 	gtk_stack_add_named (GTK_STACK (self->stack),
 	                     GTK_WIDGET (self->paged_viewer), "paged");
 
@@ -617,6 +742,10 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	self->image_viewer = nemo_image_viewer_new ();
 	nemo_image_viewer_set_fit (self->image_viewer, TRUE);
 	nemo_image_viewer_set_show_controls (self->image_viewer, FALSE);
+#ifdef NEMO_SMPL
+	g_signal_connect (self->image_viewer, "load-failed",
+			  G_CALLBACK (image_load_failed), self);
+#endif
 	gtk_stack_add_named (GTK_STACK (self->stack),
 	                     GTK_WIDGET (self->image_viewer), "image");
 
@@ -728,11 +857,38 @@ nemo_quick_preview_finalize (GObject *object)
 	G_OBJECT_CLASS (nemo_quick_preview_parent_class)->finalize (object);
 }
 
+#ifdef NEMO_SMPL
+static void
+nemo_quick_preview_destroy (GtkWidget *widget)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (widget);
+
+	if (!self->destroyed) {
+		self->destroyed = TRUE;
+		g_signal_handlers_disconnect_by_data (self->paged_viewer, self);
+		g_signal_handlers_disconnect_by_data (self->image_viewer, self);
+		g_signal_handlers_disconnect_by_data (self->dir_analyzer, self);
+		preview_clear (self);
+		navigation_clear (self);
+		if (self == _instance)
+			_instance = NULL;
+		if (self->parent_window != NULL)
+			g_object_remove_weak_pointer (G_OBJECT (self->parent_window),
+						     (gpointer *) &self->parent_window);
+		self->parent_window = NULL;
+	}
+	GTK_WIDGET_CLASS (nemo_quick_preview_parent_class)->destroy (widget);
+}
+#endif
+
 static void
 nemo_quick_preview_class_init (NemoQuickPreviewClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
 	object_class->finalize = nemo_quick_preview_finalize;
+#ifdef NEMO_SMPL
+	GTK_WIDGET_CLASS (klass)->destroy = nemo_quick_preview_destroy;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -759,6 +915,9 @@ nemo_quick_preview_get_instance (void)
 static void
 preview_clear (NemoQuickPreview *self)
 {
+#ifdef NEMO_SMPL
+	cancel_request (&self->content_cancel);
+#endif
 #ifdef HAVE_GSTREAMER
 	media_stop (self);
 #endif
@@ -778,6 +937,9 @@ preview_clear (NemoQuickPreview *self)
 static void
 navigation_clear (NemoQuickPreview *self)
 {
+#ifdef NEMO_SMPL
+	cancel_request (&self->navigation_cancel);
+#endif
 	g_clear_object (&self->current_file);
 	g_clear_object (&self->current_dir);
 	g_clear_pointer (&self->dir_files, g_ptr_array_unref);
@@ -801,9 +963,105 @@ compare_files_by_name (gconstpointer a, gconstpointer b)
 	return result;
 }
 
+#ifdef NEMO_SMPL
+static void
+directory_list_thread (GTask *task, gpointer source, gpointer task_data,
+		       GCancellable *cancellable)
+{
+	PreviewRequest *request = task_data;
+	GFile *parent = g_file_get_parent (request->file);
+	GFileEnumerator *enumerator;
+	GFileInfo *info;
+	GError *error = NULL;
+	GPtrArray *files = g_ptr_array_new_with_free_func (g_object_unref);
+	gboolean found = FALSE;
+
+	if (parent != NULL) {
+		enumerator = g_file_enumerate_children (parent,
+			G_FILE_ATTRIBUTE_STANDARD_NAME ","
+			G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN,
+			G_FILE_QUERY_INFO_NONE, cancellable, &error);
+		if (enumerator != NULL) {
+			while ((info = g_file_enumerator_next_file (enumerator, cancellable, &error)) != NULL) {
+				if (!g_file_info_get_is_hidden (info)) {
+					GFile *child = g_file_get_child (parent, g_file_info_get_name (info));
+					found |= g_file_equal (child, request->file);
+					g_ptr_array_add (files, child);
+				}
+				g_object_unref (info);
+				if (g_cancellable_set_error_if_cancelled (cancellable, &error))
+					break;
+			}
+			g_file_enumerator_close (enumerator, NULL, NULL);
+			g_object_unref (enumerator);
+		}
+		g_object_unref (parent);
+	}
+	if (error != NULL) {
+		g_ptr_array_unref (files);
+		g_task_return_error (task, error);
+		return;
+	}
+	if (!found)
+		g_ptr_array_add (files, g_object_ref (request->file));
+	g_ptr_array_sort (files, compare_files_by_name);
+	g_task_return_pointer (task, files, (GDestroyNotify) g_ptr_array_unref);
+}
+
+static void
+directory_list_ready (GObject *source, GAsyncResult *result, gpointer data)
+{
+	GTask *task = G_TASK (result);
+	PreviewRequest *request = g_task_get_task_data (task);
+	NemoQuickPreview *self = g_weak_ref_get (&request->preview);
+	GError *error = NULL;
+	GPtrArray *files = g_task_propagate_pointer (task, &error);
+
+	if (self != NULL && !self->destroyed &&
+	    self->navigation_cancel == g_task_get_cancellable (task) &&
+	    !g_cancellable_is_cancelled (self->navigation_cancel)) {
+		if (files != NULL) {
+			g_clear_pointer (&self->dir_files, g_ptr_array_unref);
+			self->dir_files = g_steal_pointer (&files);
+			for (guint i = 0; i < self->dir_files->len; i++) {
+				if (g_file_equal (g_ptr_array_index (self->dir_files, i), self->current_file)) {
+					self->current_index = i;
+					break;
+				}
+			}
+			gtk_widget_set_tooltip_text (self->counter_label, NULL);
+		} else {
+			gtk_widget_set_tooltip_text (self->counter_label, error->message);
+			g_debug ("Quick preview navigation: %s", error->message);
+		}
+		update_navigation_ui (self);
+		if (error != NULL)
+			gtk_label_set_text (GTK_LABEL (self->counter_label), _("Navigation unavailable"));
+	}
+	g_clear_pointer (&files, g_ptr_array_unref);
+	g_clear_error (&error);
+	g_clear_object (&self);
+}
+#endif
+
 static void
 populate_dir_file_list (NemoQuickPreview *self, GFile *file)
 {
+#ifdef NEMO_SMPL
+	GTask *task;
+
+	navigation_clear (self);
+	self->current_file = g_object_ref (file);
+	self->current_dir = g_file_get_parent (file);
+	self->navigation_cancel = g_cancellable_new ();
+	update_navigation_ui (self);
+	gtk_label_set_text (GTK_LABEL (self->counter_label), _("Loading..."));
+	task = g_task_new (NULL, self->navigation_cancel, directory_list_ready, NULL);
+	g_task_set_task_data (task, preview_request_new (self, file),
+			     (GDestroyNotify) preview_request_free);
+	nemo_preview_run_task (task, directory_list_thread);
+	g_object_unref (task);
+#else
 	GFile *parent;
 	GFileEnumerator *enumerator;
 	GFileInfo *child_info;
@@ -875,6 +1133,7 @@ populate_dir_file_list (NemoQuickPreview *self, GFile *file)
 			}
 		}
 	}
+#endif
 }
 
 static void
@@ -902,31 +1161,13 @@ update_navigation_ui (NemoQuickPreview *self)
 }
 
 static void
-load_file_content (NemoQuickPreview *self, GFile *file)
+show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 {
-	GFileInfo *info;
 	const gchar *content_type;
 	const gchar *display_name;
 	gchar *size_str;
 	goffset size;
 	char *subtitle;
-
-	preview_clear (self);
-
-	/* Hide search button; preview_show_paged() re-shows it for text/hex */
-	gtk_widget_hide (self->search_header_btn);
-
-	/* Query file info */
-	info = g_file_query_info (file,
-	                          G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
-	                          G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME ","
-	                          G_FILE_ATTRIBUTE_STANDARD_SIZE ","
-	                          G_FILE_ATTRIBUTE_STANDARD_TYPE,
-	                          G_FILE_QUERY_INFO_NONE,
-	                          NULL, NULL);
-
-	if (info == NULL)
-		return;
 
 	content_type = g_file_info_get_content_type (info);
 	display_name = g_file_info_get_display_name (info);
@@ -940,6 +1181,13 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 	if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY) {
 		char *path = g_file_get_path (file);
 
+#ifdef NEMO_SMPL
+		if (path == NULL) {
+			preview_set_status (self, _("Folder analysis requires a local filesystem path."));
+			gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
+			return;
+		}
+#endif
 		gtk_header_bar_set_subtitle (
 			GTK_HEADER_BAR (self->header_bar),
 			_("Directory — scanning…"));
@@ -954,7 +1202,6 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 
 		g_free (path);
-		g_object_unref (info);
 		return;
 	}
 
@@ -983,7 +1230,81 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 		preview_show_paged (self, file, NEMO_VIEWER_MODE_HEX);
 	}
 
-	g_object_unref (info);
+}
+
+#ifdef NEMO_SMPL
+static void
+file_info_thread (GTask *task, gpointer source, gpointer task_data,
+		  GCancellable *cancellable)
+{
+	PreviewRequest *request = task_data;
+	GError *error = NULL;
+	GFileInfo *info = g_file_query_info (request->file,
+		G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+		G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME ","
+		G_FILE_ATTRIBUTE_STANDARD_SIZE ","
+		G_FILE_ATTRIBUTE_STANDARD_TYPE,
+		G_FILE_QUERY_INFO_NONE, cancellable, &error);
+	if (info != NULL)
+		g_task_return_pointer (task, info, g_object_unref);
+	else
+		g_task_return_error (task, error);
+}
+
+static void
+file_info_ready (GObject *source, GAsyncResult *result, gpointer data)
+{
+	GTask *task = G_TASK (result);
+	PreviewRequest *request = g_task_get_task_data (task);
+	NemoQuickPreview *self = g_weak_ref_get (&request->preview);
+	GError *error = NULL;
+	GFileInfo *info = g_task_propagate_pointer (task, &error);
+
+	if (self != NULL && !self->destroyed &&
+	    self->content_cancel == g_task_get_cancellable (task) &&
+	    !g_cancellable_is_cancelled (self->content_cancel)) {
+		if (info != NULL)
+			show_file_content (self, request->file, info);
+		else
+			preview_set_status (self, error->message);
+	}
+	g_clear_object (&info);
+	g_clear_error (&error);
+	g_clear_object (&self);
+}
+#endif
+
+static void
+load_file_content (NemoQuickPreview *self, GFile *file)
+{
+	preview_clear (self);
+	gtk_widget_hide (self->search_header_btn);
+#ifdef NEMO_SMPL
+	GTask *task;
+	char *name = g_file_get_basename (file);
+
+	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar), name);
+	gtk_header_bar_set_subtitle (GTK_HEADER_BAR (self->header_bar), "");
+	g_free (name);
+	preview_set_status (self, _("Loading..."));
+	self->content_cancel = g_cancellable_new ();
+	task = g_task_new (NULL, self->content_cancel, file_info_ready, NULL);
+	g_task_set_task_data (task, preview_request_new (self, file),
+			     (GDestroyNotify) preview_request_free);
+	nemo_preview_run_task (task, file_info_thread);
+	g_object_unref (task);
+#else
+	GFileInfo *info = g_file_query_info (file,
+		G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+		G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME ","
+		G_FILE_ATTRIBUTE_STANDARD_SIZE ","
+		G_FILE_ATTRIBUTE_STANDARD_TYPE,
+		G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	if (info != NULL) {
+		show_file_content (self, file, info);
+		g_object_unref (info);
+	}
+#endif
 }
 
 static void
@@ -1018,6 +1339,11 @@ navigate_to_offset (NemoQuickPreview *self, gint offset)
 static void
 preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 {
+#ifdef NEMO_SMPL
+	nemo_paged_viewer_set_mode (self->paged_viewer, mode);
+	gtk_widget_set_tooltip_text (GTK_WIDGET (self->paged_viewer), NULL);
+	nemo_paged_viewer_open_location (self->paged_viewer, file);
+#else
 	char *path;
 
 	path = g_file_get_path (file);
@@ -1032,6 +1358,7 @@ preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 	}
 
 	g_free (path);
+#endif
 
 	self->mode = (mode == NEMO_VIEWER_MODE_TEXT) ? PREVIEW_TEXT : PREVIEW_HEX;
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "paged");
@@ -1040,6 +1367,7 @@ preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 	gtk_widget_show (self->search_header_btn);
 
 	/* If a search is already active, re-run it on the new file */
+#ifndef NEMO_SMPL
 	if (gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
 		const gchar *text = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
 		if (text && text[0] != '\0') {
@@ -1048,6 +1376,7 @@ preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 			update_search_match_label (self, found);
 		}
 	}
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1057,6 +1386,9 @@ preview_show_paged (NemoQuickPreview *self, GFile *file, NemoViewerMode mode)
 static void
 preview_show_image (NemoQuickPreview *self, GFile *file)
 {
+#ifdef NEMO_SMPL
+	nemo_image_viewer_load_location (self->image_viewer, file);
+#else
 	char *path;
 	GError *error = NULL;
 
@@ -1076,6 +1408,7 @@ preview_show_image (NemoQuickPreview *self, GFile *file)
 	}
 
 	g_free (path);
+#endif
 
 	self->mode = PREVIEW_IMAGE;
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "image");
@@ -1093,6 +1426,11 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
 
 	switch (GST_MESSAGE_TYPE (message)) {
+#ifdef NEMO_SMPL
+	case GST_MESSAGE_ASYNC_DONE:
+		self->media_ready = TRUE;
+		break;
+#endif
 	case GST_MESSAGE_EOS:
 		/* Loop playback */
 		gst_element_seek_simple (self->pipeline, GST_FORMAT_TIME,
@@ -1102,8 +1440,13 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 		GError *err = NULL;
 		gchar *dbg = NULL;
 		gst_message_parse_error (message, &err, &dbg);
+#ifdef NEMO_SMPL
+		preview_set_status (self, err->message);
+		g_debug ("Quick preview GStreamer error: %s", err->message);
+#else
 		g_warning ("Quick preview GStreamer error: %s\n  debug: %s",
 		           err->message, dbg ? dbg : "(none)");
+#endif
 		g_error_free (err);
 		g_free (dbg);
 		media_stop (self);
@@ -1154,6 +1497,10 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 
 	w = GST_VIDEO_INFO_WIDTH (&vinfo);
 	h = GST_VIDEO_INFO_HEIGHT (&vinfo);
+#ifdef NEMO_SMPL
+	if (GST_VIDEO_INFO_FPS_N (&vinfo) > 0 && GST_VIDEO_INFO_FPS_D (&vinfo) > 0)
+		self->video_fps = (double) GST_VIDEO_INFO_FPS_N (&vinfo) / GST_VIDEO_INFO_FPS_D (&vinfo);
+#endif
 
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
 		gst_sample_unref (sample);
@@ -1183,6 +1530,10 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 	self->video_width = w;
 	self->video_height = h;
 
+#ifdef NEMO_SMPL
+	g_mutex_unlock (&self->frame_mutex);
+	gtk_widget_queue_draw (self->video_area);
+#else
 	/* Marshal the redraw to the main thread. GTK/GDK is NOT thread-safe
 	 * and calling gtk_widget_queue_draw() directly from the GStreamer
 	 * streaming thread races with GDK's window invalidation region on
@@ -1195,8 +1546,16 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 		                                        g_object_unref);
 	}
 	g_mutex_unlock (&self->frame_mutex);
+#endif
 }
 
+#ifdef NEMO_SMPL
+static void
+consume_video_sample (GObject *widget, GstSample *sample)
+{
+	process_video_sample (NEMO_QUICK_PREVIEW (widget), sample);
+}
+#else
 static GstFlowReturn
 new_sample_cb (GstAppSink *sink, gpointer data)
 {
@@ -1229,6 +1588,7 @@ redraw_idle_cb (gpointer data)
 
 	return G_SOURCE_REMOVE;
 }
+#endif
 
 static void
 play_pause_clicked_cb (GtkButton *btn, gpointer data)
@@ -1240,15 +1600,26 @@ play_pause_clicked_cb (GtkButton *btn, gpointer data)
 	if (self->pipeline == NULL)
 		return;
 
+#ifdef NEMO_SMPL
+	state = self->video_playing ? GST_STATE_PLAYING : GST_STATE_PAUSED;
+	self->video_playing = !self->video_playing;
+	nemo_preview_media_set_state_async (self->pipeline,
+		self->video_playing ? GST_STATE_PLAYING : GST_STATE_PAUSED);
+#else
 	gst_element_get_state (self->pipeline, &state, NULL, 0);
+#endif
 
 	if (state == GST_STATE_PLAYING) {
+#ifndef NEMO_SMPL
 		gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
+#endif
 		img = gtk_image_new_from_icon_name (
 			"media-playback-start-symbolic",
 			GTK_ICON_SIZE_SMALL_TOOLBAR);
 	} else {
+#ifndef NEMO_SMPL
 		gst_element_set_state (self->pipeline, GST_STATE_PLAYING);
+#endif
 		img = gtk_image_new_from_icon_name (
 			"media-playback-pause-symbolic",
 			GTK_ICON_SIZE_SMALL_TOOLBAR);
@@ -1287,6 +1658,10 @@ seek_position_update_cb (gpointer data)
 
 	if (self->seek_lock)
 		return G_SOURCE_CONTINUE;
+#ifdef NEMO_SMPL
+	if (!self->media_ready)
+		return G_SOURCE_CONTINUE;
+#endif
 
 	if (!gst_element_query_position (self->pipeline, GST_FORMAT_TIME,
 	                                 &pos))
@@ -1339,6 +1714,10 @@ seek_release_cb (GtkWidget *widget, GdkEventButton *event, gpointer data)
 
 	if (self->pipeline == NULL)
 		return FALSE;
+#ifdef NEMO_SMPL
+	if (!self->media_ready)
+		return FALSE;
+#endif
 
 	fraction = gtk_range_get_value (GTK_RANGE (self->seek_scale));
 	if (gst_element_query_duration (self->pipeline, GST_FORMAT_TIME,
@@ -1432,10 +1811,17 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 	              NULL);
 	gst_caps_unref (caps);
 
+#ifdef NEMO_SMPL
+	self->media_frames = nemo_preview_media_connect_sink (
+		appsink, G_OBJECT (self), consume_video_sample);
+	self->media_ready = FALSE;
+	self->video_playing = FALSE;
+#else
 	g_signal_connect (appsink, "new-sample",
 	                  G_CALLBACK (new_sample_cb), self);
 	g_signal_connect (appsink, "new-preroll",
 	                  G_CALLBACK (new_preroll_cb), self);
+#endif
 
 	g_object_set (self->pipeline, "video-sink", appsink, NULL);
 
@@ -1478,6 +1864,7 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 
 	/* Detect framerate from the first video stream */
 	self->video_fps = 25.0;  /* default fallback */
+#ifndef NEMO_SMPL
 	{
 		GstPad *pad = NULL;
 		g_signal_emit_by_name (self->pipeline, "get-video-pad", 0, &pad);
@@ -1497,21 +1884,39 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 			gst_object_unref (pad);
 		}
 	}
+#endif
 
 	/* Start PAUSED — user clicks Play to begin */
+#ifdef NEMO_SMPL
+	if (!nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED)) {
+		media_stop (self);
+		preview_set_status (self, _("Media preview is still closing another file. Try again shortly."));
+	}
+#else
 	gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
+#endif
 }
 
 static void
 media_stop (NemoQuickPreview *self)
 {
+#ifdef NEMO_SMPL
+	nemo_preview_media_frames_stop (self->media_frames);
+	self->media_frames = NULL;
+	self->media_ready = FALSE;
+	self->video_playing = FALSE;
+#endif
 	if (self->seek_update_id > 0) {
 		g_source_remove (self->seek_update_id);
 		self->seek_update_id = 0;
 	}
 
 	if (self->pipeline != NULL) {
+#ifdef NEMO_SMPL
+		nemo_preview_media_set_state_async (self->pipeline, GST_STATE_NULL);
+#else
 		gst_element_set_state (self->pipeline, GST_STATE_NULL);
+#endif
 		gst_object_unref (self->pipeline);
 		self->pipeline = NULL;
 	}
@@ -1551,16 +1956,26 @@ nemo_quick_preview_show_file (NemoQuickPreview *self,
 	g_return_if_fail (NEMO_IS_QUICK_PREVIEW (self));
 	g_return_if_fail (G_IS_FILE (file));
 
-	/* Build the directory file list for navigation */
-	populate_dir_file_list (self, file);
-
 	/* In the modal quick preview, make sure the toplevel exists before
 	 * media setup tries to create a native child window for video. */
+#ifdef NEMO_SMPL
+	g_return_if_fail (!self->destroyed);
+	if (self->parent_window != NULL)
+		g_object_remove_weak_pointer (G_OBJECT (self->parent_window),
+					     (gpointer *) &self->parent_window);
+#endif
 	self->parent_window = parent;
+#ifdef NEMO_SMPL
+	if (parent != NULL)
+		g_object_add_weak_pointer (G_OBJECT (parent), (gpointer *) &self->parent_window);
+#endif
 	if (parent != NULL)
 		gtk_window_set_transient_for (GTK_WINDOW (self), parent);
 	gtk_widget_show_all (GTK_WIDGET (self));
 	gtk_window_present (GTK_WINDOW (self));
+
+	/* Directory discovery and content loading run independently. */
+	populate_dir_file_list (self, file);
 
 	/* Load the file content */
 	load_file_content (self, file);
@@ -1583,5 +1998,10 @@ nemo_quick_preview_dismiss (NemoQuickPreview *self)
 		gtk_window_present (self->parent_window);
 	}
 
+#ifdef NEMO_SMPL
+	if (self->parent_window != NULL)
+		g_object_remove_weak_pointer (G_OBJECT (self->parent_window),
+					     (gpointer *) &self->parent_window);
+#endif
 	self->parent_window = NULL;
 }

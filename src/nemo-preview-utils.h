@@ -18,7 +18,10 @@
 #ifndef NEMO_PREVIEW_UTILS_H
 #define NEMO_PREVIEW_UTILS_H
 
-#include <glib.h>
+#include <gio/gio.h>
+#if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+#include <gst/gst.h>
+#endif
 
 G_BEGIN_DECLS
 
@@ -28,6 +31,29 @@ gboolean nemo_preview_mime_is_text  (const gchar *mime_type);
 gboolean nemo_preview_mime_is_video (const gchar *mime_type);
 gboolean nemo_preview_mime_is_audio (const gchar *mime_type);
 gboolean nemo_preview_mime_is_media (const gchar *mime_type);
+
+#ifdef NEMO_SMPL
+/* Workers must not own widgets or acquire I/O resources before dispatch.
+ * Cancellation prunes superseded pending work; an actual worker slot remains
+ * occupied until its function returns, even if native I/O ignores cancellation. */
+void nemo_preview_run_task (GTask *task, GTaskThreadFunc worker);
+#endif
+
+#if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+/* State changes are serialized per pipeline. FALSE means the bounded
+ * preview queue is full; the caller should show a retryable error. */
+gboolean nemo_preview_media_set_state_async (GstElement *pipeline, GstState state);
+
+typedef struct _NemoPreviewMediaFrames NemoPreviewMediaFrames;
+typedef void (*NemoPreviewSampleFunc) (GObject *widget, GstSample *sample);
+
+/* Delivers at most one pending frame on the main thread. The callback owns
+ * the sample. stop() discards pending frames and releases the handle. */
+NemoPreviewMediaFrames *nemo_preview_media_connect_sink (GstElement *sink,
+							GObject *widget,
+							NemoPreviewSampleFunc consume);
+void nemo_preview_media_frames_stop (NemoPreviewMediaFrames *frames);
+#endif
 
 G_END_DECLS
 

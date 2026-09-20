@@ -39,6 +39,9 @@
 
 #ifdef HAVE_EXIF
 #include <libexif/exif-data.h>
+#ifdef NEMO_SMPL
+#include <libexif/exif-loader.h>
+#endif
 #include <libexif/exif-utils.h>
 #endif
 
@@ -74,6 +77,11 @@ struct _NemoPreviewPane
 	GstElement	*pipeline;
 	guint		 bus_watch_id;
 	guint		 seek_update_id;
+#ifdef NEMO_SMPL
+	NemoPreviewMediaFrames *video_frames;
+	gboolean	 video_playing;
+	gboolean	 video_ready;
+#endif
 	cairo_surface_t	*frame_surface;
 	GMutex		 frame_mutex;
 	gint		 video_width;
@@ -106,7 +114,9 @@ struct _NemoPreviewPane
 	GtkWidget	*gps_map_event_box;
 	double		 gps_lat;
 	double		 gps_lon;
+#ifndef NEMO_SMPL
 	GCancellable	*map_cancellable;
+#endif
 
 	gboolean	 details_vpaned_set;
 
@@ -114,6 +124,8 @@ struct _NemoPreviewPane
 	NemoFile	*current_file;
 	GCancellable	*cancellable;
 	gulong		 file_changed_id;
+	guint64		 generation;
+	gboolean	 destroyed;
 };
 
 G_DEFINE_TYPE (NemoPreviewPane, nemo_preview_pane, GTK_TYPE_BOX)
@@ -124,11 +136,92 @@ static void stop_video (NemoPreviewPane *self);
 #endif
 
 static void
+cancel_pending_loads (NemoPreviewPane *self)
+{
+	self->generation++;
+	if (self->cancellable != NULL) {
+		g_cancellable_cancel (self->cancellable);
+		g_clear_object (&self->cancellable);
+	}
+#ifndef NEMO_SMPL
+	if (self->map_cancellable != NULL) {
+		g_cancellable_cancel (self->map_cancellable);
+		g_clear_object (&self->map_cancellable);
+	}
+#endif
+}
+
+#ifdef NEMO_SMPL
+typedef struct {
+	GWeakRef pane;
+	guint64 generation;
+	GFile *location;
+	char *cache_path;
+	double pixel_x;
+	double pixel_y;
+} PaneLoadData;
+
+static PaneLoadData *
+pane_load_data_new (NemoPreviewPane *self, GFile *location)
+{
+	PaneLoadData *data = g_new0 (PaneLoadData, 1);
+
+	g_weak_ref_init (&data->pane, self);
+	data->generation = self->generation;
+	data->location = g_object_ref (location);
+	return data;
+}
+
+static void
+pane_load_data_free (PaneLoadData *data)
+{
+	g_weak_ref_clear (&data->pane);
+	g_object_unref (data->location);
+	g_free (data->cache_path);
+	g_free (data);
+}
+
+static NemoPreviewPane *
+pane_load_get_current (GTask *task)
+{
+	PaneLoadData *data = g_task_get_task_data (task);
+	NemoPreviewPane *self = g_weak_ref_get (&data->pane);
+
+	if (self != NULL &&
+	    (self->destroyed || self->generation != data->generation ||
+	     g_cancellable_is_cancelled (g_task_get_cancellable (task)))) {
+		g_object_unref (self);
+		return NULL;
+	}
+
+	return self;
+}
+
+/* This helper is used only by workers, including stream close on unref. */
+static GdkPixbuf *
+load_scaled_pixbuf (GFile *location, int size,
+		    GCancellable *cancellable, GError **error)
+{
+	GFileInputStream *stream;
+	GdkPixbuf *pixbuf;
+
+	stream = g_file_read (location, cancellable, error);
+	if (stream == NULL)
+		return NULL;
+
+	pixbuf = gdk_pixbuf_new_from_stream_at_scale (G_INPUT_STREAM (stream),
+						     size, size, TRUE,
+						     cancellable, error);
+	g_object_unref (stream);
+	return pixbuf;
+}
+#endif /* NEMO_SMPL */
+
+static void
 load_image_preview (NemoPreviewPane *self, NemoFile *file)
 {
 	GFile *location;
 	gboolean fit;
-	char *mime;
 
 	fit = g_settings_get_boolean (nemo_preview_pane_preferences,
 				      "fit-to-pane");
@@ -136,43 +229,42 @@ load_image_preview (NemoPreviewPane *self, NemoFile *file)
 	nemo_image_viewer_set_show_controls (self->image_viewer, TRUE);
 
 	location = nemo_file_get_location (file);
-	mime = nemo_file_get_mime_type (file);
+#ifdef NEMO_SMPL
+	nemo_image_viewer_load_location (self->image_viewer, location);
+#else
+	{
+		char *mime = nemo_file_get_mime_type (file);
 
-	/* For camera RAW files (DNG, ARW, CR2, NEF, etc.), use the
-	 * file-path loader so the libraw fallback can kick in. */
-	if (nemo_preview_mime_is_raw_image (mime)) {
-		char *path = g_file_get_path (location);
-
-		if (path != NULL) {
-			GError *error = NULL;
-			if (!nemo_image_viewer_load_file (self->image_viewer,
-			                                  path, &error)) {
-				g_warning ("Preview pane: could not load RAW image: %s",
-				           error ? error->message : "unknown");
-				g_clear_error (&error);
+		if (nemo_preview_mime_is_raw_image (mime)) {
+			char *path = g_file_get_path (location);
+			if (path != NULL) {
+				GError *error = NULL;
+				if (!nemo_image_viewer_load_file (self->image_viewer, path, &error)) {
+					g_warning ("Preview pane: could not load RAW image: %s",
+						   error ? error->message : "unknown");
+					g_clear_error (&error);
+				}
+				g_free (path);
 			}
-			g_free (path);
-		}
-	} else {
-		GFileInputStream *stream;
-		GError *error = NULL;
+		} else {
+			GError *error = NULL;
+			GFileInputStream *stream = g_file_read (location, NULL, &error);
 
-		stream = g_file_read (location, NULL, &error);
-		if (error != NULL) {
-			g_warning ("Preview pane: cannot open file for reading: %s",
-				   error->message);
-			g_error_free (error);
-			g_free (mime);
-			g_object_unref (location);
-			return;
+			if (error != NULL) {
+				g_warning ("Preview pane: cannot open file for reading: %s",
+					   error->message);
+				g_error_free (error);
+				g_free (mime);
+				g_object_unref (location);
+				return;
+			}
+			nemo_image_viewer_load_stream_async (self->image_viewer,
+							    G_INPUT_STREAM (stream),
+							    self->cancellable);
 		}
-
-		nemo_image_viewer_load_stream_async (self->image_viewer,
-						     G_INPUT_STREAM (stream),
-						     self->cancellable);
+		g_free (mime);
 	}
-
-	g_free (mime);
+#endif
 	g_object_unref (location);
 
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "image");
@@ -182,22 +274,27 @@ static void
 load_text_preview (NemoPreviewPane *self, NemoFile *file)
 {
 	GFile *location;
-	char *path;
 
 	location = nemo_file_get_location (file);
-	path = g_file_get_path (location);
-	g_object_unref (location);
-
-	if (path == NULL)
-		return;
-
+#ifdef NEMO_SMPL
 	nemo_paged_viewer_set_mode (self->paged_viewer,
 				    NEMO_VIEWER_MODE_TEXT);
-	if (!nemo_paged_viewer_open_file (self->paged_viewer, path, NULL)) {
+	nemo_paged_viewer_open_location (self->paged_viewer, location);
+	g_object_unref (location);
+#else
+	{
+		char *path = g_file_get_path (location);
+		g_object_unref (location);
+		if (path == NULL)
+			return;
+		nemo_paged_viewer_set_mode (self->paged_viewer, NEMO_VIEWER_MODE_TEXT);
+		if (!nemo_paged_viewer_open_file (self->paged_viewer, path, NULL)) {
+			g_free (path);
+			return;
+		}
 		g_free (path);
-		return;
 	}
-	g_free (path);
+#endif
 
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "text");
 }
@@ -213,13 +310,22 @@ gps_to_tile (double lat, double lon, int zoom,
              double *pixel_x, double *pixel_y)
 {
 	double n = pow (2.0, zoom);
+#ifdef NEMO_SMPL
+	double lat_rad = CLAMP (lat, -85.05112878, 85.05112878) * G_PI / 180.0;
+#else
 	double lat_rad = lat * G_PI / 180.0;
+#endif
 	double tx = (lon + 180.0) / 360.0 * n;
 	double ty = (1.0 - log (tan (lat_rad) + 1.0 / cos (lat_rad)) / G_PI)
 		    / 2.0 * n;
 
+#ifdef NEMO_SMPL
+	*tile_x = CLAMP ((int) floor (tx), 0, (int) n - 1);
+	*tile_y = CLAMP ((int) floor (ty), 0, (int) n - 1);
+#else
 	*tile_x = (int) floor (tx);
 	*tile_y = (int) floor (ty);
+#endif
 	*pixel_x = (tx - *tile_x) * GPS_MAP_TILE_SIZE;
 	*pixel_y = (ty - *tile_y) * GPS_MAP_TILE_SIZE;
 }
@@ -347,62 +453,85 @@ gps_map_render_tile (NemoPreviewPane *self,
 	}
 }
 
-typedef struct {
-	NemoPreviewPane *self;
-	double pixel_x;
-	double pixel_y;
-	char  *cache_path;
-} MapTileData;
-
+#ifdef NEMO_SMPL
 static void
-map_tile_data_free (MapTileData *data)
+map_tile_worker (GTask *task, gpointer source_object,
+		 gpointer task_data, GCancellable *cancellable)
 {
-	g_free (data->cache_path);
-	g_slice_free (MapTileData, data);
+	PaneLoadData *data = task_data;
+	GFile *cache = g_file_new_for_path (data->cache_path);
+	GdkPixbuf *pixbuf = NULL;
+	GError *error = NULL;
+	char *buffer = NULL;
+	gsize length;
+
+	pixbuf = load_scaled_pixbuf (cache, GPS_MAP_TILE_SIZE, cancellable, &error);
+	if (pixbuf != NULL) {
+		g_object_unref (cache);
+		g_task_return_pointer (task, pixbuf, g_object_unref);
+		return;
+	}
+
+	if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) &&
+	    !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+		g_debug ("Preview pane: cannot read cached GPS map: %s", error->message);
+	g_clear_error (&error);
+
+	pixbuf = load_scaled_pixbuf (data->location, GPS_MAP_TILE_SIZE,
+				    cancellable, &error);
+	if (pixbuf == NULL) {
+		g_object_unref (cache);
+		g_task_return_error (task, error);
+		return;
+	}
+
+	if (!g_cancellable_is_cancelled (cancellable)) {
+		GFile *dir = g_file_get_parent (cache);
+
+		if (!g_file_make_directory_with_parents (dir, cancellable, &error) &&
+		    g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+			g_clear_error (&error);
+		g_object_unref (dir);
+
+		if (error == NULL &&
+		    gdk_pixbuf_save_to_buffer (pixbuf, &buffer, &length,
+					      "png", &error, NULL)) {
+			g_file_replace_contents (cache, buffer, length, NULL, FALSE,
+						 G_FILE_CREATE_PRIVATE |
+						 G_FILE_CREATE_REPLACE_DESTINATION,
+						 NULL, cancellable, &error);
+			g_free (buffer);
+		}
+		if (error != NULL) {
+			if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+				g_debug ("Preview pane: cannot cache GPS map: %s", error->message);
+			g_clear_error (&error);
+		}
+	}
+
+	g_object_unref (cache);
+	g_task_return_pointer (task, pixbuf, g_object_unref);
 }
 
 static void
-map_tile_download_cb (GObject      *source,
-                      GAsyncResult *result,
-                      gpointer      user_data)
+map_tile_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-	MapTileData *data = user_data;
-	NemoPreviewPane *self = data->self;
-	GFileInputStream *stream;
-	GdkPixbuf *pixbuf = NULL;
+	GTask *task = G_TASK (result);
+	PaneLoadData *data = g_task_get_task_data (task);
+	NemoPreviewPane *self = pane_load_get_current (task);
 	GError *error = NULL;
+	GdkPixbuf *pixbuf = g_task_propagate_pointer (task, &error);
 
-	stream = g_file_read_finish (G_FILE (source), result, &error);
-	if (stream == NULL) {
-		/* No internet or cancelled — silently ignore */
-		g_clear_error (&error);
-		map_tile_data_free (data);
-		return;
+	if (self != NULL) {
+		if (pixbuf != NULL)
+			gps_map_render_tile (self, pixbuf, data->pixel_x, data->pixel_y);
+		else if (error != NULL &&
+			 !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+			g_debug ("Preview pane: GPS map unavailable: %s", error->message);
+		g_object_unref (self);
 	}
-
-	pixbuf = gdk_pixbuf_new_from_stream (G_INPUT_STREAM (stream),
-					     NULL, &error);
-	g_object_unref (stream);
-
-	if (pixbuf == NULL) {
-		g_clear_error (&error);
-		map_tile_data_free (data);
-		return;
-	}
-
-	/* Save to cache (best-effort, ignore errors) */
-	{
-		char *dir = gps_map_cache_dir ();
-		g_mkdir_with_parents (dir, 0755);
-		g_free (dir);
-
-		gdk_pixbuf_save (pixbuf, data->cache_path, "png",
-				 NULL, NULL);
-	}
-
-	gps_map_render_tile (self, pixbuf, data->pixel_x, data->pixel_y);
-	g_object_unref (pixbuf);
-	map_tile_data_free (data);
+	g_clear_object (&pixbuf);
+	g_clear_error (&error);
 }
 
 static void
@@ -411,59 +540,324 @@ gps_map_fetch_tile (NemoPreviewPane *self,
 {
 	int tile_x, tile_y;
 	double pixel_x, pixel_y;
-	char *cache_path;
-	GdkPixbuf *cached_pixbuf;
-
-	/* Cancel any previous map fetch */
-	if (self->map_cancellable != NULL) {
-		g_cancellable_cancel (self->map_cancellable);
-		g_clear_object (&self->map_cancellable);
-	}
+	char *url;
+	GFile *tile_file;
+	PaneLoadData *data;
+	GTask *task;
 
 	gps_to_tile (lat, lon, GPS_MAP_ZOOM,
 	             &tile_x, &tile_y, &pixel_x, &pixel_y);
 
-	cache_path = gps_map_cache_path (GPS_MAP_ZOOM, tile_x, tile_y);
+	url = g_strdup_printf ("https://tile.openstreetmap.org/%d/%d/%d.png",
+			       GPS_MAP_ZOOM, tile_x, tile_y);
+	tile_file = g_file_new_for_uri (url);
+	g_free (url);
 
-	/* Try cache first — fast path */
-	cached_pixbuf = gdk_pixbuf_new_from_file (cache_path, NULL);
-	if (cached_pixbuf != NULL) {
-		gps_map_render_tile (self, cached_pixbuf,
-				     pixel_x, pixel_y);
-		g_object_unref (cached_pixbuf);
-		g_free (cache_path);
+	data = pane_load_data_new (self, tile_file);
+	data->pixel_x = pixel_x;
+	data->pixel_y = pixel_y;
+	data->cache_path = gps_map_cache_path (GPS_MAP_ZOOM, tile_x, tile_y);
+	task = g_task_new (NULL, self->cancellable, map_tile_ready_cb, NULL);
+	g_task_set_priority (task, G_PRIORITY_LOW);
+	g_task_set_task_data (task, data, (GDestroyNotify) pane_load_data_free);
+	nemo_preview_run_task (task, map_tile_worker);
+	g_object_unref (task);
+	g_object_unref (tile_file);
+}
+
+typedef struct {
+	double latitude;
+	double longitude;
+	char label[128];
+} GpsData;
+
+static gboolean
+read_gps_coordinate (ExifEntry *entry, ExifByteOrder order,
+		     double values[3], double limit)
+{
+	guint i;
+
+	if (entry == NULL || entry->data == NULL || entry->size < 24 ||
+	    entry->format != EXIF_FORMAT_RATIONAL || entry->components < 3)
+		return FALSE;
+
+	for (i = 0; i < 3; i++) {
+		ExifRational value = exif_get_rational (entry->data + i * 8, order);
+		if (value.denominator == 0)
+			return FALSE;
+		values[i] = (double) value.numerator / value.denominator;
+	}
+
+	return values[1] < 60 && values[2] < 60 &&
+	       values[0] + values[1] / 60 + values[2] / 3600 <= limit;
+}
+
+static void
+gps_metadata_worker (GTask *task, gpointer source_object,
+		     gpointer task_data, GCancellable *cancellable)
+{
+	PaneLoadData *data = task_data;
+	GFileInputStream *stream;
+	GError *error = NULL;
+	ExifLoader *loader;
+	ExifData *exif;
+	GpsData *gps = NULL;
+	guchar buffer[16384];
+	gssize count;
+
+	if (g_task_return_error_if_cancelled (task))
+		return;
+
+	stream = g_file_read (data->location, cancellable, &error);
+	if (stream == NULL) {
+		g_task_return_error (task, error);
 		return;
 	}
 
-	/* Download from OpenStreetMap */
-	{
-		char *url;
-		GFile *tile_file;
-		MapTileData *data;
+	loader = exif_loader_new ();
+	if (loader == NULL) {
+		g_object_unref (stream);
+		g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+					"Could not allocate EXIF loader");
+		return;
+	}
+	while ((count = g_input_stream_read (G_INPUT_STREAM (stream), buffer,
+					    sizeof buffer, cancellable, &error)) > 0) {
+		if (!exif_loader_write (loader, buffer, count))
+			break;
+	}
+	g_object_unref (stream);
+	exif = error == NULL ? exif_loader_get_data (loader) : NULL;
+	exif_loader_unref (loader);
 
-		url = g_strdup_printf (
-			"https://tile.openstreetmap.org/%d/%d/%d.png",
-			GPS_MAP_ZOOM, tile_x, tile_y);
+	if (error != NULL) {
+		g_task_return_error (task, error);
+		return;
+	}
 
-		tile_file = g_file_new_for_uri (url);
+	if (exif != NULL) {
+		ExifEntry *lat_entry, *lon_entry, *lat_ref, *lon_ref;
+		ExifByteOrder order = exif_data_get_byte_order (exif);
+		double lat[3], lon[3];
+		char lat_c = 'N', lon_c = 'E';
+
+		lat_entry = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0002);
+		lon_entry = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0004);
+		lat_ref = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0001);
+		lon_ref = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0003);
+		if (lat_ref != NULL && lat_ref->data != NULL && lat_ref->size > 0)
+			lat_c = g_ascii_toupper (lat_ref->data[0]);
+		if (lon_ref != NULL && lon_ref->data != NULL && lon_ref->size > 0)
+			lon_c = g_ascii_toupper (lon_ref->data[0]);
+
+		if (read_gps_coordinate (lat_entry, order, lat, 90) &&
+		    read_gps_coordinate (lon_entry, order, lon, 180) &&
+		    (lat_c == 'N' || lat_c == 'S') &&
+		    (lon_c == 'E' || lon_c == 'W')) {
+			gps = g_new0 (GpsData, 1);
+			gps->latitude = lat[0] + lat[1] / 60 + lat[2] / 3600;
+			gps->longitude = lon[0] + lon[1] / 60 + lon[2] / 3600;
+			if (lat_c == 'S')
+				gps->latitude = -gps->latitude;
+			if (lon_c == 'W')
+				gps->longitude = -gps->longitude;
+			g_snprintf (gps->label, sizeof gps->label,
+				    "%.0f\xc2\xb0%.0f'%.1f\"%c "
+				    "%.0f\xc2\xb0%.0f'%.1f\"%c",
+				    lat[0], lat[1], lat[2], lat_c,
+				    lon[0], lon[1], lon[2], lon_c);
+		}
+		exif_data_unref (exif);
+	}
+
+	g_task_return_pointer (task, gps, g_free);
+}
+
+static void
+gps_metadata_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	GTask *task = G_TASK (result);
+	NemoPreviewPane *self = pane_load_get_current (task);
+	GError *error = NULL;
+	GpsData *gps = g_task_propagate_pointer (task, &error);
+
+	if (self != NULL) {
+		if (gps != NULL) {
+			gtk_label_set_text (GTK_LABEL (self->detail_gps), gps->label);
+			gtk_widget_show (self->detail_gps);
+			gtk_widget_show (self->detail_gps_label);
+			self->gps_lat = gps->latitude;
+			self->gps_lon = gps->longitude;
+			gps_map_fetch_tile (self, gps->latitude, gps->longitude);
+		} else {
+			g_debug ("Preview pane: GPS metadata unavailable: %s",
+				 error != NULL ? error->message : "no valid GPS coordinates");
+		}
+		g_object_unref (self);
+	}
+	g_clear_error (&error);
+	g_free (gps);
+}
+
+static void
+load_gps_metadata (NemoPreviewPane *self, NemoFile *file)
+{
+	char *mime = nemo_file_get_mime_type (file);
+
+	if (nemo_preview_mime_is_image (mime)) {
+		GFile *location = nemo_file_get_location (file);
+		GTask *task = g_task_new (NULL, self->cancellable,
+					 gps_metadata_ready_cb, NULL);
+
+		g_task_set_priority (task, G_PRIORITY_LOW);
+		g_task_set_task_data (task, pane_load_data_new (self, location),
+				     (GDestroyNotify) pane_load_data_free);
+		nemo_preview_run_task (task, gps_metadata_worker);
+		g_object_unref (task);
+		g_object_unref (location);
+	}
+	g_free (mime);
+}
+#else
+typedef struct {
+	NemoPreviewPane *self;
+	double pixel_x;
+	double pixel_y;
+	char *cache_path;
+} MapTileData;
+
+static void
+map_tile_data_free (MapTileData *data)
+{
+	g_free (data->cache_path);
+	g_free (data);
+}
+
+static void
+map_tile_download_cb (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	MapTileData *data = user_data;
+	GError *error = NULL;
+	GFileInputStream *stream = g_file_read_finish (G_FILE (source), result, &error);
+	GdkPixbuf *pixbuf = NULL;
+
+	if (stream != NULL) {
+		pixbuf = gdk_pixbuf_new_from_stream (G_INPUT_STREAM (stream), NULL, &error);
+		g_object_unref (stream);
+	}
+	if (pixbuf != NULL) {
+		char *dir = gps_map_cache_dir ();
+		g_mkdir_with_parents (dir, 0755);
+		g_free (dir);
+		gdk_pixbuf_save (pixbuf, data->cache_path, "png", NULL, NULL);
+		gps_map_render_tile (data->self, pixbuf, data->pixel_x, data->pixel_y);
+		g_object_unref (pixbuf);
+	}
+	g_clear_error (&error);
+	map_tile_data_free (data);
+}
+
+static void
+gps_map_fetch_tile (NemoPreviewPane *self, double lat, double lon)
+{
+	int tile_x, tile_y;
+	double pixel_x, pixel_y;
+	char *cache_path;
+	GdkPixbuf *pixbuf;
+
+	if (self->map_cancellable != NULL) {
+		g_cancellable_cancel (self->map_cancellable);
+		g_clear_object (&self->map_cancellable);
+	}
+	gps_to_tile (lat, lon, GPS_MAP_ZOOM, &tile_x, &tile_y, &pixel_x, &pixel_y);
+	cache_path = gps_map_cache_path (GPS_MAP_ZOOM, tile_x, tile_y);
+	pixbuf = gdk_pixbuf_new_from_file (cache_path, NULL);
+	if (pixbuf != NULL) {
+		gps_map_render_tile (self, pixbuf, pixel_x, pixel_y);
+		g_object_unref (pixbuf);
+		g_free (cache_path);
+	} else {
+		char *url = g_strdup_printf ("https://tile.openstreetmap.org/%d/%d/%d.png",
+					     GPS_MAP_ZOOM, tile_x, tile_y);
+		GFile *tile_file = g_file_new_for_uri (url);
+		MapTileData *data = g_new0 (MapTileData, 1);
+
 		g_free (url);
-
 		self->map_cancellable = g_cancellable_new ();
-
-		data = g_slice_new0 (MapTileData);
 		data->self = self;
 		data->pixel_x = pixel_x;
 		data->pixel_y = pixel_y;
-		data->cache_path = cache_path; /* takes ownership */
-
-		g_file_read_async (tile_file,
-				   G_PRIORITY_LOW,
-				   self->map_cancellable,
-				   map_tile_download_cb,
-				   data);
+		data->cache_path = cache_path;
+		g_file_read_async (tile_file, G_PRIORITY_LOW, self->map_cancellable,
+				   map_tile_download_cb, data);
 		g_object_unref (tile_file);
 	}
 }
+
+static void
+load_gps_metadata (NemoPreviewPane *self, NemoFile *file)
+{
+	char *mime = nemo_file_get_mime_type (file);
+	gboolean is_image = nemo_preview_mime_is_image (mime);
+	GFile *location;
+	char *path;
+	ExifData *exif;
+	ExifEntry *lat_entry, *lon_entry, *lat_ref, *lon_ref;
+	ExifByteOrder order;
+	double lat[3], lon[3];
+	char lat_c = 'N', lon_c = 'E';
+	char label[128];
+	guint i;
+
+	g_free (mime);
+	if (!is_image)
+		return;
+	location = nemo_file_get_location (file);
+	path = g_file_get_path (location);
+	g_object_unref (location);
+	if (path == NULL)
+		return;
+	exif = exif_data_new_from_file (path);
+	g_free (path);
+	if (exif == NULL)
+		return;
+
+	lat_entry = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0002);
+	lon_entry = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0004);
+	lat_ref = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0001);
+	lon_ref = exif_content_get_entry (exif->ifd[EXIF_IFD_GPS], 0x0003);
+	if (lat_entry == NULL || lon_entry == NULL ||
+	    lat_entry->size < 24 || lon_entry->size < 24) {
+		exif_data_unref (exif);
+		return;
+	}
+	order = exif_data_get_byte_order (exif);
+	for (i = 0; i < 3; i++) {
+		ExifRational lat_r = exif_get_rational (lat_entry->data + i * 8, order);
+		ExifRational lon_r = exif_get_rational (lon_entry->data + i * 8, order);
+		lat[i] = lat_r.denominator > 0 ? (double) lat_r.numerator / lat_r.denominator : 0;
+		lon[i] = lon_r.denominator > 0 ? (double) lon_r.numerator / lon_r.denominator : 0;
+	}
+	if (lat_ref != NULL && lat_ref->data != NULL)
+		lat_c = lat_ref->data[0];
+	if (lon_ref != NULL && lon_ref->data != NULL)
+		lon_c = lon_ref->data[0];
+	g_snprintf (label, sizeof label,
+		    "%.0f\xc2\xb0%.0f'%.1f\"%c %.0f\xc2\xb0%.0f'%.1f\"%c",
+		    lat[0], lat[1], lat[2], lat_c, lon[0], lon[1], lon[2], lon_c);
+	gtk_label_set_text (GTK_LABEL (self->detail_gps), label);
+	gtk_widget_show (self->detail_gps);
+	gtk_widget_show (self->detail_gps_label);
+	self->gps_lat = lat[0] + lat[1] / 60 + lat[2] / 3600;
+	self->gps_lon = lon[0] + lon[1] / 60 + lon[2] / 3600;
+	if (lat_c == 'S' || lat_c == 's')
+		self->gps_lat = -self->gps_lat;
+	if (lon_c == 'W' || lon_c == 'w')
+		self->gps_lon = -self->gps_lon;
+	gps_map_fetch_tile (self, self->gps_lat, self->gps_lon);
+	exif_data_unref (exif);
+}
+#endif /* NEMO_SMPL */
 
 /* Click handler: open the GPS location in the default map application */
 static gboolean
@@ -566,170 +960,12 @@ update_details (NemoPreviewPane *self, NemoFile *file)
 	}
 
 	/* GPS Location (images only) */
-#ifdef HAVE_EXIF
-	{
-		char *mime_str;
-		gboolean is_img;
-
-		mime_str = nemo_file_get_mime_type (file);
-		is_img = nemo_preview_mime_is_image (mime_str);
-		g_free (mime_str);
-
-		if (is_img) {
-			GFile *loc;
-			char *path;
-
-			loc = nemo_file_get_location (file);
-			path = g_file_get_path (loc);
-			g_object_unref (loc);
-
-			if (path != NULL) {
-				ExifData *ed;
-
-				ed = exif_data_new_from_file (path);
-				g_free (path);
-
-				if (ed != NULL) {
-					ExifEntry *lat_entry, *lon_entry;
-					ExifEntry *lat_ref, *lon_ref;
-
-					lat_entry = exif_content_get_entry (
-						ed->ifd[EXIF_IFD_GPS], 0x0002);
-					lon_entry = exif_content_get_entry (
-						ed->ifd[EXIF_IFD_GPS], 0x0004);
-					lat_ref = exif_content_get_entry (
-						ed->ifd[EXIF_IFD_GPS], 0x0001);
-					lon_ref = exif_content_get_entry (
-						ed->ifd[EXIF_IFD_GPS], 0x0003);
-
-					if (lat_entry != NULL &&
-					    lon_entry != NULL &&
-					    lat_entry->size >= 24 &&
-					    lon_entry->size >= 24) {
-						ExifRational lat_r[3], lon_r[3];
-						double lat_d, lat_m, lat_s;
-						double lon_d, lon_m, lon_s;
-						char lat_c = 'N', lon_c = 'E';
-						char gps_buf[128];
-						ExifByteOrder bo;
-
-						bo = exif_data_get_byte_order (ed);
-
-						lat_r[0] = exif_get_rational (
-							lat_entry->data, bo);
-						lat_r[1] = exif_get_rational (
-							lat_entry->data + 8, bo);
-						lat_r[2] = exif_get_rational (
-							lat_entry->data + 16, bo);
-
-						lon_r[0] = exif_get_rational (
-							lon_entry->data, bo);
-						lon_r[1] = exif_get_rational (
-							lon_entry->data + 8, bo);
-						lon_r[2] = exif_get_rational (
-							lon_entry->data + 16, bo);
-
-						lat_d = (lat_r[0].denominator > 0)
-							? (double) lat_r[0].numerator /
-							  lat_r[0].denominator
-							: 0.0;
-						lat_m = (lat_r[1].denominator > 0)
-							? (double) lat_r[1].numerator /
-							  lat_r[1].denominator
-							: 0.0;
-						lat_s = (lat_r[2].denominator > 0)
-							? (double) lat_r[2].numerator /
-							  lat_r[2].denominator
-							: 0.0;
-
-						lon_d = (lon_r[0].denominator > 0)
-							? (double) lon_r[0].numerator /
-							  lon_r[0].denominator
-							: 0.0;
-						lon_m = (lon_r[1].denominator > 0)
-							? (double) lon_r[1].numerator /
-							  lon_r[1].denominator
-							: 0.0;
-						lon_s = (lon_r[2].denominator > 0)
-							? (double) lon_r[2].numerator /
-							  lon_r[2].denominator
-							: 0.0;
-
-						if (lat_ref != NULL &&
-						    lat_ref->data != NULL) {
-							lat_c = (char) lat_ref->data[0];
-						}
-						if (lon_ref != NULL &&
-						    lon_ref->data != NULL) {
-							lon_c = (char) lon_ref->data[0];
-						}
-
-						g_snprintf (
-							gps_buf, sizeof (gps_buf),
-							"%.0f\xc2\xb0%.0f'%.1f\"%c "
-							"%.0f\xc2\xb0%.0f'%.1f\"%c",
-							lat_d, lat_m, lat_s, lat_c,
-							lon_d, lon_m, lon_s, lon_c);
-
-						gtk_label_set_text (
-							GTK_LABEL (self->detail_gps),
-							gps_buf);
-						gtk_widget_show (
-							self->detail_gps);
-						gtk_widget_show (
-							self->detail_gps_label);
-
-						/* Compute decimal lat/lon and fetch map tile */
-						{
-							double dec_lat = lat_d + lat_m / 60.0 + lat_s / 3600.0;
-							double dec_lon = lon_d + lon_m / 60.0 + lon_s / 3600.0;
-							if (lat_c == 'S' || lat_c == 's')
-								dec_lat = -dec_lat;
-							if (lon_c == 'W' || lon_c == 'w')
-								dec_lon = -dec_lon;
-							self->gps_lat = dec_lat;
-							self->gps_lon = dec_lon;
-							gps_map_fetch_tile (self, dec_lat, dec_lon);
-						}
-					} else {
-						gtk_widget_hide (
-							self->detail_gps);
-						gtk_widget_hide (
-							self->detail_gps_label);
-						gtk_widget_hide (
-							self->gps_map_event_box);
-					}
-
-					exif_data_unref (ed);
-				} else {
-					gtk_widget_hide (
-						self->detail_gps);
-					gtk_widget_hide (
-						self->detail_gps_label);
-					gtk_widget_hide (
-						self->gps_map_event_box);
-				}
-			} else {
-				gtk_widget_hide (
-					self->detail_gps);
-				gtk_widget_hide (
-					self->detail_gps_label);
-				gtk_widget_hide (
-					self->gps_map_event_box);
-			}
-		} else {
-			gtk_widget_hide (
-				self->detail_gps);
-			gtk_widget_hide (
-				self->detail_gps_label);
-			gtk_widget_hide (
-				self->gps_map_event_box);
-		}
-	}
-#else
 	gtk_widget_hide (self->detail_gps);
 	gtk_widget_hide (self->detail_gps_label);
 	gtk_widget_hide (self->gps_map_event_box);
+	gtk_image_clear (GTK_IMAGE (self->detail_gps_map));
+#ifdef HAVE_EXIF
+	load_gps_metadata (self, file);
 #endif
 
 	gtk_widget_show (self->details_scroll);
@@ -747,21 +983,8 @@ clear_details (NemoPreviewPane *self)
 	gtk_widget_hide (self->detail_gps);
 	gtk_widget_hide (self->detail_gps_label);
 	gtk_widget_hide (self->gps_map_event_box);
-	if (self->map_cancellable != NULL) {
-		g_cancellable_cancel (self->map_cancellable);
-		g_clear_object (&self->map_cancellable);
-	}
+	gtk_image_clear (GTK_IMAGE (self->detail_gps_map));
 	gtk_widget_hide (self->details_scroll);
-}
-
-static void
-file_changed_cb (NemoFile *file, gpointer user_data)
-{
-	NemoPreviewPane *self = NEMO_PREVIEW_PANE (user_data);
-
-	if (file == self->current_file) {
-		update_details (self, file);
-	}
 }
 
 static void
@@ -774,39 +997,93 @@ disconnect_file (NemoPreviewPane *self)
 	}
 }
 
+#ifdef NEMO_SMPL
+static void
+thumbnail_worker (GTask *task, gpointer source_object,
+		  gpointer task_data, GCancellable *cancellable)
+{
+	PaneLoadData *data = task_data;
+	GError *error = NULL;
+	GdkPixbuf *pixbuf;
+
+	pixbuf = load_scaled_pixbuf (data->location, 128, cancellable, &error);
+	if (pixbuf != NULL)
+		g_task_return_pointer (task, pixbuf, g_object_unref);
+	else
+		g_task_return_error (task, error);
+}
+
+static void
+thumbnail_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	GTask *task = G_TASK (result);
+	NemoPreviewPane *self = pane_load_get_current (task);
+	GError *error = NULL;
+	GdkPixbuf *pixbuf = g_task_propagate_pointer (task, &error);
+
+	if (self != NULL) {
+		if (pixbuf != NULL)
+			gtk_image_set_from_pixbuf (GTK_IMAGE (self->info_icon), pixbuf);
+		else if (error != NULL &&
+			 !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+			g_debug ("Preview pane: thumbnail unavailable: %s", error->message);
+		g_object_unref (self);
+	}
+	g_clear_object (&pixbuf);
+	g_clear_error (&error);
+}
+#endif /* NEMO_SMPL */
+
 static void
 show_info_preview (NemoPreviewPane *self, NemoFile *file)
 {
 	GIcon *icon;
 	char *thumb_path;
-	GdkPixbuf *thumb_pixbuf;
 
 	gtk_widget_hide (self->info_error_label);
 
-	/* Try thumbnail first */
+#ifndef NEMO_SMPL
 	thumb_path = nemo_file_get_thumbnail_path (file);
 	if (thumb_path != NULL) {
-		thumb_pixbuf = gdk_pixbuf_new_from_file_at_scale (
+		GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_scale (
 			thumb_path, 128, 128, TRUE, NULL);
-		if (thumb_pixbuf != NULL) {
-			gtk_image_set_from_pixbuf (
-				GTK_IMAGE (self->info_icon), thumb_pixbuf);
-			g_object_unref (thumb_pixbuf);
-			g_free (thumb_path);
-			gtk_stack_set_visible_child_name (
-				GTK_STACK (self->stack), "info");
+		g_free (thumb_path);
+		if (pixbuf != NULL) {
+			gtk_image_set_from_pixbuf (GTK_IMAGE (self->info_icon), pixbuf);
+			g_object_unref (pixbuf);
+			gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "info");
 			return;
 		}
-		g_free (thumb_path);
 	}
+#endif
 
-	/* Fall back to file icon */
+	/* Show the icon immediately while a thumbnail is being read. */
 	icon = nemo_file_get_gicon (file, NEMO_FILE_ICON_FLAGS_NONE);
 	if (icon != NULL) {
 		gtk_image_set_from_gicon (GTK_IMAGE (self->info_icon),
 					  icon, GTK_ICON_SIZE_DIALOG);
 		g_object_unref (icon);
+	} else {
+		gtk_image_set_from_icon_name (GTK_IMAGE (self->info_icon),
+					     "text-x-generic", GTK_ICON_SIZE_DIALOG);
 	}
+
+#ifdef NEMO_SMPL
+	thumb_path = nemo_file_get_thumbnail_path (file);
+	if (thumb_path != NULL) {
+		GFile *location = g_file_new_for_path (thumb_path);
+		GTask *task = g_task_new (NULL, self->cancellable,
+					 thumbnail_ready_cb, NULL);
+
+		g_task_set_priority (task, G_PRIORITY_LOW);
+		g_task_set_task_data (task, pane_load_data_new (self, location),
+				     (GDestroyNotify) pane_load_data_free);
+		nemo_preview_run_task (task, thumbnail_worker);
+		g_object_unref (task);
+		g_object_unref (location);
+		g_free (thumb_path);
+	}
+#endif
 
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "info");
 }
@@ -826,8 +1103,18 @@ stop_video (NemoPreviewPane *self)
 		self->bus_watch_id = 0;
 	}
 
+#ifdef NEMO_SMPL
+	nemo_preview_media_frames_stop (g_steal_pointer (&self->video_frames));
+	self->video_playing = FALSE;
+	self->video_ready = FALSE;
+#endif
 	if (self->pipeline != NULL) {
+#ifdef NEMO_SMPL
+		if (!nemo_preview_media_set_state_async (self->pipeline, GST_STATE_NULL))
+			g_debug ("Preview pane: could not queue media shutdown");
+#else
 		gst_element_set_state (self->pipeline, GST_STATE_NULL);
+#endif
 		gst_object_unref (self->pipeline);
 		self->pipeline = NULL;
 	}
@@ -844,6 +1131,26 @@ stop_video (NemoPreviewPane *self)
 	self->seek_lock = FALSE;
 }
 
+#ifdef NEMO_SMPL
+static gboolean
+request_video_state (NemoPreviewPane *self, GstState state)
+{
+	if (nemo_preview_media_set_state_async (self->pipeline, state)) {
+		self->video_playing = state == GST_STATE_PLAYING;
+		return TRUE;
+	}
+
+	stop_video (self);
+	if (self->current_file != NULL) {
+		show_info_preview (self, self->current_file);
+		gtk_label_set_text (GTK_LABEL (self->info_error_label),
+				    _("Media preview is busy.\nTry selecting this file again."));
+		gtk_widget_show (self->info_error_label);
+	}
+	return FALSE;
+}
+#endif
+
 static gboolean
 video_bus_message_cb (GstBus     *bus,
 		     GstMessage *msg,
@@ -851,8 +1158,29 @@ video_bus_message_cb (GstBus     *bus,
 {
 	NemoPreviewPane *self = NEMO_PREVIEW_PANE (user_data);
 
+	if (self->destroyed || self->pipeline == NULL)
+		return G_SOURCE_REMOVE;
+
 	switch (GST_MESSAGE_TYPE (msg)) {
+#ifdef NEMO_SMPL
+	case GST_MESSAGE_ASYNC_DONE:
+		if (GST_MESSAGE_SRC (msg) == GST_OBJECT (self->pipeline))
+			self->video_ready = TRUE;
+		break;
+	case GST_MESSAGE_STATE_CHANGED:
+		if (GST_MESSAGE_SRC (msg) == GST_OBJECT (self->pipeline)) {
+			GstState state, pending;
+			gst_message_parse_state_changed (msg, NULL, &state, &pending);
+			if (pending == GST_STATE_VOID_PENDING)
+				self->video_ready = state >= GST_STATE_PAUSED;
+		}
+		break;
+#endif
 	case GST_MESSAGE_EOS:
+#ifdef NEMO_SMPL
+		if (!self->video_ready)
+			break;
+#endif
 		/* Loop the clip so it keeps playing in the preview */
 		gst_element_seek_simple (self->pipeline,
 					 GST_FORMAT_TIME,
@@ -876,7 +1204,11 @@ video_bus_message_cb (GstBus     *bus,
 			show_info_preview (self, self->current_file);
 
 			if (err != NULL &&
-			    (err->domain == GST_CORE_ERROR ||
+			    ((err->domain == GST_CORE_ERROR
+#ifdef NEMO_SMPL
+			      && err->code != GST_CORE_ERROR_STATE_CHANGE
+#endif
+			     ) ||
 			     err->domain == GST_STREAM_ERROR)) {
 				label_text = g_strdup_printf (
 					_("Unable to preview this file.\n"
@@ -908,12 +1240,9 @@ video_bus_message_cb (GstBus     *bus,
 	return TRUE;
 }
 
-/* ---- appsink new-sample callback (called on streaming thread) ---- */
-static GstFlowReturn
-new_sample_cb (GstAppSink *sink, gpointer user_data)
+static void
+render_video_sample (NemoPreviewPane *self, GstSample *sample)
 {
-	NemoPreviewPane *self = NEMO_PREVIEW_PANE (user_data);
-	GstSample *sample;
 	GstBuffer *buffer;
 	GstCaps *caps;
 	GstVideoInfo vinfo;
@@ -924,20 +1253,25 @@ new_sample_cb (GstAppSink *sink, gpointer user_data)
 	guint8 *dst;
 	int i;
 
-	sample = gst_app_sink_pull_sample (sink);
 	if (sample == NULL)
-		return GST_FLOW_OK;
+		return;
+#ifdef NEMO_SMPL
+	if (self->destroyed || self->pipeline == NULL) {
+		gst_sample_unref (sample);
+		return;
+	}
+#endif
 
 	buffer = gst_sample_get_buffer (sample);
 	caps = gst_sample_get_caps (sample);
 	if (buffer == NULL || caps == NULL) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	if (!gst_video_info_from_caps (&vinfo, caps)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	w = GST_VIDEO_INFO_WIDTH (&vinfo);
@@ -945,7 +1279,7 @@ new_sample_cb (GstAppSink *sink, gpointer user_data)
 
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
 		gst_sample_unref (sample);
-		return GST_FLOW_OK;
+		return;
 	}
 
 	surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, w, h);
@@ -970,12 +1304,27 @@ new_sample_cb (GstAppSink *sink, gpointer user_data)
 	self->video_width = w;
 	self->video_height = h;
 	g_mutex_unlock (&self->frame_mutex);
-
 	if (self->video_area != NULL)
 		gtk_widget_queue_draw (self->video_area);
+}
+
+#ifdef NEMO_SMPL
+static void
+video_sample_ready_cb (GObject *widget, GstSample *sample)
+{
+	/* The per-sink handle discards old samples before a pipeline is detached. */
+	render_video_sample (NEMO_PREVIEW_PANE (widget), sample);
+}
+#else
+static GstFlowReturn
+new_sample_cb (GstAppSink *sink, gpointer user_data)
+{
+	render_video_sample (NEMO_PREVIEW_PANE (user_data),
+			     gst_app_sink_pull_sample (sink));
 
 	return GST_FLOW_OK;
 }
+#endif
 
 static gboolean
 video_area_draw_cb (GtkWidget *widget,
@@ -1016,13 +1365,24 @@ static void
 play_pause_clicked_cb (GtkButton *btn, gpointer user_data)
 {
 	NemoPreviewPane *self = NEMO_PREVIEW_PANE (user_data);
+#ifndef NEMO_SMPL
 	GstState state;
+#endif
 	GtkWidget *img;
 
 	if (self->pipeline == NULL) {
 		return;
 	}
 
+#ifdef NEMO_SMPL
+	if (!request_video_state (self, self->video_playing ?
+				 GST_STATE_PAUSED : GST_STATE_PLAYING))
+		return;
+	img = gtk_image_new_from_icon_name (
+		self->video_playing ? "media-playback-pause-symbolic" :
+				      "media-playback-start-symbolic",
+		GTK_ICON_SIZE_SMALL_TOOLBAR);
+#else
 	gst_element_get_state (self->pipeline, &state, NULL, 0);
 
 	if (state == GST_STATE_PLAYING) {
@@ -1036,6 +1396,7 @@ play_pause_clicked_cb (GtkButton *btn, gpointer user_data)
 			"media-playback-pause-symbolic",
 			GTK_ICON_SIZE_SMALL_TOOLBAR);
 	}
+#endif
 
 	gtk_button_set_image (GTK_BUTTON (btn), img);
 }
@@ -1085,6 +1446,10 @@ seek_position_update_cb (gpointer user_data)
 		self->seek_update_id = 0;
 		return G_SOURCE_REMOVE;
 	}
+#ifdef NEMO_SMPL
+	if (!self->video_ready)
+		return G_SOURCE_CONTINUE;
+#endif
 
 	/* Don't touch the slider while the user is interacting with it */
 	if (self->seek_lock) {
@@ -1141,6 +1506,10 @@ seek_release_cb (GtkWidget *widget, GdkEventButton *event, gpointer user_data)
 	if (self->pipeline == NULL) {
 		return FALSE;
 	}
+#ifdef NEMO_SMPL
+	if (!self->video_ready)
+		return FALSE;
+#endif
 
 	target = (gint64) gtk_range_get_value (GTK_RANGE (widget));
 	gst_element_seek_simple (self->pipeline,
@@ -1227,8 +1596,13 @@ load_media_preview (NemoPreviewPane *self,
 			              NULL);
 			gst_caps_unref (caps);
 
+#ifdef NEMO_SMPL
+			self->video_frames = nemo_preview_media_connect_sink (
+				appsink, G_OBJECT (self), video_sample_ready_cb);
+#else
 			g_signal_connect (appsink, "new-sample",
 			                  G_CALLBACK (new_sample_cb), self);
+#endif
 
 			g_object_set (self->pipeline, "video-sink", appsink, NULL);
 		}
@@ -1261,7 +1635,12 @@ load_media_preview (NemoPreviewPane *self,
                                               seek_position_update_cb,
                                               self);
 
-        gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
+#ifdef NEMO_SMPL
+	if (!request_video_state (self, GST_STATE_PAUSED))
+		return;
+#else
+	gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
+#endif
 
 	nemo_image_viewer_set_show_controls (self->image_viewer, FALSE);
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "video");
@@ -1269,50 +1648,29 @@ load_media_preview (NemoPreviewPane *self,
 
 #endif /* HAVE_GSTREAMER */
 
-void
-nemo_preview_pane_set_file (NemoPreviewPane *self,
-			    NemoFile        *file)
+static void
+refresh_file_preview (NemoPreviewPane *self, NemoFile *file)
 {
-	char *mime;
-
-	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
-
-	g_cancellable_cancel (self->cancellable);
-	g_object_unref (self->cancellable);
-	self->cancellable = g_cancellable_new ();
+	char *mime = nemo_file_get_mime_type (file);
 
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
 
 #ifdef HAVE_GSTREAMER
-	stop_video (self);
+	if (!nemo_preview_mime_is_video (mime) &&
+	    !nemo_preview_mime_is_audio (mime))
+		stop_video (self);
 #endif
-
-	disconnect_file (self);
-	g_clear_object (&self->current_file);
-
-	if (file == NULL) {
-		nemo_preview_pane_clear (self);
-		return;
-	}
-
-	self->current_file = g_object_ref (file);
-
-	self->file_changed_id =
-		g_signal_connect (file, "changed",
-				  G_CALLBACK (file_changed_cb), self);
-
-	update_details (self, file);
-
-	mime = nemo_file_get_mime_type (file);
 
 	if (nemo_file_is_directory (file)) {
 		show_info_preview (self, file);
 #ifdef HAVE_GSTREAMER
 	} else if (nemo_preview_mime_is_video (mime)) {
-		load_media_preview (self, file, FALSE);
+		if (self->pipeline == NULL)
+			load_media_preview (self, file, FALSE);
 	} else if (nemo_preview_mime_is_audio (mime)) {
-		load_media_preview (self, file, TRUE);
+		if (self->pipeline == NULL)
+			load_media_preview (self, file, TRUE);
 #endif
 	} else if (nemo_preview_mime_is_image (mime)) {
 		load_image_preview (self, file);
@@ -1325,14 +1683,73 @@ nemo_preview_pane_set_file (NemoPreviewPane *self,
 	g_free (mime);
 }
 
+static void
+file_changed_cb (NemoFile *file, gpointer user_data)
+{
+	NemoPreviewPane *self = NEMO_PREVIEW_PANE (user_data);
+
+	if (self->destroyed || file != self->current_file)
+		return;
+#ifdef NEMO_SMPL
+	if (nemo_file_is_gone (file)) {
+		nemo_preview_pane_clear (self);
+		return;
+	}
+
+	cancel_pending_loads (self);
+	self->cancellable = g_cancellable_new ();
+#endif
+	update_details (self, file);
+#ifdef NEMO_SMPL
+	if (g_strcmp0 (gtk_stack_get_visible_child_name (GTK_STACK (self->stack)),
+		       "info") == 0) {
+		gboolean had_error = gtk_widget_get_visible (self->info_error_label);
+		show_info_preview (self, file);
+		if (had_error)
+			gtk_widget_show (self->info_error_label);
+	}
+#endif
+}
+
+void
+nemo_preview_pane_set_file (NemoPreviewPane *self,
+			    NemoFile        *file)
+{
+	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
+
+	if (self->destroyed)
+		return;
+	if (file == NULL) {
+		nemo_preview_pane_clear (self);
+		return;
+	}
+
+	cancel_pending_loads (self);
+	self->cancellable = g_cancellable_new ();
+
+#ifdef HAVE_GSTREAMER
+	stop_video (self);
+#endif
+
+	disconnect_file (self);
+	g_set_object (&self->current_file, file);
+
+	self->file_changed_id =
+		g_signal_connect (file, "changed",
+				  G_CALLBACK (file_changed_cb), self);
+
+	update_details (self, file);
+	refresh_file_preview (self, file);
+}
+
 void
 nemo_preview_pane_clear (NemoPreviewPane *self)
 {
 	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
 
-	g_cancellable_cancel (self->cancellable);
-	g_object_unref (self->cancellable);
-	self->cancellable = g_cancellable_new ();
+	if (self->destroyed)
+		return;
+	cancel_pending_loads (self);
 
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
@@ -1354,35 +1771,63 @@ nemo_preview_pane_clear (NemoPreviewPane *self)
 }
 
 static void
-nemo_preview_pane_dispose (GObject *object)
+nemo_preview_pane_shutdown (NemoPreviewPane *self)
 {
-	NemoPreviewPane *self = NEMO_PREVIEW_PANE (object);
+	if (self->destroyed)
+		return;
 
-	g_cancellable_cancel (self->cancellable);
-	if (self->map_cancellable != NULL) {
-		g_cancellable_cancel (self->map_cancellable);
-		g_clear_object (&self->map_cancellable);
-	}
+	self->destroyed = TRUE;
+	cancel_pending_loads (self);
 	disconnect_file (self);
+	g_signal_handlers_disconnect_by_data (self->vpaned, self);
+	g_signal_handlers_disconnect_by_data (self->gps_map_event_box, self);
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
 
 #ifdef HAVE_GSTREAMER
 	stop_video (self);
+	g_signal_handlers_disconnect_by_data (self->video_area, self);
+	g_signal_handlers_disconnect_by_data (self->play_btn, self);
+	g_signal_handlers_disconnect_by_data (self->mute_btn, self);
+	g_signal_handlers_disconnect_by_data (self->seek_scale, self);
 #endif
 
-	g_clear_object (&self->cancellable);
 	g_clear_object (&self->current_file);
+}
 
+static void
+nemo_preview_pane_destroy (GtkWidget *widget)
+{
+	nemo_preview_pane_shutdown (NEMO_PREVIEW_PANE (widget));
+	GTK_WIDGET_CLASS (nemo_preview_pane_parent_class)->destroy (widget);
+}
+
+static void
+nemo_preview_pane_dispose (GObject *object)
+{
+	nemo_preview_pane_shutdown (NEMO_PREVIEW_PANE (object));
 	G_OBJECT_CLASS (nemo_preview_pane_parent_class)->dispose (object);
+}
+
+static void
+nemo_preview_pane_finalize (GObject *object)
+{
+#ifdef HAVE_GSTREAMER
+	NemoPreviewPane *self = NEMO_PREVIEW_PANE (object);
+	g_mutex_clear (&self->frame_mutex);
+#endif
+	G_OBJECT_CLASS (nemo_preview_pane_parent_class)->finalize (object);
 }
 
 static void
 nemo_preview_pane_class_init (NemoPreviewPaneClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
+	GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
 	object_class->dispose = nemo_preview_pane_dispose;
+	object_class->finalize = nemo_preview_pane_finalize;
+	widget_class->destroy = nemo_preview_pane_destroy;
 }
 
 static GtkWidget *
@@ -1672,6 +2117,8 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 		self->detail_gps = create_detail_row (grid, _("GPS:"), 6);
 		self->detail_gps_label = gtk_grid_get_child_at (grid, 0, 6);
 		/* GPS row hidden by default, shown only when data is present */
+		gtk_widget_set_no_show_all (self->detail_gps, TRUE);
+		gtk_widget_set_no_show_all (self->detail_gps_label, TRUE);
 		gtk_widget_hide (self->detail_gps);
 		gtk_widget_hide (self->detail_gps_label);
 
@@ -1693,9 +2140,11 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 					     _("Click to open in map"));
 		gtk_widget_set_events (self->gps_map_event_box,
 				       GDK_BUTTON_PRESS_MASK);
+#ifdef HAVE_EXIF
 		g_signal_connect (self->gps_map_event_box,
 				  "button-press-event",
 				  G_CALLBACK (gps_map_clicked_cb), self);
+#endif
 		gtk_widget_set_no_show_all (self->gps_map_event_box, TRUE);
 		gtk_widget_hide (self->gps_map_event_box);
 		gtk_box_pack_end (GTK_BOX (details_hbox),
@@ -1732,6 +2181,9 @@ nemo_preview_pane_toggle_details (NemoPreviewPane *self)
 {
 	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
 
+	if (self->destroyed)
+		return;
+
 	if (gtk_widget_get_visible (self->details_scroll)) {
 		gtk_widget_hide (self->details_scroll);
 	} else if (self->current_file != NULL) {
@@ -1744,6 +2196,9 @@ nemo_preview_pane_toggle_mute (NemoPreviewPane *self)
 {
 	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
 
+	if (self->destroyed)
+		return;
+
 #ifdef HAVE_GSTREAMER
 	if (self->mute_btn != NULL) {
 		g_signal_emit_by_name (self->mute_btn, "clicked");
@@ -1755,6 +2210,9 @@ void
 nemo_preview_pane_toggle_play (NemoPreviewPane *self)
 {
 	g_return_if_fail (NEMO_IS_PREVIEW_PANE (self));
+
+	if (self->destroyed)
+		return;
 
 #ifdef HAVE_GSTREAMER
 	if (self->play_btn != NULL) {

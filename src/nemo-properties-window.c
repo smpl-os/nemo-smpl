@@ -141,6 +141,16 @@ struct NemoPropertiesWindowDetails {
  	guint64 volume_capacity;
  	guint64 volume_free;
 
+#ifdef NEMO_SMPL
+	GCancellable *volume_usage_cancellable;
+	GtkWidget *volume_pie;
+	GtkLabel *volume_used_label;
+	GtkLabel *volume_free_label;
+	GtkLabel *volume_capacity_label;
+	GtkLabel *volume_fstype_label;
+	gboolean volume_usage_ready;
+#endif
+
 	GdkRGBA used_color;
 	GdkRGBA free_color;
 	GdkRGBA used_stroke_color;
@@ -2669,6 +2679,12 @@ paint_pie_chart (GtkWidget *widget,
 	cairo_paint (cr);
 	cairo_restore (cr);
 
+#ifdef NEMO_SMPL
+	if (!window->details->volume_usage_ready ||
+	    window->details->volume_capacity == 0) {
+		return;
+	}
+#endif
 	free = (double)window->details->volume_free / (double)window->details->volume_capacity;
 	used =  1.0 - free;
 
@@ -2920,7 +2936,9 @@ _pie_style_shade (GdkRGBA *a,
 static GtkWidget*
 create_pie_widget (NemoPropertiesWindow *window)
 {
+#ifndef NEMO_SMPL
 	NemoFile		*file;
+#endif
 	GtkGrid                 *grid;
 	GtkStyleContext		*style;
 	GtkWidget 		*pie_canvas;
@@ -2930,6 +2948,7 @@ create_pie_widget (NemoPropertiesWindow *window)
 	GtkWidget 		*free_label;
 	GtkWidget 		*capacity_label;
 	GtkWidget 		*fstype_label;
+#ifndef NEMO_SMPL
 	gchar			*capacity;
 	gchar 			*used;
 	gchar 			*free;
@@ -2947,6 +2966,7 @@ create_pie_widget (NemoPropertiesWindow *window)
 	file = get_original_file (window);
 
 	uri = nemo_file_get_activation_uri (file);
+#endif
 
 	grid = GTK_GRID (gtk_grid_new ());
 	gtk_container_set_border_width (GTK_CONTAINER (grid), 5);
@@ -2977,13 +2997,27 @@ create_pie_widget (NemoPropertiesWindow *window)
 	gtk_widget_set_valign (used_canvas, GTK_ALIGN_CENTER);
 	gtk_widget_set_halign (used_canvas, GTK_ALIGN_CENTER);
 	gtk_widget_set_size_request (used_canvas, 20, 20);
+#ifdef NEMO_SMPL
+	used_label = gtk_label_new (NULL);
+#else
 	/* Translators: "used" refers to the capacity of the filesystem */
 	used_label = gtk_label_new (g_strconcat (used, " ", _("used"), NULL));
+#endif
 
 	free_canvas = gtk_drawing_area_new ();
 	gtk_widget_set_valign (free_canvas, GTK_ALIGN_CENTER);
 	gtk_widget_set_halign (free_canvas, GTK_ALIGN_CENTER);
 	gtk_widget_set_size_request (free_canvas, 20, 20);
+#ifdef NEMO_SMPL
+	free_label = gtk_label_new (NULL);
+	capacity_label = gtk_label_new (_("Loading volume information…"));
+	fstype_label = gtk_label_new (NULL);
+	window->details->volume_pie = pie_canvas;
+	window->details->volume_used_label = GTK_LABEL (used_label);
+	window->details->volume_free_label = GTK_LABEL (free_label);
+	window->details->volume_capacity_label = GTK_LABEL (capacity_label);
+	window->details->volume_fstype_label = GTK_LABEL (fstype_label);
+#else
 	/* Translators: "free" refers to the capacity of the filesystem */
 	free_label = gtk_label_new (g_strconcat (free, " ", _("free"), NULL));
 
@@ -3009,6 +3043,7 @@ create_pie_widget (NemoPropertiesWindow *window)
 	g_free (capacity);
 	g_free (used);
 	g_free (free);
+#endif
 
 	gtk_container_add_with_properties (GTK_CONTAINER (grid), pie_canvas,
 					   "height", 4,
@@ -3038,10 +3073,108 @@ create_pie_widget (NemoPropertiesWindow *window)
 	return GTK_WIDGET (grid);
 }
 
+#ifdef NEMO_SMPL
+typedef struct {
+    GWeakRef window;
+    GCancellable *cancellable;
+} VolumeUsageQuery;
+
+static void
+volume_usage_ready (GObject      *source,
+                    GAsyncResult *result,
+                    gpointer      user_data)
+{
+    VolumeUsageQuery *query = user_data;
+    NemoPropertiesWindow *window = g_weak_ref_get (&query->window);
+    GError *error = NULL;
+    GFileInfo *info;
+
+    info = g_file_query_filesystem_info_finish (G_FILE (source), result, &error);
+    if (window != NULL &&
+        window->details->volume_usage_cancellable == query->cancellable &&
+        !g_cancellable_is_cancelled (query->cancellable) &&
+        !gtk_widget_in_destruction (GTK_WIDGET (window))) {
+        NemoPropertiesWindowDetails *details = window->details;
+
+        g_clear_object (&details->volume_usage_cancellable);
+        if (info != NULL) {
+            gboolean has_capacity = g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+            gboolean has_free = g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+            const char *fs_type = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_FILESYSTEM_TYPE);
+            char *capacity, *free_space, *used, *text;
+            int prefix = nemo_global_preferences_get_size_prefix_preference ();
+
+            details->volume_capacity = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_SIZE);
+            details->volume_free = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE);
+            if (has_capacity) {
+                details->volume_free = MIN (details->volume_free, details->volume_capacity);
+            }
+            details->volume_usage_ready = has_capacity && has_free;
+            capacity = has_capacity ? g_format_size_full (details->volume_capacity, prefix) : g_strdup (_("Unknown"));
+            free_space = has_free ? g_format_size_full (details->volume_free, prefix) : g_strdup (_("Unknown"));
+            used = details->volume_usage_ready
+                ? g_format_size_full (details->volume_capacity - details->volume_free, prefix)
+                : g_strdup (_("Unknown"));
+
+            text = g_strconcat (used, " ", _("used"), NULL);
+            gtk_label_set_text (details->volume_used_label, text);
+            g_free (text);
+            text = g_strconcat (free_space, " ", _("free"), NULL);
+            gtk_label_set_text (details->volume_free_label, text);
+            g_free (text);
+            text = g_strconcat (_("Total capacity:"), " ", capacity, NULL);
+            gtk_label_set_text (details->volume_capacity_label, text);
+            g_free (text);
+            text = g_strconcat (_("Filesystem type:"), " ", fs_type != NULL ? fs_type : _("Unknown"), NULL);
+            gtk_label_set_text (details->volume_fstype_label, text);
+            g_free (text);
+            g_free (capacity);
+            g_free (free_space);
+            g_free (used);
+        } else {
+            gtk_label_set_text (details->volume_capacity_label, _("Volume information unavailable"));
+            gtk_widget_set_tooltip_text (GTK_WIDGET (details->volume_capacity_label),
+                                         error != NULL ? error->message : NULL);
+        }
+        gtk_widget_queue_draw (details->volume_pie);
+    }
+
+    g_clear_object (&info);
+    g_clear_error (&error);
+    g_clear_object (&window);
+    g_weak_ref_clear (&query->window);
+    g_object_unref (query->cancellable);
+    g_free (query);
+}
+#endif
+
 static GtkWidget*
 create_volume_usage_widget (NemoPropertiesWindow *window)
 {
 	GtkWidget *piewidget;
+#ifdef NEMO_SMPL
+	NemoFile *file = get_original_file (window);
+	GMount *mount = nemo_file_get_mount (file);
+	GFile *location;
+	VolumeUsageQuery *query;
+
+	/* The cached mount gives the real root even for a desktop/virtual icon.
+	 * Activation locations are already cached; do not look up a mount here. */
+	location = mount != NULL ? g_mount_get_root (mount) : nemo_file_get_activation_location (file);
+	g_clear_object (&mount);
+	piewidget = create_pie_widget (window);
+	query = g_new0 (VolumeUsageQuery, 1);
+	g_weak_ref_init (&query->window, window);
+	query->cancellable = g_cancellable_new ();
+	window->details->volume_usage_cancellable = g_object_ref (query->cancellable);
+	g_file_query_filesystem_info_async (location,
+	                                   G_FILE_ATTRIBUTE_FILESYSTEM_TYPE ","
+	                                   G_FILE_ATTRIBUTE_FILESYSTEM_SIZE ","
+	                                   G_FILE_ATTRIBUTE_FILESYSTEM_FREE,
+	                                   G_PRIORITY_DEFAULT, query->cancellable,
+	                                   volume_usage_ready, query);
+	g_object_unref (location);
+#else
 	gchar *uri;
 	NemoFile *file;
 	GFile *location;
@@ -3068,6 +3201,7 @@ create_volume_usage_widget (NemoPropertiesWindow *window)
 	g_object_unref (location);
 
 	piewidget = create_pie_widget (window);
+#endif
 
         gtk_widget_show_all (piewidget);
 
@@ -5284,6 +5418,12 @@ real_destroy (GtkWidget *object)
 
 	window = NEMO_PROPERTIES_WINDOW (object);
 
+#ifdef NEMO_SMPL
+	if (window->details->volume_usage_cancellable != NULL) {
+		g_cancellable_cancel (window->details->volume_usage_cancellable);
+		g_clear_object (&window->details->volume_usage_cancellable);
+	}
+#endif
 	remove_window (window);
 
 	for (l = window->details->original_files; l != NULL; l = l->next) {

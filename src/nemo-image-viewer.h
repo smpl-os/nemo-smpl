@@ -30,15 +30,24 @@ G_DECLARE_FINAL_TYPE (NemoImageViewer, nemo_image_viewer,
 
 NemoImageViewer *nemo_image_viewer_new               (void);
 
-/* Synchronous load (blocks on I/O — fine for the F3 quick-preview). */
+/* Legacy synchronous loader. UI callers should use load_location(). */
 gboolean         nemo_image_viewer_load_file          (NemoImageViewer *self,
                                                        const gchar     *path,
                                                        GError         **error);
 
-/* Asynchronous load (used by the sidebar preview pane). */
+#ifdef NEMO_SMPL
+/* Open and decode off the main thread, including the RAW fallback.
+ * A new load, clear, or widget destruction cancels the previous request. */
+void             nemo_image_viewer_load_location      (NemoImageViewer *self,
+                                                       GFile           *file);
+#endif
+
+#ifndef NEMO_SMPL
+/* Legacy stream decoder. Fork UI callers use the complete location loader. */
 void             nemo_image_viewer_load_stream_async  (NemoImageViewer *self,
                                                        GInputStream    *stream,
                                                        GCancellable    *cancellable);
+#endif
 
 /* Clear the current image. */
 void             nemo_image_viewer_clear              (NemoImageViewer *self);

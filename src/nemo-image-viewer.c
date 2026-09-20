@@ -19,6 +19,7 @@
 
 #include <config.h>
 #include "nemo-image-viewer.h"
+#include "nemo-preview-utils.h"
 
 #include <glib/gi18n.h>
 #include <string.h>
@@ -54,6 +55,11 @@ struct _NemoImageViewer
 	double               zoom_level;
 	gboolean             fit_to_container;
 	gboolean             show_controls;
+#ifdef NEMO_SMPL
+	GtkWidget           *status_label;
+	GCancellable        *load_cancel;
+	gboolean             destroyed;
+#endif
 };
 
 G_DEFINE_TYPE (NemoImageViewer, nemo_image_viewer, GTK_TYPE_BOX)
@@ -61,6 +67,9 @@ G_DEFINE_TYPE (NemoImageViewer, nemo_image_viewer, GTK_TYPE_BOX)
 /* Forward declarations */
 static void apply_zoom             (NemoImageViewer *self);
 static void zoom_scale_changed_cb  (GtkRange *range, gpointer user_data);
+static GdkPixbufAnimation *load_animation_file (const gchar *path,
+					       GCancellable *cancellable,
+					       GError **error);
 
 /* ------------------------------------------------------------------ */
 /* Animation helpers                                                  */
@@ -306,6 +315,7 @@ set_animation (NemoImageViewer *self, GdkPixbufAnimation *anim)
 /* Async load callback                                                */
 /* ------------------------------------------------------------------ */
 
+#ifndef NEMO_SMPL
 static void
 stream_load_ready_cb (GObject      *source,
 		      GAsyncResult *result,
@@ -328,6 +338,165 @@ stream_load_ready_cb (GObject      *source,
 
 	set_animation (self, anim);
 }
+#else
+typedef struct {
+	GWeakRef viewer;
+	GFile *file;
+} ImageLoad;
+
+static void
+image_load_free (ImageLoad *load)
+{
+	g_weak_ref_clear (&load->viewer);
+	g_clear_object (&load->file);
+	g_free (load);
+}
+
+static void
+cancel_image_load (NemoImageViewer *self)
+{
+	if (self->load_cancel != NULL) {
+		g_cancellable_cancel (self->load_cancel);
+		g_clear_object (&self->load_cancel);
+	}
+}
+
+static void
+image_load_thread (GTask *task, gpointer source, gpointer task_data,
+		   GCancellable *cancellable)
+{
+	ImageLoad *load = task_data;
+	GError *error = NULL;
+	GInputStream *stream;
+	GdkPixbufAnimation *anim = NULL;
+
+	if (g_task_return_error_if_cancelled (task))
+		return;
+
+	stream = G_INPUT_STREAM (g_file_read (load->file, cancellable, &error));
+	if (stream != NULL) {
+		anim = gdk_pixbuf_animation_new_from_stream (stream, cancellable, &error);
+		g_input_stream_close (stream, NULL, NULL);
+		g_object_unref (stream);
+	}
+
+#ifdef HAVE_LIBRAW
+	if (anim == NULL && load->file != NULL && error != NULL &&
+	    error->domain == GDK_PIXBUF_ERROR &&
+	    !g_cancellable_is_cancelled (cancellable)) {
+		char *path = g_file_get_path (load->file);
+		GFile *temporary = NULL;
+		GFileIOStream *temporary_stream = NULL;
+		GError *raw_error = NULL;
+
+		/* libraw requires a seekable file. Stage URI-only files in the
+		 * worker, not on the GTK thread or in an unbounded RAM buffer. */
+		if (path == NULL) {
+			temporary = g_file_new_tmp ("nemo-preview-XXXXXX",
+						    &temporary_stream, &raw_error);
+			if (temporary != NULL) {
+				GFileInputStream *input = g_file_read (load->file, cancellable, &raw_error);
+				if (input != NULL) {
+					gssize copied = g_output_stream_splice (
+						g_io_stream_get_output_stream (G_IO_STREAM (temporary_stream)),
+						G_INPUT_STREAM (input), G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE,
+						cancellable, &raw_error);
+					g_object_unref (input);
+					if (copied >= 0)
+						path = g_file_get_path (temporary);
+				}
+				if (!g_io_stream_close (G_IO_STREAM (temporary_stream), NULL,
+							raw_error == NULL ? &raw_error : NULL))
+					g_clear_pointer (&path, g_free);
+				g_object_unref (temporary_stream);
+			}
+		}
+		if (path != NULL)
+			anim = load_animation_file (path, cancellable, &raw_error);
+		if (temporary != NULL) {
+			GError *cleanup_error = NULL;
+			if (!g_file_delete (temporary, NULL, &cleanup_error)) {
+				g_warning ("Image preview temporary file: %s", cleanup_error->message);
+				g_error_free (cleanup_error);
+			}
+			g_object_unref (temporary);
+		}
+		g_free (path);
+		if (anim == NULL && raw_error != NULL && raw_error->domain == G_IO_ERROR) {
+			g_clear_error (&error);
+			error = g_steal_pointer (&raw_error);
+		}
+		g_clear_error (&raw_error);
+	}
+#endif
+	if (g_task_return_error_if_cancelled (task)) {
+		g_clear_object (&anim);
+		g_clear_error (&error);
+	} else if (anim != NULL) {
+		g_clear_error (&error);
+		g_task_return_pointer (task, anim, g_object_unref);
+	} else {
+		g_task_return_error (task, error);
+	}
+}
+
+static void
+image_load_ready (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	GTask *task = G_TASK (result);
+	ImageLoad *load = g_task_get_task_data (task);
+	NemoImageViewer *self = g_weak_ref_get (&load->viewer);
+	GError *error = NULL;
+	GdkPixbufAnimation *anim = g_task_propagate_pointer (task, &error);
+
+	if (self != NULL && !self->destroyed &&
+	    self->load_cancel == g_task_get_cancellable (task) &&
+	    !g_cancellable_is_cancelled (self->load_cancel)) {
+		if (anim != NULL) {
+			gtk_widget_hide (self->status_label);
+			set_animation (self, g_steal_pointer (&anim));
+		} else {
+			gtk_label_set_text (GTK_LABEL (self->status_label), error->message);
+			gtk_widget_show (self->status_label);
+			g_signal_emit_by_name (self, "load-failed", error->message);
+		}
+	}
+	g_clear_object (&anim);
+	g_clear_error (&error);
+	g_clear_object (&self);
+}
+
+static void
+start_image_load (NemoImageViewer *self, GFile *file)
+{
+	ImageLoad *load;
+	GTask *task;
+
+	nemo_image_viewer_clear (self);
+	self->load_cancel = g_cancellable_new ();
+	gtk_label_set_text (GTK_LABEL (self->status_label), _("Loading..."));
+	gtk_widget_show (self->status_label);
+
+	load = g_new0 (ImageLoad, 1);
+	g_weak_ref_init (&load->viewer, self);
+	load->file = g_object_ref (file);
+	task = g_task_new (NULL, self->load_cancel, image_load_ready, NULL);
+	g_task_set_task_data (task, load, (GDestroyNotify) image_load_free);
+	nemo_preview_run_task (task, image_load_thread);
+	g_object_unref (task);
+}
+
+static void
+nemo_image_viewer_destroy (GtkWidget *widget)
+{
+	NemoImageViewer *self = NEMO_IMAGE_VIEWER (widget);
+
+	self->destroyed = TRUE;
+	cancel_image_load (self);
+	clear_image_data (self);
+	GTK_WIDGET_CLASS (nemo_image_viewer_parent_class)->destroy (widget);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Construction / destruction                                         */
@@ -338,6 +507,9 @@ nemo_image_viewer_dispose (GObject *object)
 {
 	NemoImageViewer *self = NEMO_IMAGE_VIEWER (object);
 
+#ifdef NEMO_SMPL
+	cancel_image_load (self);
+#endif
 	clear_image_data (self);
 
 	G_OBJECT_CLASS (nemo_image_viewer_parent_class)->dispose (object);
@@ -348,6 +520,12 @@ nemo_image_viewer_class_init (NemoImageViewerClass *klass)
 {
 	GObjectClass *object_class = G_OBJECT_CLASS (klass);
 	object_class->dispose = nemo_image_viewer_dispose;
+#ifdef NEMO_SMPL
+	GTK_WIDGET_CLASS (klass)->destroy = nemo_image_viewer_destroy;
+	g_signal_new ("load-failed", G_TYPE_FROM_CLASS (klass),
+		      G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL,
+		      G_TYPE_NONE, 1, G_TYPE_STRING);
+#endif
 }
 
 static void
@@ -360,6 +538,13 @@ nemo_image_viewer_init (NemoImageViewer *self)
 
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (self),
 				       GTK_ORIENTATION_VERTICAL);
+#ifdef NEMO_SMPL
+	self->status_label = gtk_label_new (NULL);
+	gtk_label_set_line_wrap (GTK_LABEL (self->status_label), TRUE);
+	gtk_label_set_max_width_chars (GTK_LABEL (self->status_label), 60);
+	gtk_widget_set_no_show_all (self->status_label, TRUE);
+	gtk_box_pack_start (GTK_BOX (self), self->status_label, FALSE, FALSE, 4);
+#endif
 
 	/* Scrolled window for the image */
 	self->scroll = gtk_scrolled_window_new (NULL, NULL);
@@ -421,21 +606,22 @@ nemo_image_viewer_new (void)
 	return g_object_new (NEMO_TYPE_IMAGE_VIEWER, NULL);
 }
 
-gboolean
-nemo_image_viewer_load_file (NemoImageViewer *self,
-			     const gchar     *path,
-			     GError         **error)
+#ifdef HAVE_LIBRAW
+static int
+raw_progress_cb (void *data, enum LibRaw_progress stage, int iteration, int expected)
+{
+	return g_cancellable_is_cancelled (data);
+}
+#endif
+
+static GdkPixbufAnimation *
+load_animation_file (const gchar *path, GCancellable *cancellable, GError **error)
 {
 	GdkPixbufAnimation *anim;
 
-	g_return_val_if_fail (NEMO_IS_IMAGE_VIEWER (self), FALSE);
-	g_return_val_if_fail (path != NULL, FALSE);
-
 	anim = gdk_pixbuf_animation_new_from_file (path, error);
-	if (anim != NULL) {
-		set_animation (self, anim);
-		return TRUE;
-	}
+	if (anim != NULL)
+		return anim;
 
 #ifdef HAVE_LIBRAW
 	/* Fallback: try loading as a camera RAW file (DNG, ARW, CR2, NEF, etc.) */
@@ -447,12 +633,14 @@ nemo_image_viewer_load_file (NemoImageViewer *self,
 
 		raw = libraw_init (0);
 		if (raw == NULL)
-			return FALSE;
+			return NULL;
+
+		libraw_set_progress_handler (raw, raw_progress_cb, cancellable);
 
 		ret = libraw_open_file (raw, path);
 		if (ret != LIBRAW_SUCCESS) {
 			libraw_close (raw);
-			return FALSE;
+			return NULL;
 		}
 
 		/* Use half-size for faster preview, sRGB output */
@@ -464,25 +652,27 @@ nemo_image_viewer_load_file (NemoImageViewer *self,
 		ret = libraw_unpack (raw);
 		if (ret != LIBRAW_SUCCESS) {
 			libraw_close (raw);
-			return FALSE;
+			return NULL;
 		}
 
 		ret = libraw_dcraw_process (raw);
 		if (ret != LIBRAW_SUCCESS) {
 			libraw_close (raw);
-			return FALSE;
+			return NULL;
 		}
 
 		img = libraw_dcraw_make_mem_image (raw, &ret);
 		if (img == NULL || ret != LIBRAW_SUCCESS) {
+			if (img != NULL)
+				libraw_dcraw_clear_mem (img);
 			libraw_close (raw);
-			return FALSE;
+			return NULL;
 		}
 
 		if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3) {
 			libraw_dcraw_clear_mem (img);
 			libraw_close (raw);
-			return FALSE;
+			return NULL;
 		}
 
 		/* Create a GdkPixbuf from the RGB data.
@@ -506,7 +696,7 @@ nemo_image_viewer_load_file (NemoImageViewer *self,
 		libraw_close (raw);
 
 		if (pixbuf == NULL)
-			return FALSE;
+			return NULL;
 
 		/* Clear previous gdk-pixbuf error since we succeeded via libraw */
 		if (error != NULL)
@@ -523,14 +713,40 @@ nemo_image_viewer_load_file (NemoImageViewer *self,
 			anim = GDK_PIXBUF_ANIMATION (simple);
 		}
 		g_object_unref (pixbuf);
-		set_animation (self, anim);
-		return TRUE;
+		return anim;
 	}
 #endif /* HAVE_LIBRAW */
 
-	return FALSE;
+	return NULL;
 }
 
+gboolean
+nemo_image_viewer_load_file (NemoImageViewer *self,
+			     const gchar *path, GError **error)
+{
+	GdkPixbufAnimation *anim;
+
+	g_return_val_if_fail (NEMO_IS_IMAGE_VIEWER (self), FALSE);
+	g_return_val_if_fail (path != NULL, FALSE);
+	anim = load_animation_file (path, NULL, error);
+	if (anim == NULL)
+		return FALSE;
+	set_animation (self, anim);
+	return TRUE;
+}
+
+#ifdef NEMO_SMPL
+void
+nemo_image_viewer_load_location (NemoImageViewer *self, GFile *file)
+{
+	g_return_if_fail (NEMO_IS_IMAGE_VIEWER (self));
+	g_return_if_fail (G_IS_FILE (file));
+	g_return_if_fail (!self->destroyed);
+	start_image_load (self, file);
+}
+#endif
+
+#ifndef NEMO_SMPL
 void
 nemo_image_viewer_load_stream_async (NemoImageViewer *self,
 				     GInputStream    *stream,
@@ -542,12 +758,19 @@ nemo_image_viewer_load_stream_async (NemoImageViewer *self,
 	gdk_pixbuf_animation_new_from_stream_async (
 		stream, cancellable, stream_load_ready_cb, self);
 }
+#endif
 
 void
 nemo_image_viewer_clear (NemoImageViewer *self)
 {
 	g_return_if_fail (NEMO_IS_IMAGE_VIEWER (self));
 
+#ifdef NEMO_SMPL
+	cancel_image_load (self);
+	if (self->destroyed)
+		return;
+	gtk_widget_hide (self->status_label);
+#endif
 	clear_image_data (self);
 	gtk_image_clear (GTK_IMAGE (self->image));
 }
