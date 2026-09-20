@@ -142,6 +142,7 @@ if smpl_features_enabled
       '-Wl,--wrap=sync_file_range',
       '-Wl,--wrap=g_file_query_info',
       '-Wl,--wrap=g_file_get_path',
+      '-Wl,--wrap=g_file_is_native',
       '-Wl,--wrap=g_file_read',
       '-Wl,--wrap=g_file_copy',
       '-Wl,--wrap=g_file_create',
@@ -173,6 +174,8 @@ if smpl_features_enabled
   if dbus_run_session.found() and xvfb_run.found()
     foreach scenario : [
       'copy', 'verified-copy', 'private-source', 'chunked-copy',
+      'crossfs-copy', 'zero-byte-copy', 'zero-advertised-size-copy',
+      'short-read-copy', 'short-read-move', 'readback-short-read', 'pull-short-read',
       'metadata-preserved', 'default-permissions', 'default-permissions-move',
       'pull-copy', 'pull-chunked-copy', 'pull-read-unsupported', 'pull-syncfs-eio', 'pull-syncfs-eintr',
       'pull-fsync-eio', 'pull-verify-unavailable', 'pull-move-unavailable',

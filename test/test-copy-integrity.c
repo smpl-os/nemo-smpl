@@ -25,7 +25,8 @@ typedef enum {
     DIR_SYNC, DIR_OPEN, CANCEL_CREATE, CANCEL_WRITE, CANCEL_PUBLISH,
     CANCEL_DELETE, COLLISION, CLEANUP, DEFAULT_PERMS, SYNCFS_EIO, SYNCFS_EINTR,
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
-    PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE
+    PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
+    SOURCE_EOF, VERIFY_EOF, PULL_EOF
 } Fault;
 
 typedef struct {
@@ -36,6 +37,13 @@ typedef struct {
 
 static const TestCase cases[] = {
     { "copy", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "crossfs-copy", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "zero-byte-copy", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "zero-advertised-size-copy", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "short-read-copy", SOURCE_EOF, FALSE, FALSE, FALSE, TRUE },
+    { "short-read-move", SOURCE_EOF, TRUE, FALSE, TRUE, TRUE },
+    { "readback-short-read", VERIFY_EOF, TRUE, FALSE, TRUE, TRUE },
+    { "pull-short-read", PULL_EOF, FALSE, FALSE, FALSE, TRUE },
     { "verified-copy", NONE, FALSE, TRUE, FALSE, FALSE },
     { "private-source", NONE, FALSE, TRUE, FALSE, FALSE },
     { "metadata-preserved", NONE, FALSE, TRUE, FALSE, FALSE },
@@ -182,7 +190,7 @@ expected_warning (const char *domain, GLogLevelFlags level, const char *message,
     } else if ((fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP) &&
                g_str_has_prefix (message, "verify-copy: CHECKSUM MISMATCH")) {
         fixture.mismatch_warnings++;
-    } else if (fixture.test->fault == READBACK &&
+    } else if ((fixture.test->fault == READBACK || fixture.test->fault == VERIFY_EOF) &&
                g_str_has_prefix (message, "verify-copy: could not read back")) {
         fixture.readback_warnings++;
     } else if (fixture.test->fault == CLEANUP &&
@@ -215,9 +223,20 @@ char *
 __wrap_g_file_get_path (GFile *file)
 {
     char *path = __real_g_file_get_path (file);
-    if (fixture.running && pull_case () && source_item (path))
+    if (fixture.running && (pull_case () || fixture.test->fault == SOURCE_EOF) &&
+        source_item (path))
         g_clear_pointer (&path, g_free);
     return path;
+}
+
+gboolean __real_g_file_is_native (GFile *);
+gboolean
+__wrap_g_file_is_native (GFile *file)
+{
+    char *path = __real_g_file_get_path (file);
+    gboolean remote = fixture.running && fixture.test->fault == SOURCE_EOF && source_item (path);
+    g_free (path);
+    return remote ? FALSE : __real_g_file_is_native (file);
 }
 
 static char *
@@ -360,6 +379,10 @@ __wrap_read (int fd, void *buffer, size_t count)
             stage->stage_checksum = ++fixture.sequence;
         }
         g_free (path);
+        if ((item || stage) && fixture.test->fault == VERIFY_EOF) {
+            fixture.injections++;
+            return 0;
+        }
     }
     return __real_read (fd, buffer, count);
 }
@@ -395,10 +418,14 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
         fixture.injections++;
     }
     Item *item = source_item (path);
-    if (fixture.running && pull_case () && info && item &&
+    if (fixture.running &&
+        (pull_case () || fixture.test->fault == SOURCE_EOF || named ("crossfs-copy") ||
+         named ("zero-byte-copy") || named ("zero-advertised-size-copy")) && info && item &&
         strstr (attributes, G_FILE_ATTRIBUTE_ID_FILESYSTEM))
         g_file_info_set_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM,
                                           "nemo-test-pull-only-filesystem");
+    if (transaction && info && item && named ("zero-advertised-size-copy"))
+        g_file_info_set_size (info, 0);
     if (transaction && info && item && fixture.test->fault == OPTIONAL_METADATA) {
         g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_ETAG_VALUE);
         g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
@@ -442,6 +469,12 @@ __wrap_g_file_read (GFile *file, GCancellable *cancel, GError **error)
     char *path = __real_g_file_get_path (file);
     Item *item = source_item (path);
     g_free (path);
+    if (fixture.running && fixture.test->fault == SOURCE_EOF && item) {
+        GFileInputStream *stream = __real_g_file_read (file, cancel, error);
+        if (stream != NULL)
+            item->input_streams++;
+        return stream;
+    }
     if (fixture.running && pull_case () && item) {
         g_assert_nonnull (cancel);
         if (named ("pull-read-unsupported")) {
@@ -463,6 +496,21 @@ gssize
 __wrap_g_input_stream_read (GInputStream *stream, void *buffer, gsize count,
                             GCancellable *cancel, GError **error)
 {
+    if (fixture.running && fixture.test->fault == SOURCE_EOF &&
+        (G_IS_UNIX_INPUT_STREAM (stream) || G_IS_FILE_DESCRIPTOR_BASED (stream))) {
+        int fd = G_IS_UNIX_INPUT_STREAM (stream)
+            ? g_unix_input_stream_get_fd (G_UNIX_INPUT_STREAM (stream))
+            : g_file_descriptor_based_get_fd (G_FILE_DESCRIPTOR_BASED (stream));
+        char *path = fd_path (fd);
+        Item *item = source_item (path);
+        g_free (path);
+        if (item) {
+            if (item->closed > 0)
+                item->checksum = ++fixture.sequence;
+            fixture.injections++;
+            return 0;
+        }
+    }
     if (fixture.running && stream == fixture.pull_input) {
         g_assert_nonnull (cancel);
         inject_io (error, G_IO_ERROR_NOT_SUPPORTED);
@@ -545,7 +593,8 @@ __wrap_g_output_stream_write_all (GOutputStream *stream, const void *buffer, gsi
             g_assert_cmpint (fstat (fd, &st), ==, 0);
             g_assert_cmpuint (st.st_mode & 0777, ==, 0600);
             item->writes++;
-            if ((fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP) &&
+            if ((fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP ||
+                 fixture.test->fault == VERIFY_EOF) &&
                 !(named ("folder-partial-move") && g_str_has_suffix (item->source, "/good"))) {
                 g_assert_cmpint (pwrite (fd, "CORRUPTED", 9, 0), ==, 9);
                 fixture.injections++;
@@ -782,7 +831,10 @@ __wrap_g_file_copy (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
     gboolean ok = __real_g_file_copy (source, dest, flags, cancel, progress, data, error);
     if (item && ok) {
         item->backend_copy = ++fixture.sequence;
-        if (fixture.test->fault == PULL_FAILED) {
+        if (fixture.test->fault == PULL_EOF) {
+            g_assert_cmpint (truncate (dst, 8), ==, 0);
+            fixture.injections++;
+        } else if (fixture.test->fault == PULL_FAILED) {
             g_assert_true (exists (dst));
             inject_io (error, G_IO_ERROR_FAILED);
             ok = FALSE;
@@ -862,7 +914,7 @@ __wrap_g_file_move (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
             if (fixture.test->move || fixture.test->verify) {
                 g_assert_cmpint (item->checksum, >, item->syncs);
                 g_assert_cmpint (item->stage_checksum, >, item->syncs);
-            } else {
+            } else if (pull_case ()) {
                 g_assert_cmpint (item->adopted, >, item->syncs);
             }
         }
@@ -1113,7 +1165,8 @@ test_copy_integrity (void)
     gboolean type_conflict = file_over_folder () || folder_over_file () || nested_type_conflict ();
     guint count = named ("skip-all") || named ("replace-all") || named ("merge-all") ? 3 : 1;
     fixture.contents = named ("chunked-copy") || named ("pull-chunked-copy") ?
-                       g_strnfill (33 * 1024 * 1024, 'x') : g_strdup (payload);
+                       g_strnfill (33 * 1024 * 1024, 'x') :
+                       g_strdup (named ("zero-byte-copy") ? "" : payload);
     fixture.source_dir = g_build_filename (fixture.root, "source", NULL);
     fixture.dest_dir = g_build_filename (fixture.root, "destination", NULL);
     g_assert_cmpint (g_mkdir (fixture.source_dir, 0700), ==, 0);
@@ -1263,7 +1316,7 @@ test_copy_integrity (void)
     }
     if (fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP)
         g_assert_cmpint (fixture.mismatch_warnings, ==, count);
-    if (fixture.test->fault == READBACK)
+    if (fixture.test->fault == READBACK || fixture.test->fault == VERIFY_EOF)
         g_assert_cmpint (fixture.readback_warnings, ==, 1);
     if (named ("skip-all"))
         g_assert_cmpint (fixture.warnings, ==, 1);
@@ -1362,7 +1415,8 @@ test_copy_integrity (void)
                 assert_contents (item->dest, previous);
             else
                 g_assert_false (exists (item->dest));
-            if (completed && !named ("copy") && !named ("samefs-move") && !pull_case ()) {
+            if (completed && !named ("copy") && !named ("samefs-move") && !pull_case () &&
+                (fixture.test->move || fixture.test->verify)) {
                 g_assert_cmpint (item->writes, >, 0);
                 g_assert_cmpint (item->checksum, >, item->syncs);
                 g_assert_cmpint (item->publish, >, item->checksum);
