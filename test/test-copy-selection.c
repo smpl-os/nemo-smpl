@@ -416,10 +416,91 @@ test_copy_to (void)
 }
 
 static void
+test_copy_to_verified (gconstpointer changed)
+{
+    SelectionView *view = new_view ("source");
+    NemoFile *new_selection = nemo_file_get_by_uri ("file:///new-source-selection");
+    NemoFile *verified_target = nemo_file_get_by_uri ("file:///different-target/existing");
+    GList replacement = { .data = new_selection };
+
+    move_copy_selection_to_location (NEMO_VIEW (view), GDK_ACTION_COPY,
+                                    "file:///different-target");
+    if (GPOINTER_TO_INT (changed)) {
+        nemo_view_call_set_selection (NEMO_VIEW (view), &replacement);
+    }
+    finish_copy (TRUE, verified_target);
+    if (GPOINTER_TO_INT (changed)) {
+        g_assert_true (view->selected->data == new_selection);
+        g_assert_cmpuint (view->clears, ==, 0);
+    } else {
+        g_assert_null (view->selected);
+        g_assert_cmpuint (view->clears, ==, 1);
+    }
+    free_view (view);
+    nemo_file_unref (new_selection);
+    nemo_file_unref (verified_target);
+}
+
+static void
+test_destination_guard (gconstpointer mode)
+{
+    SelectionView *view = new_view ("same-folder");
+    NemoView *base = NEMO_VIEW (view);
+    NemoFile *original = nemo_file_ref (view->selected->data);
+    NemoFile *result = nemo_file_get_by_uri ("file:///completed-destination");
+    GList selection = { .data = original };
+
+    start_copy (view, view, GDK_ACTION_COPY);
+    if (GPOINTER_TO_INT (mode) == 0) {
+        nemo_view_call_set_selection (base, &selection);
+    } else if (GPOINTER_TO_INT (mode) == 1) {
+        NemoDirectory *original_directory = g_object_ref (base->details->model);
+        NemoDirectory *other = nemo_directory_get_by_uri ("file:///other-copy-location");
+        load_directory (base, other);
+        load_directory (base, original_directory);
+        nemo_directory_unref (other);
+        nemo_directory_unref (original_directory);
+    }
+    if (GPOINTER_TO_INT (mode) == 3) {
+        finish_copy_full (TRUE, result, TRUE);
+        g_assert_null (view->selected);
+        nemo_view_call_set_selection (base, &selection);
+        g_signal_emit_by_name (view, "add-file", result, base->details->model);
+        g_assert_cmpuint (view->clears, ==, 1);
+    } else {
+        finish_copy (GPOINTER_TO_INT (mode) != 2, result);
+        g_assert_cmpuint (view->clears, ==, 0);
+    }
+    g_assert_true (view->selected->data == original);
+    free_view (view);
+    nemo_file_unref (original);
+    nemo_file_unref (result);
+}
+
+static void
+test_changed_destination (void)
+{
+    SelectionView *source = new_view ("source");
+    SelectionView *dest = new_view ("destination");
+    NemoFile *selected = dest->selected->data;
+    NemoFile *result = nemo_file_get_by_uri ("file:///verified-destination");
+
+    start_copy (source, dest, GDK_ACTION_COPY);
+    nemo_view_call_set_selection (NEMO_VIEW (dest), dest->selected);
+    finish_copy (TRUE, result);
+    g_assert_null (source->selected);
+    g_assert_true (dest->selected->data == selected);
+    nemo_file_unref (result);
+    free_view (source);
+    free_view (dest);
+}
+
+static void
 test_clipboard (gconstpointer mode)
 {
     SelectionView *source = new_view ("clipboard-source");
-    SelectionView *dest = new_view ("clipboard-destination");
+    SelectionView *dest = GPOINTER_TO_INT (mode) >= 6
+        ? source : new_view ("clipboard-destination");
     GtkClipboard *clipboard = nemo_clipboard_get (GTK_WIDGET (source));
     action_copy_files_callback (NULL, source);
     action_paste_files_callback (NULL, dest);
@@ -438,6 +519,7 @@ test_clipboard (gconstpointer mode)
         gtk_clipboard_set_text (clipboard, "replacement", -1);
         break;
     case 3:
+    case 6:
         nemo_view_call_set_selection (NEMO_VIEW (source), source->selected);
         break;
     case 4: {
@@ -448,10 +530,17 @@ test_clipboard (gconstpointer mode)
     }
     }
     paste_clipboard_data (NEMO_VIEW (dest), payload, target, origin);
-    if (GPOINTER_TO_INT (mode) == 5) {
+    if (GPOINTER_TO_INT (mode) == 5 || GPOINTER_TO_INT (mode) == 7) {
         gtk_clipboard_set_text (clipboard, "replaced while copying", -1);
     }
-    finish_copy (TRUE, NULL);
+    NemoFile *verified = GPOINTER_TO_INT (mode) >= 6
+        ? nemo_file_get_by_uri ("file:///clipboard-existing-target") : NULL;
+    NemoFile *original = source->selected->data;
+    finish_copy (TRUE, verified);
+    if (verified != NULL) {
+        g_assert_true (source->selected->data == original);
+        nemo_file_unref (verified);
+    }
     g_assert_cmpuint (source->clears, ==, GPOINTER_TO_INT (mode) == 0);
     g_assert_cmpuint (dest->clears, ==, 0);
     if (GPOINTER_TO_INT (mode) == 0) {
@@ -467,7 +556,9 @@ test_clipboard (gconstpointer mode)
     gtk_selection_data_free (payload);
     g_free (target);
     free_view (source);
-    free_view (dest);
+    if (dest != source) {
+        free_view (dest);
+    }
 }
 
 static void
@@ -657,12 +748,25 @@ main (int argc, char **argv)
     g_test_add_data_func ("/copy-selection/f5-modal-selection-change", GINT_TO_POINTER (0), test_f5);
     g_test_add_data_func ("/copy-selection/f5-modal-source-close", GINT_TO_POINTER (1), test_f5);
     g_test_add_func ("/copy-selection/copy-to", test_copy_to);
+    g_test_add_data_func ("/copy-selection/copy-to-verified-target", GINT_TO_POINTER (0), test_copy_to_verified);
+    g_test_add_data_func ("/copy-selection/changed-copy-to-verified-target", GINT_TO_POINTER (1), test_copy_to_verified);
+    g_test_add_data_func ("/copy-selection/same-folder-stale-verified-target",
+                          GINT_TO_POINTER (0), test_destination_guard);
+    g_test_add_data_func ("/copy-selection/same-folder-navigated-verified-target",
+                          GINT_TO_POINTER (1), test_destination_guard);
+    g_test_add_data_func ("/copy-selection/same-folder-partial-destination",
+                          GINT_TO_POINTER (2), test_destination_guard);
+    g_test_add_data_func ("/copy-selection/changed-before-destination-arrives",
+                          GINT_TO_POINTER (3), test_destination_guard);
+    g_test_add_func ("/copy-selection/changed-destination-preserved", test_changed_destination);
     g_test_add_data_func ("/copy-selection/clipboard-repeat", GINT_TO_POINTER (0), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-same-set-replaced", GINT_TO_POINTER (1), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-lost", GINT_TO_POINTER (2), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-selection-changed", GINT_TO_POINTER (3), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-payload-mismatch", GINT_TO_POINTER (4), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-replaced-during-copy", GINT_TO_POINTER (5), test_clipboard);
+    g_test_add_data_func ("/copy-selection/same-folder-clipboard-stale-origin", GINT_TO_POINTER (6), test_clipboard);
+    g_test_add_data_func ("/copy-selection/same-folder-clipboard-revoked-origin", GINT_TO_POINTER (7), test_clipboard);
     g_test_add_data_func ("/copy-selection/clipboard-delayed-destination-close",
                           GINT_TO_POINTER (0), test_delayed_clipboard_close);
     g_test_add_data_func ("/copy-selection/clipboard-into-delayed-destination-close",

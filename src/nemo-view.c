@@ -3400,6 +3400,10 @@ done_loading (NemoView *view,
 typedef struct {
 	GHashTable *debuting_files;
 	GList	   *added_files;
+#ifdef NEMO_SMPL
+    gboolean guard_selection;
+    guint64 selection_generation;
+#endif
 } DebutingFilesData;
 
 static void
@@ -3429,8 +3433,17 @@ debuting_files_add_file_callback (NemoView *view,
 		data->added_files = g_list_prepend (data->added_files, new_file);
 
 		if (g_hash_table_size (data->debuting_files) == 0) {
+#ifdef NEMO_SMPL
+            if (!data->guard_selection ||
+                (!view->details->selection_disposed &&
+                 data->selection_generation != G_MAXUINT64 &&
+                 data->selection_generation == view->details->selection_generation)) {
+#endif
 			nemo_view_call_set_selection (view, data->added_files);
 			nemo_view_reveal_selection (view);
+#ifdef NEMO_SMPL
+            }
+#endif
 			g_signal_handlers_disconnect_by_func (view,
 							      G_CALLBACK (debuting_files_add_file_callback),
 							      data);
@@ -3445,6 +3458,9 @@ typedef struct {
 	NemoView *directory_view;
 #ifdef NEMO_SMPL
     CopySelection *source_selection;
+    gboolean guard_selection;
+    gboolean select_destination;
+    guint64 selection_generation;
 #endif
 } CopyMoveDoneData;
 
@@ -3541,7 +3557,7 @@ copy_selection_new (NemoView *view)
     return selection;
 }
 
-static void
+static gboolean
 copy_selection_complete (CopySelection *selection, gboolean success)
 {
     NemoView *view;
@@ -3550,16 +3566,16 @@ copy_selection_complete (CopySelection *selection, gboolean success)
     gboolean unchanged;
 
     if (selection == NULL || !success || selection->revoked) {
-        return;
+        return FALSE;
     }
     view = g_weak_ref_get (&selection->view);
     if (view == NULL) {
-        return;
+        return FALSE;
     }
     if (view->details->selection_disposed ||
         selection->generation != view->details->selection_generation) {
         g_object_unref (view);
-        return;
+        return FALSE;
     }
     location = nemo_view_get_uri (view);
     files = nemo_view_get_selection (view);
@@ -3574,6 +3590,7 @@ copy_selection_complete (CopySelection *selection, gboolean success)
         nemo_view_call_set_selection (view, NULL);
     }
     g_object_unref (view);
+    return unchanged;
 }
 
 static void
@@ -3790,10 +3807,27 @@ copy_move_done_callback (GHashTable *debuting_files,
 	directory_view = copy_move_done_data->directory_view;
 
 #ifdef NEMO_SMPL
+    /* CopyTo passes the source view here. Verified-existing FALSE debut entries
+     * must not make destination selection bypass the source's stale guard. */
+    gboolean select_destination = directory_view != NULL &&
+        (!copy_move_done_data->guard_selection ||
+         (success && copy_move_done_data->select_destination &&
+          copy_move_done_data->selection_generation != G_MAXUINT64 &&
+          copy_move_done_data->selection_generation ==
+              directory_view->details->selection_generation));
+    NemoView *source_view = copy_move_done_data->source_selection != NULL
+        ? g_weak_ref_get (&copy_move_done_data->source_selection->view) : NULL;
+    gboolean source_is_destination = directory_view != NULL && source_view == directory_view;
+    g_clear_object (&source_view);
+
     /* Do this first: same-folder copies must keep the new destination selection. */
-    copy_selection_complete (copy_move_done_data->source_selection, success);
+    gboolean source_cleared = copy_selection_complete (copy_move_done_data->source_selection, success);
+    if (source_is_destination && !source_cleared) {
+        select_destination = FALSE;
+    }
     directory_view = copy_move_done_data->directory_view;
-    if (directory_view != NULL && directory_view->details->selection_disposed) {
+    if (directory_view != NULL &&
+        (directory_view->details->selection_disposed || !select_destination)) {
         g_signal_handlers_disconnect_by_func (directory_view,
                                               pre_copy_move_add_file_callback, data);
         directory_view = NULL;
@@ -3804,6 +3838,10 @@ copy_move_done_callback (GHashTable *debuting_files,
 		g_assert (NEMO_IS_VIEW (directory_view));
 
 		debuting_files_data = g_new (DebutingFilesData, 1);
+#ifdef NEMO_SMPL
+        debuting_files_data->guard_selection = copy_move_done_data->guard_selection;
+        debuting_files_data->selection_generation = directory_view->details->selection_generation;
+#endif
 		debuting_files_data->debuting_files = g_hash_table_ref (debuting_files);
 		debuting_files_data->added_files = eel_g_list_partition
 			(copy_move_done_data->added_files,
@@ -11701,6 +11739,16 @@ move_copy_items_with_source (NemoView *view,
 
     CopyMoveDoneData *done = pre_copy_move (view);
 #ifdef NEMO_SMPL
+    if (copy_action == GDK_ACTION_COPY) {
+        g_autofree char *displayed_uri = nemo_view_get_backing_uri (view);
+        g_autoptr (GFile) displayed = displayed_uri != NULL
+            ? g_file_new_for_uri (displayed_uri) : NULL;
+        g_autoptr (GFile) target = g_file_new_for_uri (target_uri);
+
+        done->guard_selection = TRUE;
+        done->select_destination = displayed != NULL && g_file_equal (displayed, target);
+        done->selection_generation = view->details->selection_generation;
+    }
     if (copy_action == GDK_ACTION_COPY && source_selection != NULL &&
         !source_selection->revoked && item_uris != NULL &&
         copy_selection_same_uris (source_selection->transfer, item_uris)) {
