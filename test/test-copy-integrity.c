@@ -26,7 +26,7 @@ typedef enum {
     CANCEL_DELETE, COLLISION, CLEANUP, DEFAULT_PERMS, SYNCFS_EIO, SYNCFS_EINTR,
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
     PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
-    SOURCE_EOF, VERIFY_EOF, PULL_EOF
+    SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY
 } Fault;
 
 typedef struct {
@@ -44,6 +44,9 @@ static const TestCase cases[] = {
     { "short-read-move", SOURCE_EOF, TRUE, FALSE, TRUE, TRUE },
     { "readback-short-read", VERIFY_EOF, TRUE, FALSE, TRUE, TRUE },
     { "pull-short-read", PULL_EOF, FALSE, FALSE, FALSE, TRUE },
+    { "metadata-no-version-move", NO_VERSION, TRUE, FALSE, TRUE, FALSE },
+    { "source-changed-move", SOURCE_CHANGED, TRUE, FALSE, TRUE, TRUE },
+    { "cancel-verification", CANCEL_VERIFY, TRUE, FALSE, TRUE, TRUE },
     { "verified-copy", NONE, FALSE, TRUE, FALSE, FALSE },
     { "private-source", NONE, FALSE, TRUE, FALSE, FALSE },
     { "metadata-preserved", NONE, FALSE, TRUE, FALSE, FALSE },
@@ -159,6 +162,15 @@ pull_case (void)
     return g_str_has_prefix (fixture.test->name, "pull-");
 }
 
+static void
+assert_source_readback (Item *item)
+{
+    if (fixture.test->fault == NO_VERSION)
+        g_assert_cmpint (item->checksum, >, item->syncs);
+    else
+        g_assert_cmpint (item->checksum, ==, 0);
+}
+
 static gboolean
 file_over_folder (void)
 {
@@ -272,9 +284,10 @@ open_with_fault (const char *path, int flags, mode_t mode, gboolean large_file)
 {
     if (fixture.running) {
         Item *item = source_item (path);
+        Item *stage = g_hash_table_lookup (fixture.stages, path);
         if ((fixture.test->fault == DIR_OPEN && (flags & O_DIRECTORY) &&
              under (path, fixture.dest_dir)) ||
-            (fixture.test->fault == READBACK && item && item->syncs)) {
+            (fixture.test->fault == READBACK && !pull_case () && stage && stage->syncs)) {
             fixture.injections++;
             errno = EACCES;
             return -1;
@@ -379,6 +392,11 @@ __wrap_read (int fd, void *buffer, size_t count)
             stage->stage_checksum = ++fixture.sequence;
         }
         g_free (path);
+        if (stage && fixture.test->fault == CANCEL_VERIFY) {
+            fixture.injections++;
+            g_cancellable_cancel (fixture.cancel);
+            return 0;
+        }
         if ((item || stage) && fixture.test->fault == VERIFY_EOF) {
             fixture.injections++;
             return 0;
@@ -430,6 +448,15 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
         g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_ETAG_VALUE);
         g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
         g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_ID_FILE);
+        fixture.injections++;
+    }
+    if (transaction && info && item &&
+        (fixture.test->fault == NO_VERSION || fixture.test->fault == SOURCE_CHANGED)) {
+        g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_ETAG_VALUE);
+        if (fixture.test->fault == NO_VERSION) {
+            g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+            g_file_info_remove_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
+        }
         fixture.injections++;
     }
     if (transaction && info && item && fixture.test->fault == MISSING_TYPE) {
@@ -694,6 +721,16 @@ __wrap_g_output_stream_close (GOutputStream *stream, GCancellable *cancel, GErro
     gboolean ok = __real_g_output_stream_close (stream, cancel, error);
     if (item && ok)
         item->closed = ++fixture.sequence;
+    if (item && ok && fixture.test->fault == SOURCE_CHANGED) {
+        int fd = __real_open (item->source, O_WRONLY);
+        g_assert_cmpint (fd, >=, 0);
+        g_assert_cmpint (pwrite (fd, "UPDATED!!", 9, 0), ==, 9);
+        struct timespec times[] = { item->source_mtime, item->source_mtime };
+        times[1].tv_sec += 5;
+        g_assert_cmpint (futimens (fd, times), ==, 0);
+        g_assert_cmpint (__real_close (fd), ==, 0);
+        fixture.injections++;
+    }
     return ok;
 }
 
@@ -912,7 +949,7 @@ __wrap_g_file_move (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
         if (!item->symlink) {
             g_assert_cmpint (item->syncs, >, 0);
             if (fixture.test->move || fixture.test->verify) {
-                g_assert_cmpint (item->checksum, >, item->syncs);
+                assert_source_readback (item);
                 g_assert_cmpint (item->stage_checksum, >, item->syncs);
             } else if (pull_case ()) {
                 g_assert_cmpint (item->adopted, >, item->syncs);
@@ -959,7 +996,7 @@ record_source_delete (const char *path)
     if (!item)
         return;
     if (!item->symlink) {
-        g_assert_cmpint (item->checksum, >, item->syncs);
+        assert_source_readback (item);
         g_assert_cmpint (item->stage_checksum, >, item->syncs);
         g_assert_cmpint (item->publish, >, item->stage_checksum);
     }
@@ -1127,7 +1164,8 @@ successful_case (void)
     return (fault == NONE || fault == SYNC_EINTR || fault == RANGE_EINVAL ||
             fault == RANGE_ENOSYS || fault == RANGE_EOPNOTSUPP || fault == COLLISION ||
             fault == DEFAULT_PERMS || fault == SYNCFS_EINTR ||
-            fault == ATTR_UNSUPPORTED || fault == ATTR_DENIED || fault == OPTIONAL_METADATA) &&
+            fault == ATTR_UNSUPPORTED || fault == ATTR_DENIED || fault == OPTIONAL_METADATA ||
+            fault == NO_VERSION) &&
            !file_over_folder () && !folder_over_file () && !nested_type_conflict ();
 }
 
@@ -1347,7 +1385,7 @@ test_copy_integrity (void)
             g_assert_cmpint (item->output_closes, >, 0);
         g_assert_cmpint (exists (item->source), ==, !completed || !fixture.test->move);
         if (fixture.test->fault == OPTIONAL_METADATA) {
-            g_assert_cmpint (item->checksum, >, item->syncs);
+            assert_source_readback (item);
             g_assert_cmpint (item->stage_checksum, >, item->syncs);
             g_assert_cmpint (item->publish, >, item->stage_checksum);
         } else if (fixture.test->fault == MISSING_TYPE) {
@@ -1402,8 +1440,16 @@ test_copy_integrity (void)
             g_assert_cmpint (item->checksum, ==, 0);
             g_free (expected);
         } else if (!type_conflict) {
-            if (exists (item->source))
-                assert_contents (item->source, fixture.contents);
+            if (exists (item->source)) {
+                if (fixture.test->fault == SOURCE_CHANGED) {
+                    char *changed = g_strdup (fixture.contents);
+                    memcpy (changed, "UPDATED!!", 9);
+                    assert_contents (item->source, changed);
+                    g_free (changed);
+                } else {
+                    assert_contents (item->source, fixture.contents);
+                }
+            }
             if (completed || item->publish)
                 assert_contents (item->dest, fixture.contents);
             else if (fixture.test->fault == PUBLISH_RACE) {
@@ -1418,8 +1464,9 @@ test_copy_integrity (void)
             if (completed && !named ("copy") && !named ("samefs-move") && !pull_case () &&
                 (fixture.test->move || fixture.test->verify)) {
                 g_assert_cmpint (item->writes, >, 0);
-                g_assert_cmpint (item->checksum, >, item->syncs);
-                g_assert_cmpint (item->publish, >, item->checksum);
+                assert_source_readback (item);
+                g_assert_cmpint (item->publish, >, item->stage_checksum);
+                g_assert_cmpint (item->input_streams, ==, 1);
                 if (fixture.test->move)
                     g_assert_cmpint (item->deleted, >, item->dirsync);
             }
@@ -1445,7 +1492,7 @@ test_copy_integrity (void)
             }
             if (!completed && (fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP)) {
                 g_assert_cmpint (item->writes, >, 0);
-                g_assert_cmpint (item->checksum, >, item->syncs);
+                assert_source_readback (item);
                 g_assert_cmpint (item->stage_checksum, >, item->syncs);
                 g_assert_cmpint (item->publish, ==, 0);
                 g_assert_cmpint (item->deleted, ==, 0);

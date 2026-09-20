@@ -4565,9 +4565,11 @@ checksum_file_bypass_cache (GFile *file, GCancellable *cancellable, guint64 mini
 
 /* The transactional caller flushes its writer before comparing checksums. */
 static VerifyResult
-verify_copied_file (CommonJob *job, GFile *src, GFile *dest, guint64 minimum_size)
+verify_copied_file (CommonJob *job, GFile *src, GFile *dest, guint64 minimum_size,
+                    const gchar *streamed_checksum)
 {
-	gchar *src_sum, *dest_sum;
+	gchar *read_src_sum = NULL, *dest_sum;
+	const gchar *src_sum = streamed_checksum;
 	VerifyResult result;
 
 #ifndef NEMO_SMPL
@@ -4585,10 +4587,15 @@ verify_copied_file (CommonJob *job, GFile *src, GFile *dest, guint64 minimum_siz
 	}
 #endif
 
-	src_sum  = checksum_file_bypass_cache (src,  job->cancellable, minimum_size);
+	if (src_sum == NULL) {
+		read_src_sum = checksum_file_bypass_cache (src, job->cancellable, minimum_size);
+		src_sum = read_src_sum;
+	}
 	dest_sum = checksum_file_bypass_cache (dest, job->cancellable, minimum_size);
 
-	if (src_sum == NULL || dest_sum == NULL) {
+	if (g_cancellable_is_cancelled (job->cancellable)) {
+		result = VERIFY_RESULT_UNAVAILABLE;
+	} else if (src_sum == NULL || dest_sum == NULL) {
 		char *uri = g_file_get_uri (src_sum == NULL ? src : dest);
 
 		g_warning ("verify-copy: could not read back %s to compare it", uri);
@@ -4610,7 +4617,7 @@ verify_copied_file (CommonJob *job, GFile *src, GFile *dest, guint64 minimum_siz
 		result = VERIFY_RESULT_MISMATCH;
 	}
 
-	g_free (src_sum);
+	g_free (read_src_sum);
 	g_free (dest_sum);
 
 	return result;
@@ -5007,10 +5014,9 @@ copy_errno (int err, GError **error)
 }
 
 static gboolean
-copy_length_is_complete (GFileInfo *source_info, guint64 copied, GError **error)
+copy_length_is_complete (guint64 minimum_size, guint64 copied, GError **error)
 {
-	if (g_file_info_has_attribute (source_info, G_FILE_ATTRIBUTE_STANDARD_SIZE) &&
-	    copied < g_file_info_get_attribute_uint64 (source_info, G_FILE_ATTRIBUTE_STANDARD_SIZE)) {
+	if (copied < minimum_size) {
 		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_PARTIAL_INPUT,
 		                     _("The copy is shorter than the reported source size. "
 		                       "The destination was not replaced and the source was not removed."));
@@ -5098,7 +5104,8 @@ open_dest_directory (GFile *file, GCancellable *cancellable, GError **error)
 
 #define COPY_SOURCE_ATTRIBUTES G_FILE_ATTRIBUTE_STANDARD_TYPE "," \
 	G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET "," \
-	G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ETAG_VALUE
+	G_FILE_ATTRIBUTE_ID_FILE "," G_FILE_ATTRIBUTE_ETAG_VALUE "," \
+	G_FILE_ATTRIBUTE_TIME_MODIFIED "," G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC
 
 static GFileInfo *
 query_copy_source (GFile *src, GCancellable *cancellable, GError **error)
@@ -5202,6 +5209,14 @@ copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest, gboolean
 }
 
 static gboolean
+copy_source_has_version (GFileInfo *info)
+{
+	const gchar *etag = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ETAG_VALUE);
+	return (etag != NULL && etag[0] != '\0') ||
+	       g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED) > 0;
+}
+
+static gboolean
 copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable, GError **error)
 {
 	GFileInfo *after = query_copy_source (src, cancellable, error);
@@ -5216,7 +5231,11 @@ copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable,
 	       g_strcmp0 (g_file_info_get_attribute_string (before, G_FILE_ATTRIBUTE_ETAG_VALUE),
 	                  g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ETAG_VALUE)) == 0 &&
 	       g_strcmp0 (g_file_info_get_attribute_string (before, G_FILE_ATTRIBUTE_ID_FILE),
-	                  g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ID_FILE)) == 0;
+	                  g_file_info_get_attribute_string (after, G_FILE_ATTRIBUTE_ID_FILE)) == 0 &&
+	       g_file_info_get_attribute_uint64 (before, G_FILE_ATTRIBUTE_TIME_MODIFIED) ==
+	       g_file_info_get_attribute_uint64 (after, G_FILE_ATTRIBUTE_TIME_MODIFIED) &&
+	       g_file_info_get_attribute_uint32 (before, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC) ==
+	       g_file_info_get_attribute_uint32 (after, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC);
 	if (same && g_file_info_get_file_type (before) == G_FILE_TYPE_SYMBOLIC_LINK) {
 		same = g_strcmp0 (g_file_info_get_attribute_byte_string (before, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET),
 		                  g_file_info_get_attribute_byte_string (after, G_FILE_ATTRIBUTE_STANDARD_SYMLINK_TARGET)) == 0;
@@ -5230,7 +5249,7 @@ copy_source_unchanged (GFile *src, GFileInfo *before, GCancellable *cancellable,
 }
 
 static GInputStream *
-open_copy_source (GFile *src, GCancellable *cancellable, GError **error)
+open_copy_source (GFile *src, GCancellable *cancellable, guint64 *minimum_size, GError **error)
 {
 	char *path = g_file_get_path (src);
 	int fd;
@@ -5258,6 +5277,7 @@ open_copy_source (GFile *src, GCancellable *cancellable, GError **error)
 		close (fd);
 		return NULL;
 	}
+	*minimum_size = MAX (*minimum_size, (guint64) st.st_size);
 	return g_unix_input_stream_new (fd, TRUE);
 }
 
@@ -5267,7 +5287,8 @@ open_copy_source (GFile *src, GCancellable *cancellable, GError **error)
 static gboolean
 write_copy_contents (GFile *src, GFile *staging, GFileInfo *info,
                      GFileOutputStream *output, GFileCopyFlags flags,
-                     ProgressData *pdata, GError **error)
+                     ProgressData *pdata, GChecksum *source_checksum,
+                     guint64 *copied_bytes, GError **error)
 {
 	GCancellable *cancellable = pdata->job->common.cancellable;
 	GInputStream *input;
@@ -5276,8 +5297,9 @@ write_copy_contents (GFile *src, GFile *staging, GFileInfo *info,
 	gboolean ok = FALSE;
 	struct stat st;
 	GError *close_error = NULL;
+	guint64 minimum_size = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
 
-	input = open_copy_source (src, cancellable, error);
+	input = open_copy_source (src, cancellable, &minimum_size, error);
 	if (input == NULL) {
 		return FALSE;
 	}
@@ -5304,6 +5326,9 @@ write_copy_contents (GFile *src, GFile *staging, GFileInfo *info,
 			ok = TRUE;
 			break;
 		}
+		if (source_checksum != NULL) {
+			g_checksum_update (source_checksum, buffer, count);
+		}
 		if (!g_output_stream_write_all (G_OUTPUT_STREAM (output), buffer, count,
 		                                NULL, cancellable, error)) {
 			break;
@@ -5318,7 +5343,7 @@ write_copy_contents (GFile *src, GFile *staging, GFileInfo *info,
 		}
 	}
 	if (ok) {
-		ok = copy_length_is_complete (info, copied, error) &&
+		ok = copy_length_is_complete (minimum_size, copied, error) &&
 		     copy_optional_attributes (src, staging, flags, cancellable, error) &&
 		     g_output_stream_flush (G_OUTPUT_STREAM (output), cancellable, error);
 	}
@@ -5346,6 +5371,9 @@ out:
 		}
 	}
 	g_object_unref (input);
+	if (ok) {
+		*copied_bytes = copied;
+	}
 	return ok;
 }
 
@@ -5457,7 +5485,9 @@ copy_with_native_backend (GFile *src, GFile *staging, GFileInfo *source_info, GF
 		                     _("The backend did not produce a regular file."));
 		goto out;
 	}
-	if (!copy_length_is_complete (source_info, st.st_size, error)) {
+	if (!copy_length_is_complete (
+	        g_file_info_get_attribute_uint64 (source_info, G_FILE_ATTRIBUTE_STANDARD_SIZE),
+	        st.st_size, error)) {
 		goto out;
 	}
 	if (!sync_copy_fd (fd, job->cancellable, error)) {
@@ -5508,6 +5538,8 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	gboolean ok = FALSE, owned = FALSE;
 	gboolean must_verify = copy_job->verify_after_copy || copy_job->is_move;
 	int parent_fd = -1;
+	gchar *streamed_checksum = NULL;
+	guint64 copied_bytes = 0;
 
 	if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
 		return FALSE;
@@ -5601,7 +5633,19 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	}
 	if (output) {
 		GError *close_error = NULL;
-		ok = write_copy_contents (src, staging, info, output, flags, pdata, error);
+		/* Copies retain their source. For a move without any change token,
+		 * keep the independent source read before removing that source. */
+		gboolean hash_stream = must_verify &&
+		                       (!copy_job->is_move || copy_source_has_version (info));
+		GChecksum *checksum = hash_stream ? g_checksum_new (G_CHECKSUM_SHA256) : NULL;
+		ok = write_copy_contents (src, staging, info, output, flags, pdata,
+		                          checksum, &copied_bytes, error);
+		if (ok && checksum != NULL) {
+			streamed_checksum = g_strdup (g_checksum_get_string (checksum));
+		}
+		if (checksum != NULL) {
+			g_checksum_free (checksum);
+		}
 		gboolean native_pull = !ok && IS_IO_ERROR (*error, NOT_SUPPORTED) && parent_fd >= 0;
 		if (!g_output_stream_close (G_OUTPUT_STREAM (output), job->cancellable, &close_error)) {
 			if (ok || native_pull) {
@@ -5634,8 +5678,10 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	}
 	if (must_verify && type == G_FILE_TYPE_REGULAR) {
 		nemo_progress_info_set_details (job->progress, _("Verifying the copy"));
-		VerifyResult result = verify_copied_file (job, src, staging,
+		guint64 minimum_size = MAX (copied_bytes,
 			g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE));
+		VerifyResult result = verify_copied_file (job, src, staging, minimum_size,
+		                                         streamed_checksum);
 		if (g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
 			goto out;
 		}
@@ -5699,6 +5745,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 
 out:
 	pdata->dest_fd = -1;
+	g_free (streamed_checksum);
 	g_clear_object (&output);
 	if (parent_fd >= 0) {
 		close (parent_fd);
@@ -5960,7 +6007,7 @@ copy_move_file (CopyMoveJob *copy_job,
 		    !copy_job->verify_skip_all) {
 			GFileType ft = g_file_query_file_type (src, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
 			if (ft == G_FILE_TYPE_REGULAR) {
-				VerifyResult verdict = verify_copied_file (job, src, dest, 0);
+				VerifyResult verdict = verify_copied_file (job, src, dest, 0, NULL);
 
 				if (verdict != VERIFY_RESULT_MATCH && !job_aborted (job)) {
 					char *src_name = g_file_get_basename (src);

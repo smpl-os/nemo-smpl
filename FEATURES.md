@@ -51,7 +51,9 @@ Double Commander-style instant file viewer:
 ### Verify After Copy/Move
 
 - Checkbox in F5 (Copy) and F6 (Move) dialogs: "Verify after copy/move"
-- Requested SHA-256 verification compares the source with an unpublished staging file; mismatch or unavailable verification never replaces an existing destination
+- Streamed copies compute SHA-256 while reading the source, then flush and read back the unpublished destination to compare it; the source data is normally read only once
+- Moves keep size, identity, etag/modification-time checks around the transfer and before deleting the source. Without a usable change token, or when backend-native copying hides the source bytes, verification retains the independent source read
+- Mismatch, incomplete readback, or unavailable verification never replaces an existing destination or deletes the source
 - Copies and verification reads must cover known file sizes; premature end-of-stream is not accepted as a completed or verified transfer
 - Cross-filesystem copy-and-delete moves always verify regular files before deleting their source; same-filesystem atomic renames remain fast
 - Transactional local stream copies keep the writer open through `fsync`, then publish the final name and flush its parent directory; errors after publication retain the source and report an incomplete operation

@@ -176,6 +176,7 @@ if smpl_features_enabled
       'copy', 'verified-copy', 'private-source', 'chunked-copy',
       'crossfs-copy', 'zero-byte-copy', 'zero-advertised-size-copy',
       'short-read-copy', 'short-read-move', 'readback-short-read', 'pull-short-read',
+      'metadata-no-version-move', 'source-changed-move', 'cancel-verification',
       'metadata-preserved', 'default-permissions', 'default-permissions-move',
       'pull-copy', 'pull-chunked-copy', 'pull-read-unsupported', 'pull-syncfs-eio', 'pull-syncfs-eintr',
       'pull-fsync-eio', 'pull-verify-unavailable', 'pull-move-unavailable',
