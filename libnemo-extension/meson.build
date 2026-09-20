@@ -47,7 +47,7 @@ nemo_extension_lib = shared_library('nemo-extension',
   dependencies: nemo_extension_deps,
   include_directories: [ rootInclude, ],
   install: true,
-  version: '1.4.0',
+  version: '1.@0@.@1@'.format(nemo_extension_current - 1, nemo_extension_revision),
   link_args: [ '-Wl,-no-undefined' ],
 )
 
@@ -85,4 +85,3 @@ pkgconfig.generate(filebase: 'libnemo-extension',
   subdirs: 'nemo',
   variables: 'extensiondir=${libdir}/@0@/@1@'.format('nemo', 'extensions-3.0'),
 )
-
