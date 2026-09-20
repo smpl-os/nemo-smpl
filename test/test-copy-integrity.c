@@ -1459,11 +1459,16 @@ test_copy_integrity (void)
     g_assert_cmpint (fixture.result.outcome, ==, expected_outcome);
     if (!successful_case () && !partial) {
         g_assert_cmpuint (fixture.result.completed_items, ==, 0);
+        g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
+        g_assert_cmpuint (fixture.result.completed_symlinks, ==, 0);
         g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
         g_assert_cmpuint (fixture.result.verified_symlinks, ==, 0);
     }
     if (successful_case ()) {
         g_assert_cmpuint (fixture.result.completed_items, >, 0);
+        g_assert_cmpuint (fixture.result.completed_items, ==,
+                         fixture.result.completed_regular_files + fixture.result.completed_symlinks +
+                         fixture.result.completed_directories + fixture.result.atomic_moves);
         g_assert_cmpuint (fixture.result.skipped_items, ==, 0);
         g_assert_cmpuint (fixture.result.failed_items, ==, 0);
     }
@@ -1472,13 +1477,17 @@ test_copy_integrity (void)
     if (named ("samefs-move") || named ("samefs-verified-move")) {
         g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
         g_assert_cmpuint (fixture.result.completed_items, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
     }
     if (named ("verified-copy") || named ("fallback-move") || named ("folder-partial-move") ||
-        named ("partial-conflict-copy") || fixture.test->fault == SCAN_READ)
+        named ("partial-conflict-copy") || fixture.test->fault == SCAN_READ) {
+        g_assert_cmpuint (fixture.result.completed_regular_files, ==, 1);
         g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 1);
+    }
     if (is_link && successful_case ()) {
         g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
         g_assert_cmpuint (fixture.result.verified_symlinks, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_symlinks, ==, 1);
     }
     if (empty_folder) {
         g_assert_cmpuint (fixture.result.completed_items, ==, 1);
@@ -1507,8 +1516,18 @@ test_copy_integrity (void)
     g_free (destination_name);
     if (!successful_case ())
         g_assert_null (strstr (completion, " completed."));
-    if (fixture.result.checksum_verified_files == 0)
-        g_assert_nonnull (strstr (completion, "No completed files were checksum verified."));
+    if (!successful_case () || fixture.result.atomic_moves > 0)
+        g_assert_null (strstr (completion, "All copied regular files"));
+    if (fixture.result.checksum_verified_files == 0) {
+        const char *expected = "No completed files were checksum verified.";
+        if (successful_case () && !fixture.test->move && !fixture.test->verify)
+            expected = "Content verification was not requested.";
+        else if (successful_case () && fixture.result.completed_regular_files == 0)
+            expected = "No regular files were copied; checksum verification does not apply.";
+        g_assert_nonnull (strstr (completion, expected));
+    }
+    if (named ("verified-copy") || named ("fallback-move"))
+        g_assert_nonnull (strstr (completion, "All copied regular files were SHA-256 verified."));
     g_free (completion);
     if (fixture.test->fault != NONE)
         g_assert_cmpint (fixture.injections, >, 0);

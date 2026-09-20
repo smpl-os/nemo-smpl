@@ -302,6 +302,18 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 		g_string_append_printf (text, "\n%s", context);
 	}
 	g_string_append_printf (text, _("\nCompleted items: %" G_GUINT64_FORMAT), result.completed_items);
+	if (result.completed_regular_files > 0) {
+		g_string_append_printf (text, _("\nRegular files copied: %" G_GUINT64_FORMAT),
+		                        result.completed_regular_files);
+	}
+	if (result.completed_directories > 0) {
+		g_string_append_printf (text, _("\nDirectories completed: %" G_GUINT64_FORMAT),
+		                        result.completed_directories);
+	}
+	if (result.completed_symlinks > 0) {
+		g_string_append_printf (text, _("\nSymbolic links copied: %" G_GUINT64_FORMAT),
+		                        result.completed_symlinks);
+	}
 	if (result.skipped_items > 0) {
 		g_string_append_printf (text, _("\nSkipped items: %" G_GUINT64_FORMAT), result.skipped_items);
 	}
@@ -311,6 +323,24 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	if (result.checksum_verified_files > 0) {
 		g_string_append_printf (text, _("\nSHA-256 verified files (completed): %" G_GUINT64_FORMAT),
 		                        result.checksum_verified_files);
+		if (result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
+		    result.failed_items == 0 && result.skipped_items == 0 &&
+		    result.atomic_moves == 0 &&
+		    result.checksum_verified_files == result.completed_regular_files &&
+		    result.verified_symlinks == result.completed_symlinks &&
+		    result.completed_items == result.completed_regular_files +
+		                              result.completed_directories + result.completed_symlinks) {
+			g_string_append (text, _("\nAll copied regular files were SHA-256 verified."));
+		}
+	} else if (result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
+	           result.operation == NEMO_PROGRESS_OPERATION_COPY &&
+	           !result.verification_requested) {
+		g_string_append (text, _("\nContent verification was not requested."));
+	} else if (result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
+	           result.completed_regular_files == 0 &&
+	           result.completed_items == result.completed_directories +
+	                                     result.completed_symlinks + result.atomic_moves) {
+		g_string_append (text, _("\nNo regular files were copied; checksum verification does not apply."));
 	} else {
 		g_string_append (text, _("\nNo completed files were checksum verified."));
 	}

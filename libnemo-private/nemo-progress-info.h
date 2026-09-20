@@ -59,6 +59,8 @@ typedef struct {
 	/* Completed entry operations, including recursive directories. An atomic
 	 * directory move counts once; its contents were not individually visited. */
 	guint64 completed_items;
+	guint64 completed_regular_files;
+	guint64 completed_symlinks;
 	/* Distinct incomplete paths; skipped and failed are disjoint. */
 	guint64 skipped_items;
 	guint64 failed_items;

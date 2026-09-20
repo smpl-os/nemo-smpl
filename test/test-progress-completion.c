@@ -457,6 +457,90 @@ test_notification_input (void)
 }
 
 static void
+test_verification_wording (void)
+{
+    const struct {
+        NemoProgressResult result;
+        const char *expected;
+        gboolean all_verified;
+    } cases[] = {
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 1, .completed_regular_files = 1 },
+            "Content verification was not requested.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 13, .completed_regular_files = 11, .completed_directories = 2,
+              .checksum_verified_files = 11, .verification_requested = TRUE },
+            "Regular files copied: 11\nDirectories completed: 2", TRUE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_PARTIAL,
+              .completed_items = 1, .completed_regular_files = 1, .checksum_verified_files = 1,
+              .skipped_items = 1, .verification_requested = TRUE },
+            "Copy incomplete.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_FAILED,
+              .failed_items = 1, .verification_requested = TRUE },
+            "No completed files were checksum verified.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_CANCELLED,
+              .completed_items = 1, .completed_regular_files = 1, .checksum_verified_files = 1,
+              .verification_requested = TRUE },
+            "Copy cancelled.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_MOVE, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 1, .atomic_moves = 1, .verification_requested = TRUE },
+            "Atomic moves (not checksum verified): 1", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 1, .completed_directories = 1, .verification_requested = TRUE },
+            "No regular files were copied; checksum verification does not apply.", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 1, .completed_symlinks = 1, .verified_symlinks = 1,
+              .verification_requested = TRUE },
+            "Link-text verified symbolic links (completed): 1", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 2, .completed_regular_files = 2, .checksum_verified_files = 1,
+              .verification_requested = TRUE },
+            "SHA-256 verified files (completed): 1", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_COPY, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 1, .checksum_verified_files = 1, .verification_requested = TRUE },
+            "SHA-256 verified files (completed): 1", FALSE
+        },
+        {
+            { .operation = NEMO_PROGRESS_OPERATION_MOVE, .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS,
+              .completed_items = 2, .completed_regular_files = 1, .checksum_verified_files = 1,
+              .atomic_moves = 1, .verification_requested = TRUE },
+            "Atomic moves (not checksum verified): 1", FALSE
+        },
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
+        NemoProgressInfo *info = nemo_progress_info_new ();
+        nemo_progress_info_set_result (info, &cases[i].result);
+        nemo_progress_info_finish (info);
+        g_autofree char *text = nemo_progress_info_get_completion_text (info);
+        g_assert_nonnull (strstr (text, cases[i].expected));
+        g_assert_cmpint (strstr (text, "All copied regular files were SHA-256 verified.") != NULL,
+                         ==, cases[i].all_verified);
+        drain ();
+        g_object_unref (info);
+    }
+}
+
+static void
 test_fresh_batch (void)
 {
     NemoProgressUIHandler *handler = new_handler ();
@@ -661,6 +745,7 @@ main (int argc, char **argv)
     g_test_add_func ("/completion/model-snapshot", test_model_snapshot);
     g_test_add_func ("/completion/notification-input", test_notification_input);
     g_test_add_func ("/completion/fresh-batch", test_fresh_batch);
+    g_test_add_func ("/completion/verification-wording", test_verification_wording);
     }
     int result = g_test_run ();
     g_clear_object (&last_notification);

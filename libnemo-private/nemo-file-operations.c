@@ -5846,6 +5846,10 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 out:
 	if (ok) {
 		copy_job->result.completed_items++;
+		if (!atomic_move) {
+			copy_job->result.completed_regular_files += type == G_FILE_TYPE_REGULAR;
+			copy_job->result.completed_symlinks += type == G_FILE_TYPE_SYMBOLIC_LINK;
+		}
 		copy_job->result.atomic_moves += atomic_move;
 		copy_job->result.checksum_verified_files += checksum_verified;
 		copy_job->result.verified_symlinks += link_verified;
