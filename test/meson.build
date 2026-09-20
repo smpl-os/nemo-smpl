@@ -142,16 +142,12 @@ if smpl_features_enabled
     'GDK_BACKEND': 'x11',
     'LC_ALL': 'C',
     'NO_AT_BRIDGE': '1',
-    # xvfb-run places its Xauthority file in the build tree, not global /tmp.
     'TMPDIR': meson.current_build_dir(),
   }
   dbus_run_session = find_program('dbus-run-session', required: false)
   xvfb_run = find_program('xvfb-run', required: false)
 
   if dbus_run_session.found() and xvfb_run.found()
-    copy_integrity_mkdir = find_program('mkdir')
-    copy_integrity_clean_env = find_program('env')
-    copy_integrity_index = 0
     foreach scenario : [
       'copy', 'verified-copy', 'private-source', 'chunked-copy',
       'metadata-preserved', 'default-permissions', 'default-permissions-move',
@@ -176,41 +172,9 @@ if smpl_features_enabled
       'nested-move-file-over-folder', 'nested-move-folder-over-file',
       'metadata-optional-absent', 'metadata-optional-absent-move', 'metadata-type-missing',
     ]
-      # Prepare HOME before starting either launcher so D-Bus activated
-      # services inherit the same isolation as the test. Short indexed paths
-      # also leave enough room for Unix sockets in XDG_RUNTIME_DIR.
-      copy_integrity_profile = meson.current_build_dir() / 'ci' / copy_integrity_index.to_string()
-      copy_integrity_index += 1
-      run_command(copy_integrity_mkdir, '-p', '-m', '0700',
-        copy_integrity_profile,
-        copy_integrity_profile / 'cache',
-        copy_integrity_profile / 'config',
-        copy_integrity_profile / 'data',
-        copy_integrity_profile / 'run',
-        check: true,
-      )
-      copy_integrity_env = environment(copy_integrity_base_env)
-      copy_integrity_env.set('NEMO_TEST_PROFILE', copy_integrity_profile)
-      copy_integrity_env.set('HOME', copy_integrity_profile)
-      copy_integrity_env.set('XDG_CACHE_HOME', copy_integrity_profile / 'cache')
-      copy_integrity_env.set('XDG_CONFIG_HOME', copy_integrity_profile / 'config')
-      copy_integrity_env.set('XDG_DATA_HOME', copy_integrity_profile / 'data')
-      copy_integrity_env.set('XDG_RUNTIME_DIR', copy_integrity_profile / 'run')
-      copy_integrity_unset_args = []
-      foreach variable : [
-        'DISPLAY', 'WAYLAND_DISPLAY', 'AT_SPI_BUS_ADDRESS', 'XAUTHORITY',
-        'DBUS_SESSION_BUS_ADDRESS', 'DBUS_STARTER_ADDRESS', 'DBUS_STARTER_BUS_TYPE',
-      ]
-        copy_integrity_env.unset(variable)
-        copy_integrity_unset_args += ['-u', variable]
-      endforeach
-      # Start Xvfb first: the private bus and its services need its DISPLAY too.
-      test('copy-integrity-' + scenario, copy_integrity_clean_env,
-        args: copy_integrity_unset_args + [
-          'GDK_BACKEND=x11', 'NEMO_TEST_ISOLATED=1', xvfb_run.full_path(), '-a',
-          dbus_run_session.full_path(), '--', copy_integrity, scenario,
-        ],
-        env: copy_integrity_env,
+      test('copy-integrity-' + scenario, hardening_python,
+        args: hardening_runner + [copy_integrity, scenario],
+        env: copy_integrity_base_env,
         depends: copy_integrity_schemas,
         suite: 'copy-integrity',
         protocol: 'tap',

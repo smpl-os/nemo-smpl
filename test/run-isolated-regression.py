@@ -20,12 +20,14 @@ def main():
         print("SKIP: GTK regressions require xvfb-run and dbus-run-session.", file=sys.stderr)
         return 77
 
-    with tempfile.TemporaryDirectory(prefix="nemo-regression-") as scratch:
+    # Runtime socket paths must stay short even inside a long build directory.
+    with tempfile.TemporaryDirectory(prefix="nemo-regression-", dir="/tmp") as scratch:
         root = Path(scratch)
         env = os.environ.copy()
         for key in (
             "DISPLAY",
             "WAYLAND_DISPLAY",
+            "XAUTHORITY",
             "DBUS_SESSION_BUS_ADDRESS",
             "DBUS_STARTER_ADDRESS",
             "DBUS_STARTER_BUS_TYPE",
@@ -45,6 +47,7 @@ def main():
             directory.mkdir(mode=0o700)
             env[key] = str(directory)
         env.update(
+            NEMO_TEST_PROFILE=str(root),
             GDK_BACKEND="x11",
             XDG_SESSION_TYPE="x11",
             GSETTINGS_BACKEND="memory",

@@ -1495,14 +1495,17 @@ main (int argc, char **argv)
     umask (0022);
     char *cwd = g_get_current_dir ();
     const char *profile = g_getenv ("NEMO_TEST_PROFILE");
+    struct stat profile_stat;
     g_assert_nonnull (profile);
-    g_assert_true (under (profile, cwd));
-    g_assert_true (g_file_test (profile, G_FILE_TEST_IS_DIR));
-    g_assert_cmpstr (g_getenv ("HOME"), ==, profile);
+    g_assert_cmpint (lstat (profile, &profile_stat), ==, 0);
+    g_assert_true (S_ISDIR (profile_stat.st_mode));
+    g_assert_cmpuint (profile_stat.st_mode & 0777, ==, 0700);
+    g_assert_cmpuint (profile_stat.st_uid, ==, getuid ());
     const char *xdg[] = {
-        "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"
+        "HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+        "XDG_STATE_HOME", "XDG_RUNTIME_DIR"
     };
-    const char *directories[] = { "cache", "config", "data", "run" };
+    const char *directories[] = { "home", "cache", "config", "data", "state", "runtime" };
     for (guint i = 0; i < G_N_ELEMENTS (xdg); i++) {
         char *path = g_build_filename (profile, directories[i], NULL);
         struct stat st;
