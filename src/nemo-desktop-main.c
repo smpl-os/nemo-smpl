@@ -143,9 +143,14 @@ main (int argc, char *argv[])
     retval = g_application_run (G_APPLICATION (application),
                                 argc, argv);
 
-    g_object_unref (application);
-
+#ifdef NEMO_SMPL
+    /* Shutdown may iterate the main context; dispose UI backends afterwards. */
     eel_debug_shut_down ();
+    g_object_unref (application);
+#else
+    g_object_unref (application);
+    eel_debug_shut_down ();
+#endif
 
     return retval;
 }

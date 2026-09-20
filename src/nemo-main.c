@@ -120,9 +120,15 @@ main (int argc, char *argv[])
 	retval = g_application_run (G_APPLICATION (application),
 				    argc, argv);
 
+#ifdef NEMO_SMPL
+    /* Thumbnail shutdown iterates the main context. Keep UI callback targets
+     * alive until that final drain is over, including libxapp's bus setup. */
+    eel_debug_shut_down ();
+    g_object_unref (application);
+#else
 	g_object_unref (application);
-
  	eel_debug_shut_down ();
+#endif
 
 	return retval;
 }

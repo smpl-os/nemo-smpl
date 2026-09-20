@@ -64,6 +64,13 @@ Double Commander-style instant file viewer:
 - Pull-only remote sources can still copy to local storage through GIO's native backend. Its output stays in a private temporary folder and uses checked filesystem-wide `syncfs` with an error-tracking descriptor opened before the transfer; requested verification still requires a readable source
 - Folder merges are incremental, with a conflict decision before copying children. File-to-folder or folder-to-file replacement requires a different destination name rather than deleting existing data before the replacement is ready
 
+### Copy/Move Completion Feedback
+
+- The non-modal File Operations window keeps completed results until **Close**. Closing it clears completed summaries and hides the window; active transfers continue.
+- Copy/move results distinguish success, incomplete/skipped work, failure and cancellation. SHA-256 file-content verification and symbolic-link target checks are reported separately. Atomic renames and empty folders are not described as checksum-verified.
+- Hidden-window completions, including short transfers, send a desktop notification without raising the window. The status icon or notification opens the results.
+- Nemo retains the latest 50 text summaries in memory, with an explicit notice when older results are omitted. Results are not written to disk. A visible summary keeps Nemo running until closed; hidden results do not. If Nemo exits, the desktop notification is the remaining record, subject to the desktop's notification-retention settings. Reopening a result after exit requires a desktop notification backend that supports restarting application actions; freedesktop notification backends can only reopen it while Nemo is running.
+
 ### Per-Pane Location Labels
 
 - Compact path label above each pane in dual-pane mode

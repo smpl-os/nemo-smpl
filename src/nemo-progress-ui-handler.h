@@ -60,6 +60,10 @@ GType nemo_progress_ui_handler_get_type (void);
 
 NemoProgressUIHandler * nemo_progress_ui_handler_new (void);
 
+#ifdef NEMO_SMPL
+void nemo_progress_ui_handler_shutdown (NemoProgressUIHandler *self);
+#endif
+
 G_END_DECLS
 
 #endif /* __NEMO_PROGRESS_UI_HANDLER_H__ */

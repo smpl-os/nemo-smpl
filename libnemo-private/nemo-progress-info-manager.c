@@ -109,6 +109,8 @@ progress_info_finished_cb (NemoProgressInfo *info,
 {
 	self->priv->progress_infos =
 		g_list_remove (self->priv->progress_infos, info);
+    g_signal_handlers_disconnect_by_data (info, self);
+    g_object_unref (info);
 }
 
 NemoProgressInfoManager *
@@ -129,8 +131,8 @@ nemo_progress_info_manager_add_new_info (NemoProgressInfoManager *self,
 	self->priv->progress_infos =
 		g_list_prepend (self->priv->progress_infos, g_object_ref (info));
 
-	g_signal_connect (info, "finished",
-			  G_CALLBACK (progress_info_finished_cb), self);
+	g_signal_connect_object (info, "finished",
+			  G_CALLBACK (progress_info_finished_cb), self, 0);
 
 	g_signal_emit (self, signals[NEW_PROGRESS_INFO], 0, info);
 }

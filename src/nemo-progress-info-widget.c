@@ -251,6 +251,9 @@ nemo_progress_info_widget_dispose (GObject *obj)
 {
 	NemoProgressInfoWidget *self = NEMO_PROGRESS_INFO_WIDGET (obj);
 
+    if (self->priv->info != NULL) {
+        g_signal_handlers_disconnect_by_data (self->priv->info, self);
+    }
 	g_clear_object (&self->priv->info);
 
 	G_OBJECT_CLASS (nemo_progress_info_widget_parent_class)->dispose (obj);

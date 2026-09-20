@@ -31,7 +31,26 @@ if smpl_features_enabled
     timeout: 60,
   )
 
+  completion_test = executable('test-progress-completion',
+      ['test-progress-completion.c', '../src/nemo-progress-info-widget.c'],
+      include_directories: [rootInclude],
+      dependencies: [gtk, xapp, nemo_private],
+      c_args: nemo_definitions,
+  )
+  test('Completion real backends', hardening_python,
+    args: hardening_runner + [completion_test, '--real-backends'],
+    suite: 'hardening',
+    timeout: 60,
+    is_parallel: false,
+  )
+  test('Completion pending backend exit', hardening_python,
+    args: hardening_runner + [completion_test, '--real-pending-exit'],
+    suite: 'hardening',
+    timeout: 60,
+    is_parallel: false,
+  )
   ui_regressions = [
+    completion_test,
     executable('test-nemo-file-hierarchy',
       'test-nemo-file-hierarchy.c',
       include_directories: [rootInclude],
@@ -141,6 +160,8 @@ if smpl_features_enabled
       '-Wl,--wrap=syncfs',
       '-Wl,--wrap=sync_file_range',
       '-Wl,--wrap=g_file_query_info',
+      '-Wl,--wrap=g_file_enumerate_children',
+      '-Wl,--wrap=g_file_enumerator_next_file',
       '-Wl,--wrap=g_file_get_path',
       '-Wl,--wrap=g_file_is_native',
       '-Wl,--wrap=g_file_read',
@@ -198,6 +219,9 @@ if smpl_features_enabled
       'publish-directory-race', 'publish-directory-race-copy', 'folder-target-race',
       'nested-move-file-over-folder', 'nested-move-folder-over-file',
       'metadata-optional-absent', 'metadata-optional-absent-move', 'metadata-type-missing',
+      'samefs-verified-move', 'empty-folder-copy', 'empty-folder-move',
+      'conflict-skip', 'partial-conflict-copy', 'prescan-unreadable-file',
+      'prescan-unreadable-folder', 'prescan-readdir-error', 'prescan-skip-then-cancel',
     ]
       test('copy-integrity-' + scenario, hardening_python,
         args: hardening_runner + [copy_integrity, scenario],

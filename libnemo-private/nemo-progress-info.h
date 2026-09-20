@@ -38,6 +38,46 @@
 typedef struct _NemoProgressInfo      NemoProgressInfo;
 typedef struct _NemoProgressInfoClass NemoProgressInfoClass;
 
+#ifdef NEMO_SMPL
+typedef enum {
+	NEMO_PROGRESS_OUTCOME_UNKNOWN,
+	NEMO_PROGRESS_OUTCOME_SUCCESS,
+	NEMO_PROGRESS_OUTCOME_PARTIAL,
+	NEMO_PROGRESS_OUTCOME_FAILED,
+	NEMO_PROGRESS_OUTCOME_CANCELLED
+} NemoProgressOutcome;
+
+typedef enum {
+	NEMO_PROGRESS_OPERATION_UNKNOWN,
+	NEMO_PROGRESS_OPERATION_COPY,
+	NEMO_PROGRESS_OPERATION_MOVE
+} NemoProgressOperation;
+
+typedef struct {
+	NemoProgressOutcome outcome;
+	NemoProgressOperation operation;
+	/* Completed entry operations, including recursive directories. An atomic
+	 * directory move counts once; its contents were not individually visited. */
+	guint64 completed_items;
+	/* Distinct incomplete paths; skipped and failed are disjoint. */
+	guint64 skipped_items;
+	guint64 failed_items;
+	/* These are subsets of completed_items, never checks of failed copies. */
+	guint64 checksum_verified_files;
+	guint64 verified_symlinks;
+	guint64 atomic_moves;
+	guint64 completed_directories;
+	gboolean verification_requested;
+} NemoProgressResult;
+
+/* Copies a snapshot. Updates after finish are ignored. */
+void          nemo_progress_info_set_result (NemoProgressInfo *info,
+                                            const NemoProgressResult *result);
+gboolean      nemo_progress_info_get_result (NemoProgressInfo *info,
+                                            NemoProgressResult *result);
+char *        nemo_progress_info_get_completion_text (NemoProgressInfo *info);
+#endif
+
 GType nemo_progress_info_get_type (void) G_GNUC_CONST;
 
 /* Signals:

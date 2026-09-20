@@ -840,6 +840,24 @@ nemo_application_window_removed (GtkApplication *app,
 	}
 }
 
+#ifdef NEMO_SMPL
+static void
+nemo_application_shutdown (GApplication *app)
+{
+    NemoProgressUIHandler *handler = NEMO_APPLICATION (app)->priv->progress_handler;
+    if (handler != NULL)
+        nemo_progress_ui_handler_shutdown (handler);
+    G_APPLICATION_CLASS (nemo_application_parent_class)->shutdown (app);
+}
+
+static void
+nemo_application_dispose (GObject *object)
+{
+    g_clear_object (&NEMO_APPLICATION (object)->priv->progress_handler);
+    G_OBJECT_CLASS (nemo_application_parent_class)->dispose (object);
+}
+#endif
+
 static void
 nemo_application_class_init (NemoApplicationClass *class)
 {
@@ -849,9 +867,15 @@ nemo_application_class_init (NemoApplicationClass *class)
 
     object_class = G_OBJECT_CLASS (class);
     object_class->constructor = nemo_application_constructor;
+#ifdef NEMO_SMPL
+    object_class->dispose = nemo_application_dispose;
+#endif
 
     application_class = G_APPLICATION_CLASS (class);
     application_class->startup = nemo_application_startup;
+#ifdef NEMO_SMPL
+    application_class->shutdown = nemo_application_shutdown;
+#endif
     application_class->quit_mainloop = nemo_application_quit_mainloop;
 
     gtkapp_class = GTK_APPLICATION_CLASS (class);

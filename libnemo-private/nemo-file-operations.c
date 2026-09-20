@@ -138,6 +138,8 @@ typedef struct {
 #endif
 #ifdef NEMO_SMPL
 	gboolean had_errors;
+	NemoProgressResult result;
+	GHashTable *incomplete_paths;
 #endif
 } CopyMoveJob;
 
@@ -3844,6 +3846,75 @@ static void copy_move_file (CopyMoveJob *job,
 			    gboolean readonly_source_fs);
 
 #ifdef NEMO_SMPL
+static void
+remember_incomplete_copy (CopyMoveJob *job, GFile *file, gboolean failed)
+{
+	gpointer previous;
+
+	job->had_errors = TRUE;
+	if (job->incomplete_paths == NULL) {
+		job->incomplete_paths = g_hash_table_new_full (
+			g_file_hash, (GEqualFunc) g_file_equal, g_object_unref, NULL);
+	}
+	previous = g_hash_table_lookup (job->incomplete_paths, file);
+	/* A later skip must not hide an already recorded error on the same path. */
+	g_hash_table_replace (job->incomplete_paths, g_object_ref (file),
+	                      GINT_TO_POINTER (failed || GPOINTER_TO_INT (previous) == 2 ? 2 : 1));
+}
+
+static void
+record_incomplete_copy (CopyMoveJob *job, GFile *file, gboolean failed)
+{
+	job->had_errors = TRUE;
+	if (!job_aborted (&job->common)) {
+		remember_incomplete_copy (job, file, failed);
+	}
+}
+
+static void
+set_copy_move_result (CopyMoveJob *job)
+{
+	GHashTableIter iter;
+	gpointer file, state;
+	GHashTable *scan_skips[] = { job->common.skip_files, job->common.skip_readdir_error };
+
+	/* Some pre-scan failures suppress entire subtrees before the copy worker
+	 * visits them. Audit both tables, not just paths reached by that worker. */
+	for (guint i = 0; i < G_N_ELEMENTS (scan_skips); i++) {
+		if (scan_skips[i] == NULL) {
+			continue;
+		}
+		g_hash_table_iter_init (&iter, scan_skips[i]);
+		while (g_hash_table_iter_next (&iter, &file, NULL)) {
+			remember_incomplete_copy (job, file, TRUE);
+		}
+	}
+	if (job->incomplete_paths != NULL) {
+		g_hash_table_iter_init (&iter, job->incomplete_paths);
+		while (g_hash_table_iter_next (&iter, NULL, &state)) {
+			if (GPOINTER_TO_INT (state) == 2) {
+				job->result.failed_items++;
+			} else {
+				job->result.skipped_items++;
+			}
+		}
+	}
+	job->result.operation = job->is_move ? NEMO_PROGRESS_OPERATION_MOVE : NEMO_PROGRESS_OPERATION_COPY;
+	job->result.verification_requested = job->verify_after_copy;
+	if (job_aborted (&job->common)) {
+		job->result.outcome = NEMO_PROGRESS_OUTCOME_CANCELLED;
+	} else if (!job->had_errors) {
+		job->result.outcome = NEMO_PROGRESS_OUTCOME_SUCCESS;
+	} else if (job->result.completed_items > 0 ||
+	           (job->result.skipped_items > 0 && job->result.failed_items == 0)) {
+		job->result.outcome = NEMO_PROGRESS_OUTCOME_PARTIAL;
+	} else {
+		job->result.outcome = NEMO_PROGRESS_OUTCOME_FAILED;
+	}
+	nemo_progress_info_set_result (job->common.progress, &job->result);
+	g_clear_pointer (&job->incomplete_paths, g_hash_table_unref);
+}
+
 static int open_copy_directory (GFile *dir, GCancellable *cancellable, GError **error);
 static int open_dest_directory (GFile *file, GCancellable *cancellable, GError **error);
 static gboolean sync_copy_fd (int fd, GCancellable *cancellable, GError **error);
@@ -3857,7 +3928,7 @@ directory_copy_failed (CopyMoveJob *copy_job, GFile *src, GError *error)
 	CommonJob *job = &copy_job->common;
 	int response;
 
-	copy_job->had_errors = TRUE;
+	record_incomplete_copy (copy_job, src, TRUE);
 	if (!job_aborted (job) && !job->skip_all_error) {
 		response = run_warning (
 			job, f (_("The operation on \"%B\" was not completed."), src),
@@ -4035,7 +4106,7 @@ copy_move_directory (CopyMoveJob *copy_job,
 				if (parent_fd >= 0) {
 					close (parent_fd);
 				}
-				copy_job->had_errors = TRUE;
+				record_incomplete_copy (copy_job, src, TRUE);
 #endif
 				*skipped_file = TRUE;
 				return TRUE;
@@ -4136,6 +4207,9 @@ copy_move_directory (CopyMoveJob *copy_job,
 			} else if (response == 1) {
 				/* Skip: Do Nothing */
 				local_skipped_file = TRUE;
+#ifdef NEMO_SMPL
+				record_incomplete_copy (copy_job, src, TRUE);
+#endif
 			} else {
 				g_assert_not_reached ();
 			}
@@ -4181,6 +4255,9 @@ copy_move_directory (CopyMoveJob *copy_job,
 		} else if (response == 1) {
 			/* Skip: Do Nothing  */
 			local_skipped_file = TRUE;
+#ifdef NEMO_SMPL
+			record_incomplete_copy (copy_job, src, TRUE);
+#endif
 		} else if (response == 2) {
 			goto retry;
 		} else {
@@ -4232,6 +4309,9 @@ copy_move_directory (CopyMoveJob *copy_job,
 	    !local_skipped_file) {
 		if (!file_delete_wrapper (src, job->cancellable, &error)) {
 			local_skipped_file = TRUE;
+#ifdef NEMO_SMPL
+			record_incomplete_copy (copy_job, src, TRUE);
+#endif
 			if (job->skip_all_error) {
 				goto skip;
 			}
@@ -4266,9 +4346,15 @@ copy_move_directory (CopyMoveJob *copy_job,
 	if (local_skipped_file || job_aborted (job)) {
 		*skipped_file = TRUE;
 #ifdef NEMO_SMPL
-		copy_job->had_errors = TRUE;
+		record_incomplete_copy (copy_job, src, FALSE);
 #endif
 	}
+#ifdef NEMO_SMPL
+	else {
+		copy_job->result.completed_items++;
+		copy_job->result.completed_directories++;
+	}
+#endif
 
 	g_free (dest_fs_type);
 	return TRUE;
@@ -5189,7 +5275,7 @@ copy_conflict_is_merge (CopyMoveJob *copy_job, GFile *src, GFile *dest, gboolean
 		*is_merge = g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY &&
 		            g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY;
 	} else {
-		copy_job->had_errors = TRUE;
+		record_incomplete_copy (copy_job, src, TRUE);
 		if (!job_aborted (job) && !job->skip_all_error) {
 			int response = run_warning (
 				job, g_strdup (_("Could not inspect the conflicting files.")),
@@ -5536,6 +5622,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	GFileOutputStream *output = NULL;
 	GFileType type;
 	gboolean ok = FALSE, owned = FALSE;
+	gboolean atomic_move = FALSE, checksum_verified = FALSE, link_verified = FALSE;
 	gboolean must_verify = copy_job->verify_after_copy || copy_job->is_move;
 	int parent_fd = -1;
 	gchar *streamed_checksum = NULL;
@@ -5552,6 +5639,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	if (copy_job->is_move) {
 		if (move_without_fallback (src, dest, flags, job->cancellable, error)) {
 			ok = TRUE;
+			atomic_move = TRUE;
 			goto out;
 		}
 		if (!IS_IO_ERROR (*error, NOT_SUPPORTED) &&
@@ -5694,6 +5782,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 			                         "The destination was not replaced and the source was not removed."));
 			goto out;
 		}
+		checksum_verified = TRUE;
 	} else if (type == G_FILE_TYPE_SYMBOLIC_LINK) {
 		GFileInfo *link = query_copy_source (staging, job->cancellable, error);
 		if (link == NULL) {
@@ -5708,6 +5797,7 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 			                     _("The copied symbolic link does not match the source."));
 			goto out;
 		}
+		link_verified = TRUE;
 	}
 	if (!copy_source_unchanged (src, info, job->cancellable, error) ||
 	    g_cancellable_set_error_if_cancelled (job->cancellable, error)) {
@@ -5744,6 +5834,12 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 	ok = TRUE;
 
 out:
+	if (ok) {
+		copy_job->result.completed_items++;
+		copy_job->result.atomic_moves += atomic_move;
+		copy_job->result.checksum_verified_files += checksum_verified;
+		copy_job->result.verified_symlinks += link_verified;
+	}
 	pdata->dest_fd = -1;
 	g_free (streamed_checksum);
 	g_clear_object (&output);
@@ -5798,7 +5894,7 @@ copy_move_file (CopyMoveJob *copy_job,
 	if (should_skip_file (job, src)) {
 		*skipped_file = TRUE;
 #ifdef NEMO_SMPL
-		copy_job->had_errors = TRUE;
+		record_incomplete_copy (copy_job, src, TRUE);
 #endif
 		return;
 	}
@@ -5938,7 +6034,7 @@ copy_move_file (CopyMoveJob *copy_job,
 	/* A post-publication failure must never enter a retry or replacement
 	 * path. The destination is real user data now, and the source stays. */
 	if (!res && published) {
-		copy_job->had_errors = TRUE;
+		record_incomplete_copy (copy_job, src, TRUE);
 		if (!job_aborted (job) && !job->skip_all_error) {
 			response = run_warning (
 				job, g_strdup (_("The operation was not completed.")),
@@ -6305,6 +6401,9 @@ copy_move_file (CopyMoveJob *copy_job,
 
 	/* Other error */
 	else {
+#ifdef NEMO_SMPL
+		record_incomplete_copy (copy_job, src, TRUE);
+#endif
 		if (job->skip_all_error) {
 			g_error_free (error);
 			goto out;
@@ -6336,7 +6435,7 @@ copy_move_file (CopyMoveJob *copy_job,
  out:
 	*skipped_file = TRUE; /* Or aborted, but same-same */
 #ifdef NEMO_SMPL
-	copy_job->had_errors = TRUE;
+	record_incomplete_copy (copy_job, src, FALSE);
 #endif
 	g_object_unref (dest);
 }
@@ -6416,6 +6515,11 @@ copy_files (CopyMoveJob *job,
 					readonly_source_fs);
 			g_object_unref (dest);
 		}
+#ifdef NEMO_SMPL
+		else {
+			record_incomplete_copy (job, src, TRUE);
+		}
+#endif
 		i++;
 	}
 
@@ -6428,11 +6532,14 @@ copy_job_done (gpointer user_data)
 	CopyMoveJob *job;
 
 	job = user_data;
+#ifdef NEMO_SMPL
+	set_copy_move_result (job);
+#endif
 	if (job->done_callback) {
 		job->done_callback (job->debuting_files,
 				    !job_aborted ((CommonJob *) job)
 #ifdef NEMO_SMPL
-				    && !job->had_errors
+				    && job->result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS
 #endif
 				    ,
 				    job->done_callback_data);
@@ -6777,6 +6884,8 @@ move_file_prepare (CopyMoveJob *move_job,
 	error = NULL;
 #ifdef NEMO_SMPL
 	if (move_without_fallback (src, dest, flags, job->cancellable, &error)) {
+		move_job->result.completed_items++;
+		move_job->result.atomic_moves++;
 #else
 	if (g_file_move (src, dest,
 			 flags,
@@ -6941,6 +7050,9 @@ move_file_prepare (CopyMoveJob *move_job,
 	/* Other error */
 	else {
 	move_error:
+#ifdef NEMO_SMPL
+		record_incomplete_copy (move_job, src, TRUE);
+#endif
 		if (job->skip_all_error || job_aborted (job)) {
 			g_error_free (error);
 			goto out;
@@ -6973,7 +7085,7 @@ move_file_prepare (CopyMoveJob *move_job,
  out:
 #ifdef NEMO_SMPL
 	if (!fallback_scheduled) {
-		move_job->had_errors = TRUE;
+		record_incomplete_copy (move_job, src, FALSE);
 	}
 #endif
 	g_object_unref (dest);
@@ -7091,11 +7203,14 @@ move_job_done (gpointer user_data)
 	CopyMoveJob *job;
 
 	job = user_data;
+#ifdef NEMO_SMPL
+	set_copy_move_result (job);
+#endif
 	if (job->done_callback) {
 		job->done_callback (job->debuting_files,
 				    !job_aborted ((CommonJob *) job)
 #ifdef NEMO_SMPL
-				    && !job->had_errors
+				    && job->result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS
 #endif
 				    ,
 				    job->done_callback_data);

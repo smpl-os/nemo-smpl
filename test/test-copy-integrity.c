@@ -18,6 +18,7 @@
 #include "libnemo-private/nemo-file-conflict-dialog.h"
 #include "libnemo-private/nemo-file-undo-manager.h"
 #include "libnemo-private/nemo-global-preferences.h"
+#include "libnemo-private/nemo-progress-info-manager.h"
 
 typedef enum {
     NONE, CORRUPT, UNKNOWN_METADATA, READBACK, SYNC_EIO, SYNC_ENOSPC,
@@ -26,7 +27,8 @@ typedef enum {
     CANCEL_DELETE, COLLISION, CLEANUP, DEFAULT_PERMS, SYNCFS_EIO, SYNCFS_EINTR,
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
     PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
-    SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY
+    SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY,
+    SCAN_FILE, SCAN_OPEN, SCAN_READ
 } Fault;
 
 typedef struct {
@@ -116,6 +118,15 @@ static const TestCase cases[] = {
     { "metadata-optional-absent", OPTIONAL_METADATA, FALSE, TRUE, FALSE, TRUE },
     { "metadata-optional-absent-move", OPTIONAL_METADATA, TRUE, FALSE, TRUE, TRUE },
     { "metadata-type-missing", MISSING_TYPE, FALSE, TRUE, FALSE, TRUE },
+    { "samefs-verified-move", NONE, TRUE, TRUE, FALSE, FALSE },
+    { "empty-folder-copy", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "empty-folder-move", NONE, TRUE, TRUE, TRUE, FALSE },
+    { "conflict-skip", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "partial-conflict-copy", NONE, FALSE, TRUE, FALSE, TRUE },
+    { "prescan-unreadable-file", SCAN_FILE, FALSE, TRUE, FALSE, FALSE },
+    { "prescan-unreadable-folder", SCAN_OPEN, FALSE, TRUE, FALSE, FALSE },
+    { "prescan-readdir-error", SCAN_READ, FALSE, TRUE, FALSE, FALSE },
+    { "prescan-skip-then-cancel", SCAN_FILE, FALSE, TRUE, FALSE, FALSE },
 };
 
 typedef struct {
@@ -138,6 +149,10 @@ static struct {
     GHashTable *stages, *backend_payloads;
     GCancellable *cancel;
     GInputStream *pull_input;
+    GFileEnumerator *scan_enumerator;
+    NemoProgressInfo *progress;
+    NemoProgressResult result;
+    guint finished;
     gboolean running, done, success, timed_out;
     int sequence, injections, conflicts, warnings, cleanup_warnings, attempts, ancestor_syncs;
     int power_warnings, mismatch_warnings, readback_warnings, cleanup_logs;
@@ -412,6 +427,16 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
                          GCancellable *cancel, GError **error)
 {
     char *path = __real_g_file_get_path (file);
+    if (fixture.running && fixture.test->fault == SCAN_FILE &&
+        source_item (path) &&
+        strcmp (attributes, G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+                            G_FILE_ATTRIBUTE_STANDARD_SIZE) == 0) {
+        fixture.injections++;
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                             "Injected pre-scan metadata failure");
+        g_free (path);
+        return NULL;
+    }
     gboolean transaction = fixture.running && under (path, fixture.source_dir) &&
                            strstr (attributes, G_FILE_ATTRIBUTE_ID_FILE) &&
                            strstr (attributes, G_FILE_ATTRIBUTE_ETAG_VALUE);
@@ -1034,6 +1059,43 @@ __wrap_g_file_delete (GFile *file, GCancellable *cancel, GError **error)
     return __real_g_file_delete (file, cancel, error);
 }
 
+GFileEnumerator *__real_g_file_enumerate_children (GFile *, const char *,
+                                                  GFileQueryInfoFlags, GCancellable *, GError **);
+GFileEnumerator *
+__wrap_g_file_enumerate_children (GFile *file, const char *attributes,
+                                  GFileQueryInfoFlags flags, GCancellable *cancel, GError **error)
+{
+    char *path = __real_g_file_get_path (file);
+    gboolean scan = fixture.running && under (path, fixture.source_dir) &&
+                    strstr (attributes, G_FILE_ATTRIBUTE_STANDARD_SIZE);
+    g_free (path);
+    if (scan && fixture.test->fault == SCAN_OPEN) {
+        fixture.injections++;
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                             "Injected pre-scan directory failure");
+        return NULL;
+    }
+    GFileEnumerator *enumerator = __real_g_file_enumerate_children (file, attributes, flags, cancel, error);
+    if (scan && fixture.test->fault == SCAN_READ)
+        fixture.scan_enumerator = enumerator;
+    return enumerator;
+}
+
+GFileInfo *__real_g_file_enumerator_next_file (GFileEnumerator *, GCancellable *, GError **);
+GFileInfo *
+__wrap_g_file_enumerator_next_file (GFileEnumerator *enumerator, GCancellable *cancel, GError **error)
+{
+    if (fixture.running && fixture.test->fault == SCAN_READ &&
+        enumerator == fixture.scan_enumerator) {
+        fixture.scan_enumerator = NULL;
+        fixture.injections++;
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                             "Injected pre-scan directory read failure");
+        return NULL;
+    }
+    return __real_g_file_enumerator_next_file (enumerator, cancel, error);
+}
+
 static void
 configure_conflict (GtkWidget *widget, gpointer unused)
 {
@@ -1056,7 +1118,9 @@ respond (gpointer unused)
         if (NEMO_IS_FILE_CONFLICT_DIALOG (l->data)) {
             fixture.conflicts++;
             configure_conflict (l->data, NULL);
-            gtk_dialog_response (l->data, named ("rename-conflict") ?
+            gtk_dialog_response (l->data,
+                                 (named ("conflict-skip") || named ("partial-conflict-copy")) ?
+                                 CONFLICT_RESPONSE_SKIP : named ("rename-conflict") ?
                                  CONFLICT_RESPONSE_RENAME : CONFLICT_RESPONSE_REPLACE);
         } else {
             char *text = NULL;
@@ -1069,6 +1133,8 @@ respond (gpointer unused)
             } else if (fixture.test->fault == FOLDER_RACE) {
                 /* Folder creation offers Cancel/Skip/Retry, not Skip All. */
                 gtk_dialog_response (l->data, 1);
+            } else if (named ("prescan-skip-then-cancel") && fixture.warnings == 2) {
+                gtk_dialog_response (l->data, 0);
             } else {
                 gtk_dialog_response (l->data, named ("skip-all") ? 1 : 2);
             }
@@ -1085,7 +1151,30 @@ copied (GHashTable *debuting, gboolean success, gpointer unused)
     g_assert_false (fixture.done);
     fixture.done = TRUE;
     fixture.success = success;
+    g_assert_nonnull (fixture.progress);
+    g_assert_true (nemo_progress_info_get_result (fixture.progress, &fixture.result));
+}
+
+static void
+progress_finished (NemoProgressInfo *info, gpointer unused)
+{
+    NemoProgressResult result;
+    fixture.finished++;
+    g_assert_true (fixture.done);
+    g_assert_true (nemo_progress_info_get_is_finished (info));
+    g_assert_true (nemo_progress_info_get_result (info, &result));
+    g_assert_cmpint (result.outcome, ==, fixture.result.outcome);
+    g_assert_cmpuint (result.completed_items, ==, fixture.result.completed_items);
     gtk_main_quit ();
+}
+
+static void
+progress_created (NemoProgressInfoManager *manager, NemoProgressInfo *info, gpointer unused)
+{
+    g_assert_null (fixture.progress);
+    fixture.progress = g_object_ref (info);
+    g_assert_false (nemo_progress_info_get_result (info, &fixture.result));
+    g_signal_connect (info, "finished", G_CALLBACK (progress_finished), NULL);
 }
 
 static gboolean
@@ -1166,7 +1255,8 @@ successful_case (void)
             fault == DEFAULT_PERMS || fault == SYNCFS_EINTR ||
             fault == ATTR_UNSUPPORTED || fault == ATTR_DENIED || fault == OPTIONAL_METADATA ||
             fault == NO_VERSION) &&
-           !file_over_folder () && !folder_over_file () && !nested_type_conflict ();
+           !file_over_folder () && !folder_over_file () && !nested_type_conflict () &&
+           !named ("conflict-skip") && !named ("partial-conflict-copy");
 }
 
 static void
@@ -1193,15 +1283,19 @@ static void
 test_copy_integrity (void)
 {
     GList *sources = NULL;
+    gboolean empty_folder = named ("empty-folder-copy") || named ("empty-folder-move");
     gboolean new_folder = named ("folder-new-copy") || named ("folder-new-move") ||
-                          named ("folder-parent-fsync") || fixture.test->fault == FOLDER_RACE;
+                          named ("folder-parent-fsync") || fixture.test->fault == FOLDER_RACE ||
+                          empty_folder || fixture.test->fault == SCAN_OPEN ||
+                          fixture.test->fault == SCAN_READ;
     gboolean folder = new_folder || named ("folder-copy") || named ("folder-move") ||
                       named ("merge-all") || named ("folder-partial-move") ||
                       nested_type_conflict ();
     gboolean is_link = named ("broken-symlink") || named ("fifo-symlink") ||
                        named ("symlink-attributes-eio");
     gboolean type_conflict = file_over_folder () || folder_over_file () || nested_type_conflict ();
-    guint count = named ("skip-all") || named ("replace-all") || named ("merge-all") ? 3 : 1;
+    guint count = named ("skip-all") || named ("replace-all") || named ("merge-all") ? 3 :
+                  named ("partial-conflict-copy") || named ("prescan-skip-then-cancel") ? 2 : 1;
     fixture.contents = named ("chunked-copy") || named ("pull-chunked-copy") ?
                        g_strnfill (33 * 1024 * 1024, 'x') :
                        g_strdup (named ("zero-byte-copy") ? "" : payload);
@@ -1261,7 +1355,7 @@ test_copy_integrity (void)
                 add_item (grandchild_src, grandchild_dst, FALSE);
                 g_free (grandchild_src);
                 g_free (grandchild_dst);
-            } else {
+            } else if (!empty_folder) {
                 g_assert_true (g_file_set_contents (child_src, fixture.contents, -1, NULL));
                 add_item (child_src, child_dst, FALSE);
                 if (named ("nested-move-file-over-folder")) {
@@ -1312,7 +1406,7 @@ test_copy_integrity (void)
                 char *child = g_build_filename (dst, "existing", NULL);
                 g_assert_true (g_file_set_contents (child, previous, -1, NULL));
                 g_free (child);
-            } else if (fixture.test->replace) {
+            } else if (fixture.test->replace && (!named ("partial-conflict-copy") || i == 0)) {
                 g_assert_true (g_file_set_contents (dst, previous, -1, NULL));
             }
             if (named ("rename-conflict")) {
@@ -1330,6 +1424,8 @@ test_copy_integrity (void)
     nemo_file_operations_set_verify_copies (fixture.test->verify);
     g_settings_set_boolean (nemo_preferences, "safe-cross-fs-copy", !named ("fallback-move"));
     GFile *dest = g_file_new_for_path (fixture.dest_dir);
+    NemoProgressInfoManager *manager = nemo_progress_info_manager_new ();
+    g_signal_connect (manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
     guint responder = g_timeout_add (10, respond, NULL);
     guint timeout = g_timeout_add_seconds (20, deadline, NULL);
     fixture.running = TRUE;
@@ -1344,8 +1440,66 @@ test_copy_integrity (void)
         g_source_remove (timeout);
     g_assert_false (fixture.timed_out);
     g_assert_true (fixture.done);
+    g_assert_cmpuint (fixture.finished, ==, 1);
     g_assert_cmpint (fixture.power_warnings, ==, 1);
     g_assert_cmpint (fixture.success, ==, successful_case ());
+    g_assert_cmpint (fixture.result.operation, ==, fixture.test->move ?
+                     NEMO_PROGRESS_OPERATION_MOVE : NEMO_PROGRESS_OPERATION_COPY);
+    g_assert_cmpint (fixture.result.verification_requested, ==, fixture.test->verify);
+    GCancellable *progress_cancel = nemo_progress_info_get_cancellable (fixture.progress);
+    gboolean cancelled = g_cancellable_is_cancelled (progress_cancel);
+    g_object_unref (progress_cancel);
+    if (named ("prescan-skip-then-cancel"))
+        g_assert_true (cancelled);
+    gboolean partial = named ("folder-partial-move") || named ("partial-conflict-copy") ||
+                       named ("conflict-skip") || fixture.test->fault == SCAN_READ;
+    NemoProgressOutcome expected_outcome = cancelled ? NEMO_PROGRESS_OUTCOME_CANCELLED :
+        successful_case () ? NEMO_PROGRESS_OUTCOME_SUCCESS :
+        partial ? NEMO_PROGRESS_OUTCOME_PARTIAL : NEMO_PROGRESS_OUTCOME_FAILED;
+    g_assert_cmpint (fixture.result.outcome, ==, expected_outcome);
+    if (!successful_case () && !partial) {
+        g_assert_cmpuint (fixture.result.completed_items, ==, 0);
+        g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
+        g_assert_cmpuint (fixture.result.verified_symlinks, ==, 0);
+    }
+    if (successful_case ()) {
+        g_assert_cmpuint (fixture.result.completed_items, >, 0);
+        g_assert_cmpuint (fixture.result.skipped_items, ==, 0);
+        g_assert_cmpuint (fixture.result.failed_items, ==, 0);
+    }
+    if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move") || empty_folder)
+        g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
+    if (named ("samefs-move") || named ("samefs-verified-move")) {
+        g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_items, ==, 1);
+    }
+    if (named ("verified-copy") || named ("fallback-move") || named ("folder-partial-move") ||
+        named ("partial-conflict-copy") || fixture.test->fault == SCAN_READ)
+        g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 1);
+    if (is_link && successful_case ()) {
+        g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
+        g_assert_cmpuint (fixture.result.verified_symlinks, ==, 1);
+    }
+    if (empty_folder) {
+        g_assert_cmpuint (fixture.result.completed_items, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_directories, ==, 1);
+        g_assert_cmpuint (fixture.result.verified_symlinks, ==, 0);
+    }
+    if (named ("conflict-skip") || named ("partial-conflict-copy")) {
+        g_assert_cmpuint (fixture.result.skipped_items, ==, 1);
+        g_assert_cmpuint (fixture.result.failed_items, ==, 0);
+        g_assert_cmpuint (fixture.result.completed_items, ==, named ("partial-conflict-copy") ? 1 : 0);
+    }
+    if (fixture.test->fault == SCAN_FILE || fixture.test->fault == SCAN_OPEN ||
+        fixture.test->fault == SCAN_READ)
+        g_assert_cmpuint (fixture.result.failed_items, ==, 1);
+    char *completion = nemo_progress_info_get_completion_text (fixture.progress);
+    g_assert_nonnull (strstr (completion, fixture.test->move ? "Move" : "Copy"));
+    if (!successful_case ())
+        g_assert_null (strstr (completion, " completed."));
+    if (fixture.result.checksum_verified_files == 0)
+        g_assert_nonnull (strstr (completion, "No completed files were checksum verified."));
+    g_free (completion);
     if (fixture.test->fault != NONE)
         g_assert_cmpint (fixture.injections, >, 0);
     if (fixture.test->fault == CLEANUP) {
@@ -1379,7 +1533,9 @@ test_copy_integrity (void)
     for (guint i = 0; i < fixture.items->len; i++) {
         Item *item = g_ptr_array_index (fixture.items, i);
         gboolean completed = successful_case () ||
-                             (named ("folder-partial-move") && g_str_has_suffix (item->source, "/good"));
+                             (named ("folder-partial-move") && g_str_has_suffix (item->source, "/good")) ||
+                             (named ("partial-conflict-copy") && i == 1) ||
+                             fixture.test->fault == SCAN_READ;
         g_assert_cmpint (item->input_closes, ==, item->input_streams);
         if (item->writer >= 0)
             g_assert_cmpint (item->output_closes, >, 0);
@@ -1461,7 +1617,8 @@ test_copy_integrity (void)
                 assert_contents (item->dest, previous);
             else
                 g_assert_false (exists (item->dest));
-            if (completed && !named ("copy") && !named ("samefs-move") && !pull_case () &&
+            if (completed && !named ("copy") && !named ("samefs-move") &&
+                !named ("samefs-verified-move") && !pull_case () &&
                 (fixture.test->move || fixture.test->verify)) {
                 g_assert_cmpint (item->writes, >, 0);
                 assert_source_readback (item);
@@ -1470,7 +1627,7 @@ test_copy_integrity (void)
                 if (fixture.test->move)
                     g_assert_cmpint (item->deleted, >, item->dirsync);
             }
-            if (named ("copy") || named ("samefs-move")) {
+            if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move")) {
                 g_assert_cmpint (item->writes, ==, 0);
                 g_assert_cmpint (item->checksum, ==, 0);
             }
@@ -1560,6 +1717,8 @@ test_copy_integrity (void)
     g_list_free_full (sources, g_object_unref);
     g_object_unref (dest);
     g_clear_object (&fixture.cancel);
+    g_clear_object (&fixture.progress);
+    g_object_unref (manager);
     g_hash_table_unref (fixture.stages);
     g_hash_table_unref (fixture.backend_payloads);
     g_ptr_array_unref (fixture.items);
