@@ -126,6 +126,9 @@ typedef struct {
 	NemoCopyCallback  done_callback;
 	gpointer done_callback_data;
 	gboolean verify_after_copy;
+	/* Sticky "skip all" for the verification prompt, so an unverifiable
+	 * source cannot produce one dialog per file. */
+	gboolean verify_skip_all;
 } CopyMoveJob;
 
 /* Static flag: when TRUE the next copy/move job will verify checksums.
@@ -4278,64 +4281,132 @@ nemo_file_operations_set_verify_copies (gboolean verify)
 	_nemo_next_copy_verify = verify;
 }
 
-/* Compute SHA-256 of a file, bypassing page cache.
- * Opens with O_RDONLY, calls posix_fadvise(DONTNEED) before AND after
- * the read loop so we re-read from physical media, not cached pages. */
+typedef enum {
+	VERIFY_RESULT_MATCH,
+	VERIFY_RESULT_MISMATCH,
+	/* The copy itself is fine as far as we know, but one of the two files
+	 * could not be read back, so no comparison was possible. Reporting
+	 * this as a mismatch would cry corruption on every file copied from a
+	 * phone or a network share. */
+	VERIFY_RESULT_UNAVAILABLE
+} VerifyResult;
+
+/* Compute the SHA-256 of a file.
+ *
+ * Local files are read through a plain fd with posix_fadvise(DONTNEED)
+ * around the read loop, so the bytes come off the physical media rather than
+ * the page cache we just filled writing them. Files with no local path
+ * (mtp://, gphoto2://, smb://, ...) are read through GIO instead: slower and
+ * without the cache-bypass guarantee, but it means verification works for
+ * those sources at all.
+ *
+ * Returns NULL if the file could not be read or the job was cancelled. */
 static gchar *
 checksum_file_bypass_cache (GFile *file, GCancellable *cancellable)
 {
 	char *path;
-	int fd;
 	GChecksum *cksum;
 	guchar *buf;
-	gssize nread;
-	gchar *result;
-
-	path = g_file_get_path (file);
-	if (path == NULL)
-		return NULL;
-
-	fd = open (path, O_RDONLY);
-	g_free (path);
-	if (fd < 0)
-		return NULL;
-
-	/* Drop any cached pages so the kernel reads from disk */
-	posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
+	gchar *result = NULL;
+	gboolean failed = FALSE;
 
 	cksum = g_checksum_new (G_CHECKSUM_SHA256);
 	buf = g_malloc (VERIFY_BUF_SIZE);
 
-	while ((nread = read (fd, buf, VERIFY_BUF_SIZE)) > 0) {
-		g_checksum_update (cksum, buf, nread);
-		if (cancellable && g_cancellable_is_cancelled (cancellable))
-			break;
+	path = g_file_get_path (file);
+
+	if (path != NULL) {
+		int fd = open (path, O_RDONLY);
+
+		g_free (path);
+
+		if (fd < 0) {
+			failed = TRUE;
+		} else {
+			/* Drop any cached pages so the kernel reads from disk */
+			posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
+
+			for (;;) {
+				ssize_t nread = read (fd, buf, VERIFY_BUF_SIZE);
+
+				if (nread < 0) {
+					/* A signal during a multi-GB read is not a
+					 * read error; retrying is the difference
+					 * between "verified" and a false corruption
+					 * warning. */
+					if (errno == EINTR) {
+						continue;
+					}
+					failed = TRUE;
+					break;
+				}
+
+				if (nread == 0) {
+					break;
+				}
+
+				g_checksum_update (cksum, buf, nread);
+
+				if (g_cancellable_is_cancelled (cancellable)) {
+					failed = TRUE;
+					break;
+				}
+			}
+
+			/* Drop again so we don't pollute the cache with
+			 * verification data */
+			posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
+			close (fd);
+		}
+	} else {
+		GFileInputStream *stream;
+
+		stream = g_file_read (file, cancellable, NULL);
+
+		if (stream == NULL) {
+			failed = TRUE;
+		} else {
+			for (;;) {
+				gssize nread;
+
+				nread = g_input_stream_read (G_INPUT_STREAM (stream),
+				                             buf, VERIFY_BUF_SIZE,
+				                             cancellable, NULL);
+				if (nread < 0) {
+					failed = TRUE;
+					break;
+				}
+
+				if (nread == 0) {
+					break;
+				}
+
+				g_checksum_update (cksum, buf, nread);
+			}
+
+			g_object_unref (stream);
+		}
 	}
 
-	/* Drop again so we don't pollute the cache with verification data */
-	posix_fadvise (fd, 0, 0, POSIX_FADV_DONTNEED);
-	close (fd);
+	if (!failed && !g_cancellable_is_cancelled (cancellable)) {
+		result = g_strdup (g_checksum_get_string (cksum));
+	}
+
+	g_checksum_free (cksum);
 	g_free (buf);
 
-	if (nread < 0 || (cancellable && g_cancellable_is_cancelled (cancellable))) {
-		g_checksum_free (cksum);
-		return NULL;
-	}
-
-	result = g_strdup (g_checksum_get_string (cksum));
-	g_checksum_free (cksum);
 	return result;
 }
 
 /* Verify a copied file by comparing SHA-256 checksums.
  * The destination is fsync'd first to ensure data is on disk. */
-static gboolean
+static VerifyResult
 verify_copied_file (CommonJob *job, GFile *src, GFile *dest)
 {
 	char *dest_path;
 	int fd;
 	gchar *src_sum, *dest_sum;
-	gboolean match;
+	VerifyResult result;
 
 	/* fsync the destination to flush to physical media */
 	dest_path = g_file_get_path (dest);
@@ -4352,25 +4423,31 @@ verify_copied_file (CommonJob *job, GFile *src, GFile *dest)
 	dest_sum = checksum_file_bypass_cache (dest, job->cancellable);
 
 	if (src_sum == NULL || dest_sum == NULL) {
-		/* Could not checksum — treat as mismatch */
-		g_warning ("verify-copy: could not checksum %s",
-		           src_sum == NULL ? g_file_peek_path (src) : g_file_peek_path (dest));
-		g_free (src_sum);
-		g_free (dest_sum);
-		return FALSE;
-	}
+		char *uri = g_file_get_uri (src_sum == NULL ? src : dest);
 
-	match = (g_strcmp0 (src_sum, dest_sum) == 0);
+		g_warning ("verify-copy: could not read back %s to compare it", uri);
+		g_free (uri);
 
-	if (!match) {
+		result = VERIFY_RESULT_UNAVAILABLE;
+	} else if (g_strcmp0 (src_sum, dest_sum) == 0) {
+		result = VERIFY_RESULT_MATCH;
+	} else {
+		char *src_uri = g_file_get_uri (src);
+		char *dest_uri = g_file_get_uri (dest);
+
 		g_warning ("verify-copy: CHECKSUM MISMATCH  src=%s  dest=%s  (%s vs %s)",
-		           g_file_peek_path (src), g_file_peek_path (dest),
-		           src_sum, dest_sum);
+		           src_uri, dest_uri, src_sum, dest_sum);
+
+		g_free (src_uri);
+		g_free (dest_uri);
+
+		result = VERIFY_RESULT_MISMATCH;
 	}
 
 	g_free (src_sum);
 	g_free (dest_sum);
-	return match;
+
+	return result;
 }
 
 typedef struct {
@@ -4382,7 +4459,27 @@ typedef struct {
 	GFile *dest;           /* dest file, or NULL to skip flushing */
 	int    dest_fd;        /* lazily opened O_RDONLY fd for dest */
 	goffset last_flush_offset; /* last offset where we kicked writeback */
+	int    flush_errno;    /* first real writeback failure seen, else 0 */
 } ProgressData;
+
+/* sync_file_range() reports EINVAL/ENOSYS/EOPNOTSUPP on filesystems that
+ * simply do not implement it (and EBADF would be our own bug). None of those
+ * mean the user's data is at risk. Anything else -- ENOSPC, EIO, ENODEV from
+ * a yanked USB stick -- means writeback genuinely failed and the copy must
+ * not be reported as successful. */
+static gboolean
+flush_error_is_fatal (int err)
+{
+	switch (err) {
+	case EINVAL:
+	case ENOSYS:
+	case EOPNOTSUPP:
+	case EBADF:
+		return FALSE;
+	default:
+		return TRUE;
+	}
+}
 
 static void
 copy_file_progress_callback (goffset current_num_bytes,
@@ -4427,11 +4524,19 @@ copy_file_progress_callback (goffset current_num_bytes,
 		if (pdata->dest_fd >= 0) {
 			goffset flush_end = current_num_bytes;
 
-			sync_file_range (pdata->dest_fd,
-			                 pdata->last_flush_offset,
-			                 flush_end - pdata->last_flush_offset,
-			                 SYNC_FILE_RANGE_WAIT_BEFORE |
-			                 SYNC_FILE_RANGE_WRITE);
+			if (sync_file_range (pdata->dest_fd,
+			                     pdata->last_flush_offset,
+			                     flush_end - pdata->last_flush_offset,
+			                     SYNC_FILE_RANGE_WAIT_BEFORE |
+			                     SYNC_FILE_RANGE_WRITE) != 0 &&
+			    pdata->flush_errno == 0 &&
+			    flush_error_is_fatal (errno)) {
+				/* Remembered rather than acted on here: this
+				 * callback cannot fail the operation, so
+				 * copy_move_file() checks it once the copy
+				 * returns. */
+				pdata->flush_errno = errno;
+			}
 
 			/* Drop pages from ranges whose writeback is likely done */
 			if (pdata->last_flush_offset > 0) {
@@ -4676,6 +4781,70 @@ make_safe_copy_staging_file (GFile *dest)
 	g_object_unref (parent);
 	return staging;
 }
+
+/* smplOS safe cross-fs copy: drop a staging file we are about to abandon.
+ *
+ * Every path that gives up on a staged copy -- a retry after a conflict, an
+ * error, a cancellation -- must come through here. Merely unreffing the GFile
+ * leaves a full-size ".nemo-partial-" file behind, and on a long copy those
+ * accumulate until the destination runs out of space, at which point later
+ * files in the same batch really do get truncated.
+ *
+ * Deliberately passes a NULL cancellable: by the time we get here the job may
+ * already be cancelled, and that is exactly when the cleanup matters most. */
+static void
+discard_staging_file (GFile **staging)
+{
+	if (*staging == NULL) {
+		return;
+	}
+
+	/* Errors are ignored on purpose -- the file often does not exist
+	 * (directory copies never create one), and there is nothing useful to
+	 * tell the user about a failed cleanup of a temporary. */
+	g_file_delete (*staging, NULL, NULL);
+	g_clear_object (staging);
+}
+
+/* smplOS safe cross-fs copy: flush the directory entry created by rename(2).
+ *
+ * fsync() on the file makes its *contents* durable; the name only becomes
+ * durable once the parent directory is flushed too. Without this, pulling a
+ * USB stick right after a copy can leave the data on disk under no name at
+ * all -- which is precisely the failure the staging dance exists to prevent.
+ *
+ * Best effort: the data is already safe here, so a failure is worth a note in
+ * the log but not worth failing the copy over. */
+static void
+sync_dest_directory (GFile *file)
+{
+	GFile *parent;
+	char *path;
+	int fd;
+
+	parent = g_file_get_parent (file);
+	if (parent == NULL) {
+		return;
+	}
+
+	path = g_file_get_path (parent);
+	g_object_unref (parent);
+
+	if (path == NULL) {
+		return;
+	}
+
+	fd = open (path, O_RDONLY | O_DIRECTORY);
+	if (fd >= 0) {
+		if (fsync (fd) != 0) {
+			g_debug ("safe-copy: could not flush directory %s: %s",
+			         path, g_strerror (errno));
+		}
+		close (fd);
+	}
+
+	g_free (path);
+}
 #endif /* NEMO_SMPL */
 
 /* Debuting files is non-NULL only for toplevel items */
@@ -4714,6 +4883,7 @@ copy_move_file (CopyMoveJob *copy_job,
 	GFile   *write_dest      = NULL;   /* == staging_dest if active, else == dest */
 	GFile   *staging_dest    = NULL;   /* owned; NULL when not active */
 	gboolean safe_copy_active = FALSE;
+	gboolean dest_already_exists = FALSE;
 #else
 	GFile   *write_dest      = NULL;
 #endif
@@ -4850,8 +5020,12 @@ copy_move_file (CopyMoveJob *copy_job,
 	/* Per-retry: decide whether to stage into ".nemo-partial-XXXXXXXX".
 	 * Cross-fs copies only (moves and same-fs renames are already atomic
 	 * / instant). If dest was rewritten by a retry, regenerate the
-	 * staging file so it lives next to the (possibly new) dest. */
-	g_clear_object (&staging_dest);
+	 * staging file so it lives next to the (possibly new) dest.
+	 *
+	 * Deleting rather than just unreffing matters: a retry happens after
+	 * a conflict or an error, and by then the previous staging file may
+	 * already hold a complete copy of the source. */
+	discard_staging_file (&staging_dest);
 	safe_copy_active = FALSE;
 	if (!copy_job->is_move && !same_fs && nemo_smpl_safe_cross_fs_copy ()) {
 		staging_dest = make_safe_copy_staging_file (dest);
@@ -4860,6 +5034,37 @@ copy_move_file (CopyMoveJob *copy_job,
 		}
 	}
 	write_dest = safe_copy_active ? staging_dest : dest;
+
+	/* A staged copy writes to a name that by construction cannot exist,
+	 * so GIO can no longer tell us the *real* destination is taken. Left
+	 * alone, the entire file transfers, the rename then fails with
+	 * EXISTS, and answering the conflict dialog costs a second full
+	 * transfer of the same file. Ask the destination directly instead.
+	 *
+	 * Only plain files are pre-checked: an existing destination directory
+	 * is a merge, and a directory source recurses, both of which GIO
+	 * signals separately below and which must keep going through their
+	 * own paths rather than the conflict dialog.
+	 *
+	 * The extra stat only ever happens when there really is a conflict,
+	 * so the common case costs nothing -- which matters when the source
+	 * is a phone and every query is a USB round trip. */
+	if (safe_copy_active && !overwrite) {
+		GFileType dest_type;
+
+		dest_type = g_file_query_file_type (dest,
+		                                    G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+		                                    job->cancellable);
+
+		if (dest_type != G_FILE_TYPE_UNKNOWN &&
+		    dest_type != G_FILE_TYPE_DIRECTORY &&
+		    !is_dir (src)) {
+			discard_staging_file (&staging_dest);
+			safe_copy_active = FALSE;
+			dest_already_exists = TRUE;
+			write_dest = dest;
+		}
+	}
 #else
 	write_dest = dest;
 #endif
@@ -4869,7 +5074,18 @@ copy_move_file (CopyMoveJob *copy_job,
 	pdata.dest = (!copy_job->is_move && !same_fs) ? write_dest : NULL;
 	pdata.dest_fd = -1;
 	pdata.last_flush_offset = 0;
+	pdata.flush_errno = 0;
 
+#ifdef NEMO_SMPL
+	if (dest_already_exists) {
+		/* Synthesised so the existing conflict handling below runs
+		 * unchanged -- without having moved a single byte. */
+		dest_already_exists = FALSE;
+		res = FALSE;
+		error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_EXISTS,
+		                             _("File exists"));
+	} else
+#endif
 	if (copy_job->is_move) {
 		res = g_file_move (src, dest,
 				   flags,
@@ -4886,20 +5102,23 @@ copy_move_file (CopyMoveJob *copy_job,
 				   &error);
 	}
 
-	/* Clean up the fd the progress callback may have opened.
-	 * On success, do a final async writeback + page cache drop.
-	 * On failure, just close. */
-	if (pdata.dest_fd >= 0) {
-		if (res) {
-			sync_file_range (pdata.dest_fd, 0, 0,
-			                 SYNC_FILE_RANGE_WRITE);
-			posix_fadvise (pdata.dest_fd, 0, 0,
-			               POSIX_FADV_DONTNEED);
-		}
-		close (pdata.dest_fd);
-		pdata.dest_fd = -1;
+	/* g_file_copy() can report success while writeback to the device has
+	 * already failed underneath it, because the bytes only had to reach
+	 * the page cache. Treat that as the copy failure it is. */
+	if (res && pdata.flush_errno != 0) {
+		g_clear_error (&error);
+		error = g_error_new (G_IO_ERROR,
+		                     g_io_error_from_errno (pdata.flush_errno),
+		                     _("Error while writing to the destination: %s"),
+		                     g_strerror (pdata.flush_errno));
+		res = FALSE;
 	}
 
+	/* On success, start writeback for whatever is still dirty so the
+	 * fsync below has little left to do. */
+	if (res && pdata.dest_fd >= 0) {
+		sync_file_range (pdata.dest_fd, 0, 0, SYNC_FILE_RANGE_WRITE);
+	}
 #ifdef NEMO_SMPL
 	/* smplOS safe cross-fs copy: block until the file is physically on
 	 * disk. sync_file_range(...WRITE) above only *starts* async writeback;
@@ -4909,19 +5128,44 @@ copy_move_file (CopyMoveJob *copy_job,
 	 *
 	 * For files smaller than FLUSH_CHUNK_SIZE the progress callback never
 	 * opened a fd on write_dest, so open one here. Any open fd works for
-	 * fsync(2) regardless of access mode. */
+	 * fsync(2) regardless of access mode.
+	 *
+	 * The descriptor the progress callback opened is reused when there is
+	 * one. That matters: the kernel reports a writeback error to a given
+	 * descriptor only if the error happened after that descriptor was
+	 * opened, so a freshly opened fd can silently miss a failure the
+	 * older one would have caught.
+	 *
+	 * A destination with no local path (smb://, sftp://) cannot be
+	 * fsync()ed at all; staging plus rename is the best available there,
+	 * and is not treated as an error. A local file that we cannot open or
+	 * flush *is* an error -- silently renaming it into place would hand
+	 * the user a durability guarantee that does not exist. */
 	if (res && safe_copy_active) {
-		int fsync_fd = -1;
 		char *fsync_path = g_file_get_path (write_dest);
+
 		if (fsync_path != NULL) {
-			fsync_fd = open (fsync_path, O_RDONLY);
-			g_free (fsync_path);
-		}
-		if (fsync_fd >= 0) {
-			if (fsync (fsync_fd) != 0) {
-				int e = errno;
-				g_warning ("safe-copy: fsync of staging file failed: %s",
+			gboolean borrowed = (pdata.dest_fd >= 0);
+			int fsync_fd = borrowed ? pdata.dest_fd
+			                        : open (fsync_path, O_RDONLY);
+			int e = 0;
+
+			if (fsync_fd < 0) {
+				e = errno;
+				g_warning ("safe-copy: could not open staging file to flush it: %s",
 				           g_strerror (e));
+			} else {
+				if (fsync (fsync_fd) != 0) {
+					e = errno;
+					g_warning ("safe-copy: fsync of staging file failed: %s",
+					           g_strerror (e));
+				}
+				if (!borrowed) {
+					close (fsync_fd);
+				}
+			}
+
+			if (e != 0) {
 				g_clear_error (&error);
 				error = g_error_new (G_IO_ERROR,
 				                     g_io_error_from_errno (e),
@@ -4929,10 +5173,24 @@ copy_move_file (CopyMoveJob *copy_job,
 				                     g_strerror (e));
 				res = FALSE;
 			}
-			close (fsync_fd);
+
+			g_free (fsync_path);
 		}
 	}
+#endif /* NEMO_SMPL */
 
+	/* Clean up the fd the progress callback may have opened.
+	 * On success, drop the page cache we no longer need. */
+	if (pdata.dest_fd >= 0) {
+		if (res) {
+			posix_fadvise (pdata.dest_fd, 0, 0,
+			               POSIX_FADV_DONTNEED);
+		}
+		close (pdata.dest_fd);
+		pdata.dest_fd = -1;
+	}
+
+#ifdef NEMO_SMPL
 	/* smplOS safe cross-fs copy: atomic rename now that data is on disk.
 	 * If the rename fails (very rare on same-fs move), leave the visible
 	 * ".nemo-partial" file in place so the user can inspect it, and
@@ -4941,8 +5199,21 @@ copy_move_file (CopyMoveJob *copy_job,
 		GError *ren_err = NULL;
 		GFileCopyFlags ren_flags = overwrite ? G_FILE_COPY_OVERWRITE
 		                                     : G_FILE_COPY_NONE;
-		if (!g_file_move (write_dest, dest, ren_flags,
-		                  job->cancellable, NULL, NULL, &ren_err)) {
+		if (g_file_move (write_dest, dest, ren_flags,
+		                 job->cancellable, NULL, NULL, &ren_err)) {
+			/* The staging name no longer exists, and `dest` is now
+			 * the real file. Forget both immediately so that no
+			 * later cleanup path can delete what we just put in
+			 * place. */
+			g_clear_object (&staging_dest);
+			write_dest = dest;
+			safe_copy_active = FALSE;
+
+			/* rename(2) is only durable once the directory entry
+			 * itself has been flushed. Without this the contents
+			 * survive a yanked drive but the name may not. */
+			sync_dest_directory (dest);
+		} else {
 			g_warning ("safe-copy: could not rename staging file into place: %s -> %s: %s",
 			           g_file_peek_path (write_dest),
 			           g_file_peek_path (dest),
@@ -4959,29 +5230,47 @@ copy_move_file (CopyMoveJob *copy_job,
 		 * (page cache bypassed via posix_fadvise DONTNEED).
 		 * For moves across filesystems GIO does copy+delete, so src
 		 * is still available at this point. */
-		if (copy_job->verify_after_copy && !job_aborted (job)) {
+		if (copy_job->verify_after_copy && !job_aborted (job) &&
+		    !copy_job->verify_skip_all) {
 			GFileType ft = g_file_query_file_type (src, G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, NULL);
 			if (ft == G_FILE_TYPE_REGULAR) {
-				if (!verify_copied_file (job, src, dest)) {
+				VerifyResult verdict = verify_copied_file (job, src, dest);
+
+				if (verdict != VERIFY_RESULT_MATCH && !job_aborted (job)) {
 					char *src_name = g_file_get_basename (src);
 					char *primary_msg, *secondary_msg;
 					int verify_response;
 
-					primary_msg = g_strdup_printf (_("Verification failed for \"%s\""), src_name);
-					secondary_msg = g_strdup_printf (
-						_("The SHA-256 checksum of the copy does not match the original. "
-						  "The file may be corrupted."));
+					if (verdict == VERIFY_RESULT_MISMATCH) {
+						primary_msg = g_strdup_printf (_("Verification failed for \"%s\""), src_name);
+						secondary_msg = g_strdup (
+							_("The SHA-256 checksum of the copy does not match the original. "
+							  "The file may be corrupted."));
+					} else {
+						/* Not evidence of corruption -- we simply could
+						 * not read one of the two files back. Common for
+						 * phones and cameras, where the source stops
+						 * being readable as soon as it has been copied. */
+						primary_msg = g_strdup_printf (_("Could not verify \"%s\""), src_name);
+						secondary_msg = g_strdup (
+							_("The file was copied, but it could not be read back to "
+							  "compare it against the original."));
+					}
 
 					verify_response = run_warning (
 						job, primary_msg, secondary_msg, NULL,
-						FALSE,
-						GTK_STOCK_CANCEL, SKIP,
+						(source_info->num_files - transfer_info->num_files) > 1,
+						GTK_STOCK_CANCEL, SKIP_ALL, SKIP,
 						NULL);
 
 					g_free (src_name);
 
 					if (verify_response == 0 || verify_response == GTK_RESPONSE_DELETE_EVENT) {
 						abort_job (job);
+					} else if (verify_response == 1) { /* skip all */
+						/* Stop asking: on an unverifiable source this
+						 * would otherwise prompt once per file. */
+						copy_job->verify_skip_all = TRUE;
 					}
 				}
 			}
@@ -5031,6 +5320,10 @@ copy_move_file (CopyMoveJob *copy_job,
 		}
 
 #ifdef NEMO_SMPL
+		/* Already NULL: a successful staged copy clears it as soon as
+		 * the rename lands. Never discard_staging_file() here -- at
+		 * this point the "staging" name would be the user's real
+		 * file. */
 		g_clear_object (&staging_dest);
 #endif
 		g_object_unref (dest);
@@ -5148,6 +5441,29 @@ copy_move_file (CopyMoveJob *copy_job,
 		would_recurse = error->code == G_IO_ERROR_WOULD_RECURSE;
 		g_error_free (error);
 
+#ifdef NEMO_SMPL
+		/* GIO reports WOULD_MERGE only when the destination it was
+		 * handed already exists as a directory. A staged copy hands it
+		 * a name that never exists, so a genuine directory merge
+		 * arrives here disguised as WOULD_RECURSE.
+		 *
+		 * Left uncorrected that skips the merge prompt, drops the
+		 * same_fs=FALSE safety below, and -- once "replace all" is set
+		 * -- sends the user's existing directory straight to
+		 * file_delete_wrapper() a few lines down. */
+		if (safe_copy_active && would_recurse &&
+		    is_dir (src) && is_dir (dest)) {
+			is_merge = TRUE;
+			would_recurse = FALSE;
+		}
+
+		/* Directory copies never write through the staging file, so
+		 * this only releases the unused GFile. */
+		discard_staging_file (&staging_dest);
+		safe_copy_active = FALSE;
+		write_dest = dest;
+#endif
+
 		if (overwrite && would_recurse) {
 			error = NULL;
 
@@ -5259,7 +5575,11 @@ copy_move_file (CopyMoveJob *copy_job,
  out:
 	*skipped_file = TRUE; /* Or aborted, but same-same */
 #ifdef NEMO_SMPL
-	g_clear_object (&staging_dest);
+	/* Every way out of a staged copy that is not a successful rename ends
+	 * up here. The staging file must go: it is a full-size copy of the
+	 * source, and leaving one behind per skipped or failed file is how a
+	 * destination drive quietly fills up mid-transfer. */
+	discard_staging_file (&staging_dest);
 #endif
 	g_object_unref (dest);
 }

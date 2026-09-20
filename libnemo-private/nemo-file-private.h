@@ -233,6 +233,15 @@ struct NemoFileDetails
 	guint64 free_space; /* (guint)-1 for unknown */
 	time_t free_space_read; /* The time free_space was updated, or 0 for never */
 
+#ifdef NEMO_SMPL
+	/* smplOS: a filesystem-info query for this file is outstanding. The
+	 * two-second free_space_read throttle is not enough on its own: when
+	 * the backend is busy (a phone streaming over MTP, a stalled network
+	 * share) a single query easily outlives the throttle window, and
+	 * every repaint would stack another one on top. */
+	guint fs_query_in_flight : 1;
+#endif
+
     gint desktop_monitor;
     gint cached_position_x;
     gint cached_position_y;

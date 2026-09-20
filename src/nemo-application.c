@@ -55,6 +55,7 @@
 #include <libnemo-private/nemo-file-utilities.h>
 #include <libnemo-private/nemo-file-operations.h>
 #include <libnemo-private/nemo-global-preferences.h>
+#include <libnemo-private/nemo-icon-fallback.h>
 #include <libnemo-private/nemo-lib-self-check-functions.h>
 #include <libnemo-private/nemo-module.h>
 #include <libnemo-private/nemo-signaller.h>
@@ -465,6 +466,11 @@ init_icons_and_styles (void)
     /* initialize search path for custom icons */
     gtk_icon_theme_append_search_path (gtk_icon_theme_get_default (),
                        NEMO_DATADIR G_DIR_SEPARATOR_S "icons");
+
+    /* Alias any xapp icon name ("xsi-*"/"xapp-*") the active theme does not
+     * provide to its closest standard freedesktop equivalent, so the UI stays
+     * legible on systems without the xapp icon packages. */
+    nemo_icon_fallback_init ();
 
     gtk_icon_size_register (NEMO_STATUSBAR_ICON_SIZE_NAME,
                             NEMO_STATUSBAR_ICON_SIZE,
