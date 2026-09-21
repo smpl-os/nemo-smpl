@@ -89,10 +89,6 @@
 /* Disable the self-check functionality */
 #define NEMO_OMIT_SELF_CHECK "omit"
 
-#define NEMO_NOTIFICATION_UNMOUNT_ICON_NAME  "media-removable"
-#define NEMO_NOTIFICATION_UNMOUNT_ID_PENDING "unmount-pending"
-#define NEMO_NOTIFICATION_UNMOUNT_ID_DONE    "unmount-done"
-
 static void     mount_removed_callback            (GVolumeMonitor            *monitor,
 						   GMount                    *mount,
 						   NemoMainApplication       *application);
@@ -110,67 +106,6 @@ struct _NemoMainApplicationPriv {
 
 	gchar *geometry;
 };
-
-static void
-nemo_main_application_send_notification (NemoApplication *application,
-                                         const gchar *title,
-                                         const gchar *body,
-                                         const gchar *icon_name,
-                                         const gchar *notification_id,
-                                         const GNotificationPriority prio)
-{
-	NemoMainApplication *app = NEMO_MAIN_APPLICATION (application);
-	GNotification *notification;
-	GIcon *icon;
-
-	icon = g_themed_icon_new (icon_name);
-	notification = g_notification_new (title);
-	g_notification_set_body (notification, body);
-	g_notification_set_icon (notification, icon);
-	g_notification_set_priority (notification, prio);
-
-	g_application_send_notification (G_APPLICATION (app), notification_id, notification);
-
-	g_object_unref (notification);
-	g_object_unref (icon);
-}
-
-static void
-nemo_main_application_notify_unmount_done (NemoApplication *application,
-                                           const gchar     *message)
-{
-	NemoMainApplication *app = NEMO_MAIN_APPLICATION (application);
-	gchar **strings;
-
-	// remove notification for pending unmount state
-	g_application_withdraw_notification (G_APPLICATION (app), NEMO_NOTIFICATION_UNMOUNT_ID_PENDING);
-
-	g_return_if_fail (message != NULL);
-	strings = g_strsplit (message, "\n", 2);
-
-	nemo_main_application_send_notification (application, strings[0], strings[1],
-	                                         NEMO_NOTIFICATION_UNMOUNT_ICON_NAME,
-	                                         NEMO_NOTIFICATION_UNMOUNT_ID_DONE,
-	                                         G_NOTIFICATION_PRIORITY_NORMAL);
-	
-	g_strfreev (strings);
-}
-
-static void
-nemo_main_application_notify_unmount_show (NemoApplication *application,
-                                           const gchar     *message)
-{
-	gchar **strings;
-
-	g_return_if_fail (message != NULL);
-	strings = g_strsplit (message, "\n", 2);
-
-	nemo_main_application_send_notification (application, strings[0], strings[1],
-	                                         NEMO_NOTIFICATION_UNMOUNT_ICON_NAME,
-	                                         NEMO_NOTIFICATION_UNMOUNT_ID_PENDING,
-	                                         G_NOTIFICATION_PRIORITY_URGENT);
-	g_strfreev (strings);
-}
 
 static void
 nemo_main_application_close_all_windows (NemoApplication *self)
@@ -1214,8 +1149,6 @@ nemo_desktop_application_continue_quit (NemoApplication *app)
 static void
 nemo_main_application_quit_mainloop (GApplication *app)
 {
-    nemo_main_application_notify_unmount_done (NEMO_APPLICATION (app), NULL);
-
     G_APPLICATION_CLASS (nemo_main_application_parent_class)->quit_mainloop (app);
 }
 
@@ -1238,8 +1171,6 @@ nemo_main_application_class_init (NemoMainApplicationClass *class)
     nemo_app_class->open_location = nemo_main_application_open_location;
     nemo_app_class->show_items = nemo_main_application_show_items;
     nemo_app_class->create_window = nemo_main_application_create_window;
-    nemo_app_class->notify_unmount_show = nemo_main_application_notify_unmount_show;
-    nemo_app_class->notify_unmount_done = nemo_main_application_notify_unmount_done;
     nemo_app_class->close_all_windows = nemo_main_application_close_all_windows;
     nemo_app_class->continue_startup = nemo_main_application_continue_startup;
     nemo_app_class->continue_quit = nemo_desktop_application_continue_quit;

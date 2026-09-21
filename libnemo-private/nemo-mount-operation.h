@@ -27,6 +27,8 @@ gboolean nemo_mount_operation_remove_finish (GObject *target,
 /* Atomic-safe. New transfers must not start while any removal is pending. */
 gboolean nemo_mount_operation_is_removing (void);
 gboolean nemo_mount_operation_check_transfers (GError **error);
+/* Main-thread shutdown: withdraw pending feedback without cancelling removal. */
+void nemo_mount_operation_shutdown (void);
 
 G_END_DECLS
 #endif

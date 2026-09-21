@@ -34,6 +34,7 @@
 #include "nemo-file-attributes.h"
 #include "nemo-file-private.h"
 #include "nemo-file-operations.h"
+#include "nemo-mount-operation.h"
 #include "nemo-file-utilities.h"
 #include "nemo-global-preferences.h"
 #include "nemo-icon-names.h"
@@ -1267,14 +1268,17 @@ typedef struct {
 } UnmountData;
 
 static void
-unmount_done (void *callback_data)
+unmount_done (GObject *target, GAsyncResult *result, gpointer callback_data)
 {
 	UnmountData *data;
+	GError *error = NULL;
 
 	data = (UnmountData *)callback_data;
+	nemo_mount_operation_remove_finish (target, result, &error);
 	if (data->callback) {
-		data->callback (data->file, NULL, NULL, data->callback_data);
+		data->callback (data->file, NULL, error, data->callback_data);
 	}
+	g_clear_error (&error);
 	nemo_file_unref (data->file);
 	g_free (data);
 }
@@ -1307,9 +1311,12 @@ nemo_file_unmount (NemoFile                   *file,
 		data->file = nemo_file_ref (file);
 		data->callback = callback;
 		data->callback_data = callback_data;
-		nemo_file_operations_unmount_mount_full (NULL, file->details->mount, NULL, FALSE, TRUE, unmount_done, data);
+		nemo_mount_operation_remove (G_OBJECT (file->details->mount), NEMO_MOUNT_REMOVE_UNMOUNT,
+		                             mount_op, cancellable, unmount_done, data);
 	} else if (callback) {
-		callback (file, NULL, NULL, callback_data);
+		error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, _("This file cannot be unmounted"));
+		callback (file, NULL, error, callback_data);
+		g_error_free (error);
 	}
 }
 
@@ -1341,9 +1348,12 @@ nemo_file_eject (NemoFile                   *file,
 		data->file = nemo_file_ref (file);
 		data->callback = callback;
 		data->callback_data = callback_data;
-		nemo_file_operations_unmount_mount_full (NULL, file->details->mount, NULL, TRUE, TRUE, unmount_done, data);
+		nemo_mount_operation_remove (G_OBJECT (file->details->mount), NEMO_MOUNT_REMOVE_EJECT,
+		                             mount_op, cancellable, unmount_done, data);
 	} else if (callback) {
-		callback (file, NULL, NULL, callback_data);
+		error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, _("This file cannot be ejected"));
+		callback (file, NULL, error, callback_data);
+		g_error_free (error);
 	}
 }
 
@@ -1376,22 +1386,12 @@ file_stop_callback (GObject *source_object,
 		    gpointer callback_data)
 {
 	NemoFileOperation *op;
-	gboolean stopped;
 	GError *error;
 
 	op = callback_data;
 
 	error = NULL;
-	stopped = g_drive_stop_finish (G_DRIVE (source_object),
-				       res, &error);
-
-	if (!stopped &&
-	    error->domain == G_IO_ERROR &&
-	    (error->code == G_IO_ERROR_FAILED_HANDLED ||
-	     error->code == G_IO_ERROR_CANCELLED)) {
-		g_error_free (error);
-		error = NULL;
-	}
+	nemo_mount_operation_remove_finish (source_object, res, &error);
 
 	nemo_file_operation_complete (op, NULL, error);
 	if (error) {
@@ -1436,8 +1436,8 @@ nemo_file_stop (NemoFile                   *file,
 				op->cancellable = g_object_ref (cancellable);
 			}
 
-			g_drive_stop (drive,
-				      G_MOUNT_UNMOUNT_NONE,
+			nemo_mount_operation_remove (G_OBJECT (drive),
+				      NEMO_MOUNT_REMOVE_STOP,
 				      mount_op,
 				      op->cancellable,
 				      file_stop_callback,

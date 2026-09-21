@@ -372,6 +372,8 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 		g_string_append_printf (text, _("\nAtomic moves (not checksum verified): %" G_GUINT64_FORMAT),
 		                        result.atomic_moves);
 	}
+	g_string_append (text, _("\nVerification compares data returned by the filesystem; it does not prove a physical-media read."
+	                         "\nBefore unplugging a device, use Eject or Safely Remove and wait for that operation to finish."));
 	return g_string_free (text, FALSE);
 }
 #endif
@@ -437,11 +439,25 @@ nemo_progress_info_get_progress (NemoProgressInfo *info)
 	
 	g_mutex_lock (&info->info_lock);
 
+#ifdef NEMO_SMPL
+	if (info->finished && info->result_set &&
+	    info->result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
+	    !info->finished_cancelled) {
+		res = 1.0;
+	} else if (info->activity_mode) {
+		res = -1.0;
+	} else {
+		/* Byte progress is not completion: close, verification and publication
+		 * may still fail after the last byte has been written. */
+		res = MIN (info->progress, 0.99);
+	}
+#else
 	if (info->activity_mode) {
 		res = -1.0;
 	} else {
 		res = info->progress;
 	}
+#endif
 	
 	g_mutex_unlock (&info->info_lock);
 	
@@ -704,6 +720,7 @@ nemo_progress_info_finish (NemoProgressInfo *info)
 		if (info->result_set && info->finished_cancelled) {
 			info->result.outcome = NEMO_PROGRESS_OUTCOME_CANCELLED;
 		}
+		info->progress_at_idle = TRUE;
 #endif
 		info->finished = TRUE;
 		

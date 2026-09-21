@@ -11,9 +11,13 @@ typedef struct {
     char *notification_id;
     gulong progress_handler;
     gulong aborted_handler;
+    gulong processes_handler;
+    gboolean busy;
+    gboolean notifications_closed;
 } Removal;
 
 static gint pending_removals;
+static GList *removals;
 
 gboolean
 nemo_mount_operation_is_removing (void)
@@ -50,15 +54,16 @@ nemo_mount_operation_check_transfers (GError **error)
 static void
 removal_notify (Removal *data, const char *title, const char *message)
 {
-#ifdef NEMO_SMPL
-    if (data->application != NULL) {
+    if (data->application != NULL && !data->notifications_closed) {
         GNotification *notification = g_notification_new (title);
+        GIcon *icon = g_themed_icon_new ("media-removable");
         g_autofree char *body = g_strdup_printf ("%s\n%s", data->name, message);
         g_notification_set_body (notification, body);
+        g_notification_set_icon (notification, icon);
         g_application_send_notification (data->application, data->notification_id, notification);
+        g_object_unref (icon);
         g_object_unref (notification);
     }
-#endif
 }
 
 static void
@@ -81,14 +86,51 @@ removal_aborted (GMountOperation *op, Removal *data)
                     _("Waiting for the device removal result. Do not disconnect the device yet."));
 }
 
+#ifdef NEMO_SMPL
+static void
+removal_processes (GMountOperation *op, const char *message, GArray *processes,
+                   const char **choices, Removal *data)
+{
+    data->busy = TRUE;
+    g_signal_stop_emission_by_name (op, "show-processes");
+    g_mount_operation_reply (op, G_MOUNT_OPERATION_ABORTED);
+}
+#endif
+
+static void
+removal_disconnect (Removal *data)
+{
+    if (data->progress_handler != 0) {
+        g_signal_handler_disconnect (data->mount_op, data->progress_handler);
+        data->progress_handler = 0;
+    }
+    if (data->aborted_handler != 0) {
+        g_signal_handler_disconnect (data->mount_op, data->aborted_handler);
+        data->aborted_handler = 0;
+    }
+    if (data->processes_handler != 0) {
+        g_signal_handler_disconnect (data->mount_op, data->processes_handler);
+        data->processes_handler = 0;
+    }
+}
+
+void
+nemo_mount_operation_shutdown (void)
+{
+    for (GList *l = removals; l != NULL; l = l->next) {
+        Removal *data = l->data;
+        if (data->application != NULL && !data->notifications_closed)
+            g_application_withdraw_notification (data->application, data->notification_id);
+        data->notifications_closed = TRUE;
+    }
+}
+
 static void
 removal_free (gpointer user_data)
 {
     Removal *data = user_data;
-    if (data->progress_handler != 0)
-        g_signal_handler_disconnect (data->mount_op, data->progress_handler);
-    if (data->aborted_handler != 0)
-        g_signal_handler_disconnect (data->mount_op, data->aborted_handler);
+    removal_disconnect (data);
+    removals = g_list_remove (removals, data);
     g_clear_object (&data->mount_op);
     if (data->application != NULL) {
         g_application_release (data->application);
@@ -126,6 +168,8 @@ removal_done (GObject *target, GAsyncResult *result, gpointer user_data)
             success = g_file_unmount_mountable_with_operation_finish (G_FILE (target), result, &error);
     }
 
+    removal_disconnect (data);
+    removals = g_list_remove (removals, data);
     g_atomic_int_add (&pending_removals, -1);
     if (success) {
         removal_notify (data, _("Device removal completed"),
@@ -135,6 +179,12 @@ removal_done (GObject *target, GAsyncResult *result, gpointer user_data)
                         _("The system completed the removal request. Disconnect only if no other volumes on this device remain mounted."));
         g_task_return_boolean (task, TRUE);
     } else {
+        if (data->busy) {
+            g_clear_error (&error);
+            error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_BUSY,
+                                         _("The device is still in use. Close files and applications using it, "
+                                           "then try again. Forced removal is disabled to protect your data."));
+        }
         if (error == NULL)
             error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_FAILED,
                                          _("The system did not confirm device removal."));
@@ -194,10 +244,16 @@ nemo_mount_operation_remove (GObject *target, NemoMountRemoval removal,
         g_application_hold (application);
     }
     g_task_set_task_data (task, data, removal_free);
+    removals = g_list_prepend (removals, data);
     data->progress_handler = g_signal_connect (data->mount_op, "show-unmount-progress",
                                                G_CALLBACK (removal_progress), data);
     data->aborted_handler = g_signal_connect (data->mount_op, "aborted",
                                               G_CALLBACK (removal_aborted), data);
+#ifdef NEMO_SMPL
+    /* Do not offer GTK's force-unmount choice for a busy device. */
+    data->processes_handler = g_signal_connect (data->mount_op, "show-processes",
+                                                G_CALLBACK (removal_processes), data);
+#endif
     g_atomic_int_inc (&pending_removals);
     removal_notify (data, _("Preparing device removal"),
                     _("Do not disconnect the device until the removal operation completes."));

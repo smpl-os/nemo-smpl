@@ -27,6 +27,7 @@
  */
 
 #include <config.h>
+#include <libnemo-private/nemo-mount-operation.h>
 
 #include "nemo-application.h"
 
@@ -642,22 +643,6 @@ nemo_application_create_window (NemoApplication *application,
 }
 
 void
-nemo_application_notify_unmount_done (NemoApplication *application,
-                                          const gchar *message)
-{
-    NEMO_APPLICATION_CLASS (G_OBJECT_GET_CLASS (application))->notify_unmount_done (application,
-                                                                                    message);
-}
-
-void
-nemo_application_notify_unmount_show (NemoApplication *application,
-                                          const gchar *message)
-{
-    NEMO_APPLICATION_CLASS (G_OBJECT_GET_CLASS (application))->notify_unmount_show (application,
-                                                                                    message);
-}
-
-void
 nemo_application_close_all_windows (NemoApplication *application)
 {
     NEMO_APPLICATION_CLASS (G_OBJECT_GET_CLASS (application))->close_all_windows (application);
@@ -819,8 +804,7 @@ nemo_application_quit_mainloop (GApplication *app)
     g_clear_object (&smplos_css_provider);
 #endif /* NEMO_SMPL */
 
-    nemo_application_notify_unmount_done (NEMO_APPLICATION (app), NULL);
-
+    nemo_mount_operation_shutdown ();
 	G_APPLICATION_CLASS (nemo_application_parent_class)->quit_mainloop (app);
 }
 
@@ -844,6 +828,7 @@ nemo_application_window_removed (GtkApplication *app,
 static void
 nemo_application_shutdown (GApplication *app)
 {
+    nemo_mount_operation_shutdown ();
     NemoProgressUIHandler *handler = NEMO_APPLICATION (app)->priv->progress_handler;
     if (handler != NULL)
         nemo_progress_ui_handler_shutdown (handler);

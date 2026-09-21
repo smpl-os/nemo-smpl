@@ -26,9 +26,8 @@ G_BEGIN_DECLS
  * Backed by org.nemo.preferences interactive-search-mode. */
 NemoInteractiveSearchMode nemo_smpl_interactive_search_mode (void);
 
-/* Whether to protect cross-filesystem copies (removable / slow media) with
- * staging (visible '<name>.nemo-partial-XXXXXXXX') + blocking fsync before
- * signalling completion. Backed by org.nemo.preferences safe-cross-fs-copy. */
+/* Legacy preference retained for compatibility, not a staging/durability bypass.
+ * Backed by org.nemo.preferences safe-cross-fs-copy. */
 gboolean nemo_smpl_safe_cross_fs_copy (void);
 
 /* Global default for copy verification, including clipboard and drag-and-drop. */

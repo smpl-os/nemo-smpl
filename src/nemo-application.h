@@ -70,12 +70,6 @@ struct NemoApplicationClass {
     NemoWindow * (* create_window) (NemoApplication *application,
                                     GdkScreen       *screen);
 
-    void         (* notify_unmount_done) (NemoApplication *application,
-                                          const gchar *message);
-
-    void         (* notify_unmount_show) (NemoApplication *application,
-                                          const gchar *message);
-
     void         (* close_all_windows)   (NemoApplication *application);
 
 };
@@ -99,11 +93,6 @@ void nemo_application_show_items    (NemoApplication *application,
                                      const char      *startup_id);
 void nemo_application_close_all_windows (NemoApplication *self);
 
-void nemo_application_notify_unmount_show (NemoApplication *application,
-                                               const gchar *message);
-
-void nemo_application_notify_unmount_done (NemoApplication *application,
-                                               const gchar *message);
 gboolean nemo_application_check_required_directory (NemoApplication *application,
                                                     gchar           *path);
 void nemo_application_check_thumbnail_cache (NemoApplication *application);

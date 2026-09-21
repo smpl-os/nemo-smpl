@@ -2403,6 +2403,8 @@ nemo_file_operations_delete (GList                  *files,
 
 
 
+#include "nemo-mount-operation.h"
+
 typedef struct {
 	gboolean eject;
 	GMount *mount;
@@ -2436,16 +2438,11 @@ unmount_mount_callback (GObject *source_object,
 	gboolean unmounted;
 
 	error = NULL;
-	if (data->eject) {
-		unmounted = g_mount_eject_with_operation_finish (G_MOUNT (source_object),
-								 res, &error);
-	} else {
-		unmounted = g_mount_unmount_with_operation_finish (G_MOUNT (source_object),
-								   res, &error);
-	}
+	unmounted = nemo_mount_operation_remove_finish (source_object, res, &error);
 
 	if (! unmounted) {
-		if (error->code != G_IO_ERROR_FAILED_HANDLED) {
+		if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_FAILED_HANDLED) &&
+		    !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 			if (data->eject) {
 				primary = f (_("Unable to eject %V"), source_object);
 			} else {
@@ -2479,21 +2476,9 @@ do_unmount (UnmountData *data)
     } else {
         mount_op = gtk_mount_operation_new (data->parent_window);
     }
-	if (data->eject) {
-		g_mount_eject_with_operation (data->mount,
-					      0,
-					      mount_op,
-					      NULL,
-					      unmount_mount_callback,
-					      data);
-	} else {
-		g_mount_unmount_with_operation (data->mount,
-						0,
-						mount_op,
-						NULL,
-						unmount_mount_callback,
-						data);
-	}
+	nemo_mount_operation_remove (G_OBJECT (data->mount),
+	                             data->eject ? NEMO_MOUNT_REMOVE_EJECT : NEMO_MOUNT_REMOVE_UNMOUNT,
+	                             mount_op, NULL, unmount_mount_callback, data);
 	g_object_unref (mount_op);
 }
 
@@ -2675,6 +2660,11 @@ nemo_file_operations_unmount_mount_full (GtkWindow                      *parent_
 	data->eject = eject;
 	data->mount = g_object_ref (mount);
 
+#ifdef NEMO_SMPL
+    /* Removal must not synchronously scan a slow device or start deletion.
+     * Trash cleanup remains available as a separate, explicit operation. */
+    check_trash = FALSE;
+#endif
 	if (check_trash && has_trash_files (mount)) {
 		response = prompt_empty_trash (parent_window);
 
