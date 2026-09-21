@@ -36,6 +36,9 @@
 #include "nemo-file-operations.h"
 #include "nemo-file.h"
 #include "nemo-file-undo-manager.h"
+#ifdef NEMO_SMPL
+#include "nemo-progress-info.h"
+#endif
 
 /* Since we use g_get_current_time for setting "orig_trash_time" in the undo
  * info, there are situations where the difference between this value and the
@@ -67,6 +70,8 @@ struct _NemoFileUndoInfoDetails {
 	gchar *redo_label;
 	gchar *undo_description;
 	gchar *redo_description;
+	gboolean can_retry;
+	gboolean may_have_changed;
 };
 
 /* description helpers */
@@ -220,6 +225,8 @@ nemo_file_undo_info_apply_async (NemoFileUndoInfo *self,
 				     gpointer user_data)
 {
 	g_assert (self->priv->apply_async_result == NULL);
+	self->priv->can_retry = FALSE;
+	self->priv->may_have_changed = FALSE;
 
 	self->priv->apply_async_result = 
 		g_simple_async_result_new (G_OBJECT (self),
@@ -242,6 +249,18 @@ static void
 file_undo_info_op_res_free (gpointer data)
 {
 	g_free (data);
+}
+
+gboolean
+nemo_file_undo_info_can_retry (NemoFileUndoInfo *self)
+{
+	return self->priv->can_retry;
+}
+
+gboolean
+nemo_file_undo_info_may_have_changed (NemoFileUndoInfo *self)
+{
+	return self->priv->may_have_changed;
 }
 
 gboolean
@@ -337,7 +356,140 @@ struct _NemoFileUndoInfoExtDetails {
 	GFile *dest_dir;
 	GQueue *sources;	     /* Relative to src_dir */
 	GQueue *destinations;    /* Relative to dest_dir */
+#ifdef NEMO_SMPL
+	GPtrArray *transfers;
+#endif
 };
+
+#ifdef NEMO_SMPL
+typedef struct {
+	GtkWindow *parent;
+	NemoProgressInfo *progress;
+	gboolean redo;
+	guint completed;
+	GString *details;
+	gboolean retryable;
+	gboolean execution_started;
+} TransferUndoTask;
+
+static void
+transfer_undo_task_free (gpointer data)
+{
+	TransferUndoTask *task = data;
+	g_clear_object (&task->parent);
+	g_object_unref (task->progress);
+	g_string_free (task->details, TRUE);
+	g_free (task);
+}
+
+static void
+transfer_undo_worker (GTask *task, gpointer source, gpointer data, GCancellable *cancel)
+{
+	NemoFileUndoInfoExt *self = source;
+	TransferUndoTask *state = data;
+	GError *error = NULL;
+	if (self->priv->transfers->len != self->priv->destinations->length) {
+		state->retryable = TRUE;
+		g_set_error_literal (&error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		                     _("This operation has no complete safe undo record. "
+		                       "No files were deleted or replaced. Use the retained "
+		                       "recovery files for a manual restoration."));
+		goto out;
+	}
+	for (guint i = 0; i < self->priv->transfers->len; i++) {
+		NemoTransferUndo *transfer = g_ptr_array_index (self->priv->transfers, i);
+		if (!nemo_transfer_undo_check (transfer, state->redo, cancel, &error)) {
+			state->retryable = TRUE;
+			goto out;
+		}
+	}
+	for (guint i = 0; i < self->priv->transfers->len; i++) {
+		guint index = state->redo ? i : self->priv->transfers->len - i - 1;
+		NemoTransferUndo *transfer = g_ptr_array_index (self->priv->transfers, index);
+		state->execution_started = TRUE;
+		gboolean ok = nemo_transfer_undo_apply (transfer, state->redo, cancel, &error);
+		if (!ok) {
+			goto out;
+		}
+		state->completed++;
+	}
+out:
+	for (guint i = 0; i < self->priv->transfers->len; i++) {
+		NemoTransferUndo *transfer = g_ptr_array_index (self->priv->transfers, i);
+		GError *release_error = NULL;
+		if (!nemo_transfer_undo_release (transfer, &release_error)) {
+			if (error == NULL)
+				g_propagate_error (&error, release_error);
+			else {
+				g_prefix_error (&error, "%s\n", release_error->message);
+				g_error_free (release_error);
+			}
+		}
+		g_autofree char *details = nemo_transfer_undo_take_details (transfer);
+		g_string_append (state->details, details);
+	}
+	if (error != NULL)
+		g_task_return_error (task, error);
+	else
+		g_task_return_boolean (task, TRUE);
+}
+
+static void
+transfer_undo_done (GObject *source, GAsyncResult *result, gpointer unused)
+{
+	TransferUndoTask *state = g_task_get_task_data (G_TASK (result));
+	GError *error = NULL;
+	gboolean success = g_task_propagate_boolean (G_TASK (result), &error);
+	gboolean cancelled = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+	NemoProgressResult outcome = { 0 };
+	outcome.operation = nemo_file_undo_info_get_op_type (NEMO_FILE_UNDO_INFO (source)) ==
+	                    NEMO_FILE_UNDO_OP_MOVE ? NEMO_PROGRESS_OPERATION_MOVE : NEMO_PROGRESS_OPERATION_COPY;
+	outcome.outcome = success ? NEMO_PROGRESS_OUTCOME_SUCCESS :
+	                  cancelled ? NEMO_PROGRESS_OUTCOME_CANCELLED :
+	                  state->completed ? NEMO_PROGRESS_OUTCOME_PARTIAL : NEMO_PROGRESS_OUTCOME_FAILED;
+	outcome.completed_items = state->completed;
+	outcome.failed_items = !success && !cancelled;
+	nemo_progress_info_set_result (state->progress, &outcome);
+	nemo_progress_info_take_completion_details (state->progress,
+		g_strdup_printf ("%s%s%s", state->details->str, error ? "\n" : "", error ? error->message : ""));
+	if (error != NULL) {
+		if (!cancelled) {
+			GtkWidget *dialog = gtk_message_dialog_new (
+				state->parent, GTK_DIALOG_DESTROY_WITH_PARENT, GTK_MESSAGE_WARNING,
+				GTK_BUTTONS_CLOSE, "%s", _("Undo or redo could not be completed safely."));
+			gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), "%s\n%s",
+			                                          error->message, state->details->str);
+			gtk_dialog_run (GTK_DIALOG (dialog));
+			gtk_widget_destroy (dialog);
+		}
+	}
+	nemo_progress_info_finish (state->progress);
+	NEMO_FILE_UNDO_INFO (source)->priv->can_retry = state->retryable;
+	NEMO_FILE_UNDO_INFO (source)->priv->may_have_changed = state->execution_started;
+	file_undo_info_complete_apply (NEMO_FILE_UNDO_INFO (source), success, cancelled);
+	g_clear_error (&error);
+}
+
+static void
+transfer_undo_start (NemoFileUndoInfoExt *self, GtkWindow *parent, gboolean redo)
+{
+	TransferUndoTask *state = g_new0 (TransferUndoTask, 1);
+	state->parent = parent ? g_object_ref (parent) : NULL;
+	state->redo = redo;
+	state->details = g_string_new (NULL);
+	state->progress = nemo_progress_info_new ();
+	nemo_progress_info_set_status (state->progress, redo ? _("Redoing transfer safely") : _("Undoing transfer safely"));
+	nemo_progress_info_start (state->progress);
+	nemo_file_undo_manager_pop_flag ();
+	GCancellable *cancel = nemo_progress_info_get_cancellable (state->progress);
+	GTask *task = g_task_new (self, cancel, transfer_undo_done, NULL);
+	g_task_set_check_cancellable (task, FALSE);
+	g_object_unref (cancel);
+	g_task_set_task_data (task, state, transfer_undo_task_free);
+	g_task_run_in_thread (task, transfer_undo_worker);
+	g_object_unref (task);
+}
+#endif
 
 static char *
 ext_get_first_target_short_name (NemoFileUndoInfoExt *self)
@@ -520,6 +672,13 @@ ext_redo_func (NemoFileUndoInfo *info,
 {
 	NemoFileUndoInfoExt *self = NEMO_FILE_UNDO_INFO_EXT (info);
 	NemoFileUndoOp op_type = nemo_file_undo_info_get_op_type (info);
+#ifdef NEMO_SMPL
+	if (op_type == NEMO_FILE_UNDO_OP_COPY || op_type == NEMO_FILE_UNDO_OP_DUPLICATE ||
+	    op_type == NEMO_FILE_UNDO_OP_MOVE || op_type == NEMO_FILE_UNDO_OP_RESTORE_FROM_TRASH) {
+		transfer_undo_start (self, parent_window, TRUE);
+		return;
+	}
+#endif
 
 	if (op_type == NEMO_FILE_UNDO_OP_MOVE ||
 	    op_type == NEMO_FILE_UNDO_OP_RESTORE_FROM_TRASH)  {
@@ -574,6 +733,13 @@ ext_undo_func (NemoFileUndoInfo *info,
 {
 	NemoFileUndoInfoExt *self = NEMO_FILE_UNDO_INFO_EXT (info);
 	NemoFileUndoOp op_type = nemo_file_undo_info_get_op_type (info);
+#ifdef NEMO_SMPL
+	if (op_type == NEMO_FILE_UNDO_OP_COPY || op_type == NEMO_FILE_UNDO_OP_DUPLICATE ||
+	    op_type == NEMO_FILE_UNDO_OP_MOVE || op_type == NEMO_FILE_UNDO_OP_RESTORE_FROM_TRASH) {
+		transfer_undo_start (self, parent_window, FALSE);
+		return;
+	}
+#endif
 
 	if (op_type == NEMO_FILE_UNDO_OP_COPY ||
 	    op_type == NEMO_FILE_UNDO_OP_DUPLICATE ||
@@ -593,6 +759,9 @@ nemo_file_undo_info_ext_init (NemoFileUndoInfoExt *self)
 {
 	self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, nemo_file_undo_info_ext_get_type (),
 						  NemoFileUndoInfoExtDetails);
+#ifdef NEMO_SMPL
+	self->priv->transfers = g_ptr_array_new_with_free_func ((GDestroyNotify) nemo_transfer_undo_unref);
+#endif
 }
 
 static void
@@ -610,6 +779,9 @@ nemo_file_undo_info_ext_finalize (GObject *obj)
 
 	g_clear_object (&self->priv->src_dir);
 	g_clear_object (&self->priv->dest_dir);
+#ifdef NEMO_SMPL
+	g_ptr_array_unref (self->priv->transfers);
+#endif
 
 	G_OBJECT_CLASS (nemo_file_undo_info_ext_parent_class)->finalize (obj);
 }
@@ -658,6 +830,17 @@ nemo_file_undo_info_ext_add_origin_target_pair (NemoFileUndoInfoExt *self,
     g_queue_push_tail (self->priv->sources, g_object_ref (origin));
     g_queue_push_tail (self->priv->destinations, g_object_ref (target));
 }
+
+#ifdef NEMO_SMPL
+void
+nemo_file_undo_info_ext_add_transfer (NemoFileUndoInfoExt *self, GFile *origin,
+                                    GFile *target, NemoTransferUndo *transfer)
+{
+	nemo_file_undo_info_ext_add_origin_target_pair (self, origin, target);
+	if (transfer != NULL)
+		g_ptr_array_add (self->priv->transfers, nemo_transfer_undo_ref (transfer));
+}
+#endif
 
 /* create new file/folder */
 G_DEFINE_TYPE (NemoFileUndoInfoCreate, nemo_file_undo_info_create, NEMO_TYPE_FILE_UNDO_INFO)

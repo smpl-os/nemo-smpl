@@ -174,7 +174,8 @@ undo_info_apply_ready (GObject *source,
 		}
 
 		self->priv->info = g_object_ref (info);
-	} else if (user_cancel) {
+	} else if ((user_cancel && !nemo_file_undo_info_may_have_changed (info)) ||
+	           nemo_file_undo_info_can_retry (info)) {
 		self->priv->state = self->priv->last_state;
 		self->priv->info = g_object_ref (info);
 	} else {

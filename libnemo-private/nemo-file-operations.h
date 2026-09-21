@@ -33,7 +33,10 @@
 /* smpl copy/move jobs report success only when every item was copied/moved or,
  * for verified copies, confirmed already present with stable matching contents.
  * Unverified retained conflicts (even a neutral RETAINED result) are not success.
- * An incomplete transaction may leave a published destination and its source. */
+ * SMPL transfers require supported local publication and synchronization.
+ * An incomplete transaction may leave a published destination, a source, or
+ * a captured original in a reported recovery location. A failed native move
+ * does not imply that the former source pathname still exists. */
 typedef void (* NemoCopyCallback)      (GHashTable *debuting_uris,
 					    gboolean    success,
 					    gpointer    callback_data);
@@ -152,8 +155,9 @@ void nemo_file_mark_desktop_file_trusted (GFile           *file,
 					      NemoOpCallback done_callback,
 					      gpointer          done_callback_data);
 
-/* Applies to the next copy/move job. In smpl builds, copy-and-delete moves
- * always verify before deleting their source, independently of this flag. */
+/* Explicitly overrides verification for the next copy/move job only. Otherwise
+ * SMPL copies use the persistent preference. Copied moves always verify and
+ * no setting disables protected staging or checked synchronization. */
 void nemo_file_operations_set_verify_copies (gboolean verify);
 
 

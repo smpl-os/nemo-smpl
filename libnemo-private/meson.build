@@ -75,6 +75,7 @@ nemo_private_sources = [
   'nemo-smpl-prefs.c',
   'nemo-thumbnails.c',
   'nemo-trash-monitor.c',
+  'nemo-transfer-safety.c',
   'nemo-tree-view-drag-dest.c',
   'nemo-ui-utilities.c',
   'nemo-undo-manager.c',

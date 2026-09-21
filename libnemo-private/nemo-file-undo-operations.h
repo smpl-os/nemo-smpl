@@ -30,6 +30,7 @@
 
 #include <gio/gio.h>
 #include <gtk/gtk.h>
+#include "nemo-transfer-safety.h"
 
 typedef enum {
 	NEMO_FILE_UNDO_OP_COPY,
@@ -91,6 +92,9 @@ gboolean nemo_file_undo_info_apply_finish (NemoFileUndoInfo *self,
 					       GAsyncResult *res,
 					       gboolean *user_cancel,
 					       GError **error);
+/* TRUE only for a refusal detected before any undo/redo mutation was started. */
+gboolean nemo_file_undo_info_can_retry (NemoFileUndoInfo *self);
+gboolean nemo_file_undo_info_may_have_changed (NemoFileUndoInfo *self);
 
 void nemo_file_undo_info_get_strings (NemoFileUndoInfo *self,
 					  gchar **undo_label,
@@ -127,6 +131,11 @@ NemoFileUndoInfo *nemo_file_undo_info_ext_new (NemoFileUndoOp op_type,
 void nemo_file_undo_info_ext_add_origin_target_pair (NemoFileUndoInfoExt *self,
 							 GFile                   *origin,
 							 GFile                   *target);
+#ifdef NEMO_SMPL
+void nemo_file_undo_info_ext_add_transfer (NemoFileUndoInfoExt *self,
+                                         GFile *origin, GFile *target,
+                                         NemoTransferUndo *transfer);
+#endif
 
 /* create new file/folder */
 #define NEMO_TYPE_FILE_UNDO_INFO_CREATE         (nemo_file_undo_info_create_get_type ())
