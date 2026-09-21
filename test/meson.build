@@ -1,6 +1,16 @@
 if smpl_features_enabled
   hardening_python = find_program('python3')
   hardening_runner = files('run-isolated-regression.py')
+  copy_integrity_schemas = custom_target('copy-integrity-schemas',
+    input: '../libnemo-private/org.nemo.gschema.xml',
+    output: 'gschemas.compiled',
+    command: [
+      find_program('glib-compile-schemas'),
+      '--strict',
+      '--targetdir', '@OUTDIR@',
+      meson.project_source_root() / 'libnemo-private',
+    ],
+  )
 
   test('MTP empty folder state', hardening_python,
     args: hardening_runner + [hardening_python.full_path(), files('test-mtp-empty.py')[0]],
@@ -39,12 +49,14 @@ if smpl_features_enabled
   )
   test('Completion real backends', hardening_python,
     args: hardening_runner + [completion_test, '--real-backends'],
+    depends: copy_integrity_schemas,
     suite: 'hardening',
     timeout: 60,
     is_parallel: false,
   )
   test('Completion pending backend exit', hardening_python,
     args: hardening_runner + [completion_test, '--real-pending-exit'],
+    depends: copy_integrity_schemas,
     suite: 'hardening',
     timeout: 60,
     is_parallel: false,
@@ -95,9 +107,14 @@ if smpl_features_enabled
     ),
   ]
   foreach regression : ui_regressions
+    regression_suites = ['hardening']
+    if regression == completion_test
+      regression_suites += ['transfer-safety']
+    endif
     test(regression.name(), hardening_python,
       args: hardening_runner + [regression],
-      suite: 'hardening',
+      depends: copy_integrity_schemas,
+      suite: regression_suites,
       timeout: 60,
       is_parallel: false,
     )
@@ -134,17 +151,6 @@ test('Copy test',
 )
 
 if smpl_features_enabled
-  copy_integrity_schemas = custom_target('copy-integrity-schemas',
-    input: '../libnemo-private/org.nemo.gschema.xml',
-    output: 'gschemas.compiled',
-    command: [
-      find_program('glib-compile-schemas'),
-      '--strict',
-      '--targetdir', '@OUTDIR@',
-      meson.project_source_root() / 'libnemo-private',
-    ],
-  )
-
   copy_integrity = executable('test-copy-integrity',
     'test-copy-integrity.c',
     include_directories: [ rootInclude ],
@@ -153,6 +159,11 @@ if smpl_features_enabled
     link_args: [
       '-Wl,--wrap=open',
       '-Wl,--wrap=open64',
+      '-Wl,--wrap=openat',
+      '-Wl,--wrap=openat64',
+      '-Wl,--wrap=mkdirat',
+      '-Wl,--wrap=renameat2',
+      '-Wl,--wrap=unlinkat',
       '-Wl,--wrap=read',
       '-Wl,--wrap=close',
       '-Wl,--wrap=remove',
@@ -189,6 +200,82 @@ if smpl_features_enabled
     'NO_AT_BRIDGE': '1',
     'TMPDIR': meson.current_build_dir(),
   }
+  transfer_safety = executable('test-transfer-safety',
+    'test-transfer-safety.c',
+    include_directories: [rootInclude],
+    dependencies: [gtk, nemo_private],
+    c_args: nemo_definitions,
+    link_args: [
+      '-Wl,--wrap=renameat2',
+      '-Wl,--wrap=syscall',
+      '-Wl,--wrap=openat',
+      '-Wl,--wrap=openat64',
+      '-Wl,--wrap=statx',
+      '-Wl,--wrap=mkdirat',
+      '-Wl,--wrap=fstatfs',
+      '-Wl,--wrap=fstatfs64',
+      '-Wl,--wrap=fsync',
+      '-Wl,--wrap=syncfs',
+      '-Wl,--wrap=close',
+      '-Wl,--wrap=read',
+      '-Wl,--wrap=unlinkat',
+      '-Wl,--wrap=g_file_is_native',
+      '-Wl,--wrap=g_file_get_path',
+      '-Wl,--wrap=g_file_query_info',
+      '-Wl,--wrap=g_file_create',
+      '-Wl,--wrap=g_file_copy',
+      '-Wl,--wrap=g_output_stream_write_all',
+      '-Wl,--wrap=g_output_stream_close',
+      '-Wl,--wrap=nemo_mount_operation_is_removing',
+      '-Wl,--wrap=nemo_file_undo_info_ext_add_origin_target_pair',
+      '-Wl,--wrap=nemo_file_undo_info_ext_add_transfer',
+    ],
+  )
+  foreach scenario : [
+    'mandatory-stage', 'default-copy', 'default-copy-file', 'default-duplicate',
+    'default-move-consumption', 'explicit-true-consumption',
+    'explicit-true-copy-file', 'explicit-true-duplicate', 'explicit-true-move',
+    'backend-nfs', 'backend-fuse', 'backend-tmpfs', 'backend-unknown', 'real-tmpfs-destination',
+    'remote-destination', 'remote-source-move', 'remote-source-copy',
+    'removal-inflight-copy', 'removal-inflight-move',
+    'existing-match-fsync', 'publish-new-file-race', 'publish-new-directory-race',
+    'publish-new-symlink-race', 'publish-exchange-race', 'exchange-unsupported',
+    'publish-eintr', 'publish-eio', 'copy-publish-fsync', 'recovery-fsync',
+    'readable-recovery-details', 'copied-recovery-close', 'symlink-syncfs', 'copied-symlink-syncfs',
+    'writer-close', 'directory-close',
+    'native-file', 'native-symlink', 'native-directory', 'native-replacement',
+    'native-source-fsync', 'native-tree-fsync', 'native-publish-fsync',
+    'native-publish-eintr',
+    'native-new-file-race', 'native-directory-race', 'native-capture-swap',
+    'native-capture-result-eio', 'copied-capture-result-eio', 'copy-publish-result-eio',
+    'native-publish-result-eio', 'exchange-result-eio', 'native-exchange-result-eio',
+    'copy-publish-result-eintr', 'exchange-result-eintr',
+    'copy-final-anchor-close', 'native-final-anchor-close',
+    'copied-source-reclaimed', 'copied-source-swap', 'copied-source-capture-failure',
+    'copied-source-capture-cancel', 'move-target-prompt-change', 'move-target-copy-change',
+    'copied-source-delete-failure', 'copied-source-delete-fsync', 'copied-source-occupied-restore',
+    'enqueue-root-swap', 'enqueue-ancestor-swap', 'enqueue-source-parent-swap',
+    'enqueue-mount-swap', 'custom-name-tree', 'recovery-finalization',
+    'recovery-entry-details', 'history-releases-anchors',
+    'undo-replacement', 'undo-newer-target', 'undo-newer-source',
+    'undo-capture-race', 'undo-restore-race', 'undo-fsync', 'undo-new-child',
+    'undo-postcapture-fsync', 'undo-retry-then-postcapture', 'undo-folder-refused',
+    'undo-cancel-before-execution', 'undo-cancel-after-capture',
+    'undo-native-folder-refused', 'undo-crossfs-refused', 'undo-mixed-file-folder',
+    'undo-mixed-folder-file', 'undo-no-record-refused',
+    'undo-reopened-root-swap',
+    'undo-merged-directory', 'undo-merge-new-subdirectory', 'redo-newer-target',
+  ]
+    test('transfer-safety-' + scenario, hardening_python,
+      args: hardening_runner + [transfer_safety, scenario],
+      env: copy_integrity_base_env,
+      depends: copy_integrity_schemas,
+      suite: 'transfer-safety',
+      protocol: 'tap',
+      timeout: 30,
+      is_parallel: false,
+    )
+  endforeach
   copy_selection_test = executable('test-copy-selection',
     'test-copy-selection.c',
     objects: copy_selection_objects,
@@ -223,7 +310,7 @@ if smpl_features_enabled
       'replace-corrupt', 'skip-all', 'metadata-unknown', 'readback-unavailable',
       'writer-eio', 'writer-enospc', 'writer-eintr', 'final-range-eio',
       'range-einval', 'range-enosys', 'range-eopnotsupp',
-      'directory-fsync', 'directory-open', 'cancel-before-write',
+      'directory-fsync', 'recovery-fsync', 'directory-open', 'cancel-before-write',
       'cancel-during-write', 'cancel-after-publish', 'cancel-before-delete',
       'long-name', 'broken-symlink', 'fifo-symlink', 'folder-copy', 'folder-move',
       'folder-new-copy', 'folder-new-move', 'folder-parent-fsync', 'folder-partial-move',
