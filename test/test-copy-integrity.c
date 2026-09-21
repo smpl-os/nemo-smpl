@@ -2108,7 +2108,8 @@ test_copy_integrity (void)
     g_free (source_name);
     g_free (destination_name);
     if (!successful_case ())
-        g_assert_null (strstr (completion, " completed."));
+        g_assert_false (g_str_has_prefix (completion,
+                                         fixture.test->move ? "Move completed." : "Copy completed."));
     if (!successful_case () || fixture.result.atomic_moves > 0)
         g_assert_null (strstr (completion, "All copied regular files"));
     if (fixture.result.checksum_verified_files == 0) {
