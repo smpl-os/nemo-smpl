@@ -32,7 +32,7 @@ typedef enum {
     SCAN_FILE, SCAN_OPEN, SCAN_READ, EXIST_READ_SOURCE, EXIST_READ_TARGET,
     EXIST_CANCEL, EXIST_EOF, EXIST_SOURCE_CHANGE, EXIST_TARGET_CHANGE,
     PROMPT_SOURCE, PROMPT_TARGET, REPAIR_TARGET, EXIST_SOURCE_REWRITE, EXIST_TARGET_REWRITE,
-    EXIST_TARGET_NO_VERSION
+    EXIST_TARGET_NO_VERSION, PULL_ALIAS_FAILED
 } Fault;
 
 typedef struct {
@@ -59,6 +59,9 @@ static const TestCase cases[] = {
     { "default-permissions", DEFAULT_PERMS, FALSE, TRUE, FALSE, FALSE },
     { "default-permissions-move", DEFAULT_PERMS, TRUE, FALSE, TRUE, FALSE },
     { "pull-copy", NONE, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-copy", NONE, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-unavailable", PULL_ALIAS_FAILED, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-move-unavailable", PULL_ALIAS_FAILED, TRUE, FALSE, TRUE, TRUE },
     { "pull-chunked-copy", NONE, FALSE, FALSE, FALSE, TRUE },
     { "pull-read-unsupported", NONE, FALSE, FALSE, FALSE, TRUE },
     { "pull-syncfs-eio", SYNCFS_EIO, FALSE, FALSE, FALSE, TRUE },
@@ -202,7 +205,7 @@ static struct {
     gboolean running, done, success, timed_out;
     int sequence, injections, conflicts, warnings, cleanup_warnings, attempts, ancestor_syncs;
     int power_warnings, mismatch_warnings, readback_warnings, cleanup_logs;
-    int raced_mkdir_attempts, source_move_attempts;
+    int raced_mkdir_attempts, source_move_attempts, backend_children;
     guint source_eof_reads, readback_refusals, recovery_collisions;
 } fixture;
 
@@ -322,10 +325,11 @@ __wrap_g_file_get_path (GFile *file)
     char *path = __real_g_file_get_path (file);
     g_autofree char *actual = test_file_path (file);
     Item *item = fixture.running ? source_item (actual) : NULL;
-    gboolean anchored = path && g_str_has_prefix (path, "/proc/self/fd/");
+    gboolean anchored = path && g_str_has_prefix (path, "/proc/");
     /* Keep move preflight native. Force the opaque adapter only after binding
      * the source, and force its source-readback failure only after the pull. */
-    if (item && ((pull_case () && (anchored || item->backend_copy > 0)) ||
+    if (item && ((pull_case () && ((anchored && item->output_closes == 0) ||
+                                  item->backend_copy > 0)) ||
                  (fixture.test->fault == SOURCE_EOF && !fixture.test->move)))
         g_clear_pointer (&path, g_free);
     return path;
@@ -357,12 +361,26 @@ fd_path (int fd)
 static char *
 normalize_path (const char *path)
 {
-    if (path && g_str_has_prefix (path, "/proc/self/fd/")) {
+    if (path && g_str_has_prefix (path, "/proc/")) {
+        const char *process = path + strlen ("/proc/");
         char *end;
-        int fd = strtol (path + strlen ("/proc/self/fd/"), &end, 10);
-        g_autofree char *parent = fd_path (fd);
-        if (parent && (!*end || *end == '/'))
-            return g_build_filename (parent, *end ? end + 1 : "", NULL);
+        if (g_str_has_prefix (process, "self/"))
+            end = (char *) process + strlen ("self");
+        else {
+            g_ascii_strtoull (process, &end, 10);
+            if (!g_ascii_isdigit (*process) || end == process)
+                return g_strdup (path);
+        }
+        if (g_str_has_prefix (end, "/fd/")) {
+            const char *descriptor = end + strlen ("/fd/");
+            guint64 fd = g_ascii_strtoull (descriptor, &end, 10);
+            if (g_ascii_isdigit (*descriptor) && fd <= G_MAXINT && (!*end || *end == '/')) {
+                g_autofree char *anchor = g_strndup (path, end - path);
+                g_autofree char *parent = g_file_read_link (anchor, NULL);
+                if (parent)
+                    return g_build_filename (parent, *end ? end + 1 : "", NULL);
+            }
+        }
     }
     return g_strdup (path);
 }
@@ -1120,6 +1138,60 @@ __wrap_syncfs (int fd)
 
 gboolean __real_g_file_copy (GFile *, GFile *, GFileCopyFlags, GCancellable *,
                              GFileProgressCallback, gpointer, GError **);
+
+/* Executed before GTK initialization, with the parent's descriptors closed.
+ * Only synthetic fixture bytes may be written, and never with replacement. */
+static int
+subprocess_pull (int argc, char **argv)
+{
+    g_assert_cmpint (argc, ==, 7);
+    const char *root = argv[2], *source_root = argv[3];
+    const char *source = argv[4], *destination = argv[5];
+    gboolean unavailable = g_str_equal (argv[6], "unavailable");
+    const char *paths[] = { source, destination };
+    for (guint i = 0; i < G_N_ELEMENTS (paths); i++) {
+        g_assert_true (g_str_has_prefix (paths[i], "/proc/"));
+        char *end;
+        guint64 pid = g_ascii_strtoull (paths[i] + strlen ("/proc/"), &end, 10);
+        g_assert_cmpuint (pid, ==, i == 1 && unavailable ? 0 : getppid ());
+        g_assert_true (g_str_has_prefix (end, "/fd/"));
+        int fd = g_ascii_strtoull (end + strlen ("/fd/"), &end, 10);
+        g_assert_cmpint (fd, >, 2);
+        g_assert_cmpint (*end, ==, '/');
+        g_assert_cmpint (fcntl (fd, F_GETFD), ==, -1);
+        g_assert_cmpint (errno, ==, EBADF);
+        g_autofree char *self = g_strdup_printf ("/proc/self/fd/%d%s", fd, end);
+        struct stat st;
+        g_assert_cmpint (lstat (self, &st), ==, -1);
+        g_assert_cmpint (errno, ==, ENOENT);
+    }
+    g_autofree char *resolved_source = normalize_path (source);
+    g_assert_true (under (resolved_source, source_root));
+    g_autofree char *contents = NULL;
+    g_assert_true (g_file_get_contents (source, &contents, NULL, NULL));
+    g_assert_cmpstr (contents, ==, payload);
+    if (!unavailable) {
+        g_autofree char *resolved_destination = normalize_path (destination);
+        g_assert_true (under (resolved_destination, root));
+        g_autofree char *parent = g_path_get_dirname (destination);
+        struct stat st;
+        g_assert_cmpint (stat (parent, &st), ==, 0);
+        g_assert_true (S_ISDIR (st.st_mode));
+        g_assert_cmpuint (st.st_uid, ==, getuid ());
+        g_assert_cmpuint (st.st_mode & 0777, ==, 0700);
+    }
+    int writer = open (destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (unavailable) {
+        g_assert_cmpint (writer, ==, -1);
+        g_assert_cmpint (errno, ==, ENOENT);
+        return 42;
+    }
+    g_assert_cmpint (writer, >=, 0);
+    g_assert_cmpint (write (writer, contents, strlen (contents)), ==, strlen (contents));
+    g_assert_cmpint (close (writer), ==, 0);
+    return 0;
+}
+
 gboolean
 __wrap_g_file_copy (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellable *cancel,
                     GFileProgressCallback progress, gpointer data, GError **error)
@@ -1148,7 +1220,46 @@ __wrap_g_file_copy (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
         g_free (basename);
         g_free (parent);
     }
-    gboolean ok = __real_g_file_copy (source, dest, flags, cancel, progress, data, error);
+    gboolean ok;
+    if (item && g_str_has_prefix (fixture.test->name, "pull-subprocess-")) {
+        g_autofree char *backend_source = __real_g_file_get_path (source);
+        g_autofree char *backend_destination = __real_g_file_get_path (dest);
+        g_autofree char *expected_prefix = g_strdup_printf ("/proc/%ld/fd/", (long) getpid ());
+        g_assert_true (g_str_has_prefix (backend_source, expected_prefix));
+        g_assert_true (g_str_has_prefix (backend_destination, expected_prefix));
+        const char *paths[] = { backend_source, backend_destination };
+        for (guint i = 0; i < G_N_ELEMENTS (paths); i++) {
+            int fd = g_ascii_strtoull (paths[i] + strlen (expected_prefix), NULL, 10);
+            int descriptor_flags = fcntl (fd, F_GETFD);
+            g_assert_cmpint (descriptor_flags, >=, 0);
+            g_assert_true ((descriptor_flags & FD_CLOEXEC) != 0);
+        }
+        if (fixture.test->fault == PULL_ALIAS_FAILED) {
+            char *inaccessible = g_strconcat ("/proc/0/fd/",
+                backend_destination + strlen (expected_prefix), NULL);
+            g_free (backend_destination);
+            backend_destination = inaccessible;
+            fixture.injections++;
+        }
+        char *argv[] = { "/proc/self/exe", "--pull-helper", fixture.root, fixture.source_dir,
+                         backend_source, backend_destination,
+                         fixture.test->fault == PULL_ALIAS_FAILED ? "unavailable" : "copy", NULL };
+        int status;
+        /* No LEAVE_DESCRIPTORS_OPEN: exec must not inherit any pinned fds. */
+        g_assert_true (g_spawn_sync (NULL, argv, NULL, G_SPAWN_DEFAULT,
+                                    NULL, NULL, NULL, NULL, &status, NULL));
+        fixture.backend_children++;
+        ok = g_spawn_check_wait_status (status, error);
+        if (fixture.test->fault == PULL_ALIAS_FAILED) {
+            g_assert_false (ok);
+            g_assert_error (*error, G_SPAWN_EXIT_ERROR, 42);
+            g_clear_error (error);
+            g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                 "The backend cannot resolve the parent's process alias");
+        }
+    } else {
+        ok = __real_g_file_copy (source, dest, flags, cancel, progress, data, error);
+    }
     if (item && ok) {
         item->backend_copy = ++fixture.sequence;
         if (fixture.test->fault == PULL_EOF) {
@@ -2202,8 +2313,14 @@ test_copy_integrity (void)
         }
         if (pull_case ()) {
             g_assert_cmpint (fixture.injections, >, 0);
-            g_assert_cmpint (item->backend_copy, >, item->parent_open);
-            if (fixture.test->fault == PULL_FAILED || fixture.test->fault == PULL_CANCEL)
+            if (g_str_has_prefix (fixture.test->name, "pull-subprocess-"))
+                g_assert_cmpint (fixture.backend_children, ==, 1);
+            if (fixture.test->fault == PULL_ALIAS_FAILED)
+                g_assert_cmpint (item->backend_copy, ==, 0);
+            else
+                g_assert_cmpint (item->backend_copy, >, item->parent_open);
+            if (fixture.test->fault == PULL_FAILED || fixture.test->fault == PULL_CANCEL ||
+                fixture.test->fault == PULL_ALIAS_FAILED)
                 g_assert_cmpint (item->syncfs_calls, ==, 0);
             else
                 g_assert_cmpint (item->syncfs_calls, >, 0);
@@ -2404,6 +2521,8 @@ main (int argc, char **argv)
                     "(NEMO_TEST_ISOLATED=1 is required).\n");
         return 77;
     }
+    if (argc > 1 && g_str_equal (argv[1], "--pull-helper"))
+        return subprocess_pull (argc, argv);
     g_assert_cmpint (argc, >=, 2);
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
         if (strcmp (argv[1], cases[i].name) == 0) {

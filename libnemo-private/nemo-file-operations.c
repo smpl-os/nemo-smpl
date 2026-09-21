@@ -5767,6 +5767,43 @@ native_copy_progress_callback (goffset current, goffset total, gpointer data)
 	copy_file_progress_callback (current, total, pdata);
 }
 
+/* GVfs forwards local paths to another process: /proc/self would name its
+ * descriptors, not ours. The transaction keeps these directory fds open.
+ * Check that our PID also names us in this procfs mount; a different PID
+ * namespace in the backend must fail, never fall back to a public pathname. */
+static GFile *
+native_backend_file (GFile *file, GError **error)
+{
+	g_autofree char *path = g_file_get_path (file);
+	g_autofree char *anchor = NULL;
+	g_autofree char *external = NULL;
+	const char *prefix = "/proc/self/fd/";
+	char *end;
+	guint64 fd;
+	struct stat held, named;
+
+	if (path == NULL || !g_str_has_prefix (path, prefix)) {
+		return g_object_ref (file);
+	}
+	fd = g_ascii_strtoull (path + strlen (prefix), &end, 10);
+	if (end == path + strlen (prefix) || fd > G_MAXINT || *end != '/') {
+		goto unavailable;
+	}
+	anchor = g_strdup_printf ("/proc/%ld/fd/%d", (long) getpid (), (int) fd);
+	if (fstat ((int) fd, &held) < 0 || stat (anchor, &named) < 0 ||
+	    !S_ISDIR (held.st_mode) || !S_ISDIR (named.st_mode) ||
+	    held.st_dev != named.st_dev || held.st_ino != named.st_ino) {
+		goto unavailable;
+	}
+	external = g_strconcat (anchor, end, NULL);
+	return g_file_new_for_path (external);
+
+unavailable:
+	g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+	                     _("The backend cannot access the pinned copy location."));
+	return NULL;
+}
+
 /* Some GVfs sources implement pull but not stream reads. Their writer is
  * opaque to us: an early filesystem error-tracking fd plus checked syncfs
  * is required, not a newly opened read-only fd alone. Keep the backend's
@@ -5777,6 +5814,8 @@ copy_with_native_backend (GFile *src, GFile *staging, GFileInfo *source_info, GF
 {
 	CommonJob *job = &pdata->job->common;
 	GFile *container = NULL, *payload = NULL;
+	g_autoptr (GFile) backend_source = NULL;
+	g_autoptr (GFile) backend_payload = NULL;
 	gboolean owned = FALSE, ok = FALSE;
 	int fd = -1, result;
 	struct stat st;
@@ -5805,10 +5844,21 @@ copy_with_native_backend (GFile *src, GFile *staging, GFileInfo *source_info, GF
 		}
 	}
 	payload = g_file_get_child (container, "payload");
+	backend_source = native_backend_file (src, error);
+	if (backend_source == NULL) {
+		goto out;
+	}
+	backend_payload = native_backend_file (payload, error);
+	if (backend_payload == NULL) {
+		goto out;
+	}
 	backend_progress.dest = payload;
 	backend_progress.dest_fd = -1;
 	backend_progress.last_flush_offset = 0;
-	if (!g_file_copy (src, payload, flags & ~G_FILE_COPY_OVERWRITE,
+	/* Keep the random, exclusively owned container component in the external
+	 * alias, not just its fd. A wrong process/namespace must not overwrite an
+	 * unrelated entry, and only our pinned payload can be adopted below. */
+	if (!g_file_copy (backend_source, backend_payload, flags & ~G_FILE_COPY_OVERWRITE,
 	                  job->cancellable, native_copy_progress_callback, &backend_progress, error)) {
 		goto out;
 	}

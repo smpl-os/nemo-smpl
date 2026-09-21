@@ -356,6 +356,7 @@ if smpl_features_enabled
       'metadata-no-version-move', 'source-changed-move', 'cancel-verification',
       'metadata-preserved', 'default-permissions', 'default-permissions-move',
       'pull-copy', 'pull-chunked-copy', 'pull-read-unsupported', 'pull-syncfs-eio', 'pull-syncfs-eintr',
+      'pull-subprocess-copy', 'pull-subprocess-unavailable', 'pull-subprocess-move-unavailable',
       'pull-fsync-eio', 'pull-verify-unavailable', 'pull-move-unavailable',
       'pull-failure-cleanup', 'pull-cancel-cleanup',
       'attributes-unsupported', 'attributes-denied', 'attributes-eio',
