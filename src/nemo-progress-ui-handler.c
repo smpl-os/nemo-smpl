@@ -142,6 +142,14 @@ progress_ui_handler_update_status_icon (NemoProgressUIHandler *self)
 {
 	gchar *tooltip;
 
+#ifdef NEMO_SMPL
+    if (!self->priv->should_show_status_icon ||
+        (self->priv->active_infos == 0 && self->priv->completed_count == 0)) {
+        if (self->priv->status_icon != NULL)
+            xapp_status_icon_set_visible (self->priv->status_icon, FALSE);
+        return;
+    }
+#endif
 	progress_ui_handler_ensure_status_icon (self);
 #ifdef NEMO_SMPL
     if (self->priv->active_infos == 0) {
@@ -775,12 +783,18 @@ progress_info_queued_cb (NemoProgressInfo *info,
                          NemoProgressUIHandler *self)
 {
     OperationWatch *watch;
+    NemoProgressResult result;
+    gboolean immediate, new_batch;
 
     if (self->priv->shutting_down)
         return;
     if (g_hash_table_contains (self->priv->operations, info))
         return;
-    if (self->priv->active_infos == 0 && self->priv->completed_count == 0)
+    immediate = nemo_progress_info_get_result (info, &result) &&
+                (result.operation == NEMO_PROGRESS_OPERATION_COPY ||
+                 result.operation == NEMO_PROGRESS_OPERATION_MOVE);
+    new_batch = self->priv->active_infos == 0;
+    if (new_batch)
         self->priv->should_show_status_icon = FALSE;
     watch = g_new0 (OperationWatch, 1);
     watch->self = self;
@@ -793,8 +807,22 @@ progress_info_queued_cb (NemoProgressInfo *info,
     g_signal_connect_swapped (info, "started", G_CALLBACK (progress_info_started_cb), self);
     g_signal_connect (info, "progress-changed", G_CALLBACK (progress_info_changed_cb), self);
     g_signal_connect (info, "changed", G_CALLBACK (progress_info_changed_cb), self);
-    progress_info_changed_cb (info, self);
-    watch->timeout_id = g_timeout_add_seconds (2, operation_show_timeout, watch);
+    if (immediate) {
+        /* Fast jobs can already be finished when their queued signal arrives.
+         * Show their summary too, without relying on a tray or notifications. */
+        if (!nemo_progress_info_get_is_finished (info))
+            progress_ui_handler_add_to_window (self, info);
+        else
+            progress_ui_handler_ensure_window (self);
+        progress_info_changed_cb (info, self);
+        if (new_batch || (!gtk_widget_get_visible (self->priv->progress_window) &&
+                          !self->priv->should_show_status_icon))
+            gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+        progress_ui_handler_update_status_icon (self);
+    } else {
+        progress_info_changed_cb (info, self);
+        watch->timeout_id = g_timeout_add_seconds (2, operation_show_timeout, watch);
+    }
 }
 #endif
 

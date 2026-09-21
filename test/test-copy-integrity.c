@@ -27,7 +27,7 @@ typedef enum {
     DIR_SYNC, RECOVERY_SYNC, DIR_OPEN, CANCEL_CREATE, CANCEL_WRITE, CANCEL_PUBLISH,
     CANCEL_DELETE, COLLISION, CLEANUP, DEFAULT_PERMS, SYNCFS_EIO, SYNCFS_EINTR,
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
-    PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
+    PUBLISH_RACE, FOLDER_RACE, FOLDER_DIRECTORY_RACE, OPTIONAL_METADATA, MISSING_TYPE,
     SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY,
     SCAN_FILE, SCAN_OPEN, SCAN_READ, EXIST_READ_SOURCE, EXIST_READ_TARGET,
     EXIST_CANCEL, EXIST_EOF, EXIST_SOURCE_CHANGE, EXIST_TARGET_CHANGE,
@@ -102,7 +102,10 @@ static const TestCase cases[] = {
     { "broken-symlink", NONE, TRUE, FALSE, TRUE, FALSE },
     { "fifo-symlink", NONE, TRUE, FALSE, TRUE, FALSE },
     { "folder-copy", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "folder-unverified-copy", NONE, FALSE, FALSE, FALSE, FALSE },
     { "folder-move", NONE, TRUE, FALSE, TRUE, FALSE },
+    { "folder-native-merge", NONE, TRUE, FALSE, FALSE, FALSE },
+    { "folder-existing-race", FOLDER_DIRECTORY_RACE, FALSE, TRUE, FALSE, FALSE },
     { "folder-new-copy", NONE, FALSE, TRUE, FALSE, FALSE },
     { "folder-new-move", NONE, TRUE, FALSE, TRUE, FALSE },
     { "folder-parent-fsync", RECOVERY_SYNC, TRUE, FALSE, TRUE, FALSE },
@@ -160,7 +163,7 @@ static const TestCase cases[] = {
     { "existing-fifo", NONE, FALSE, TRUE, FALSE, FALSE },
     { "existing-unverified", NONE, FALSE, FALSE, FALSE, FALSE },
     { "existing-unverified-size-skip", NONE, FALSE, FALSE, FALSE, FALSE },
-    { "existing-directory-skip", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-merged-file-skip", NONE, FALSE, FALSE, FALSE, FALSE },
     { "existing-move-skip", NONE, TRUE, TRUE, FALSE, FALSE },
     { "existing-duplicate", NONE, FALSE, TRUE, FALSE, FALSE },
     { "existing-rename", NONE, FALSE, TRUE, FALSE, TRUE },
@@ -178,6 +181,7 @@ typedef struct {
     char *source, *dest, *capture;
     gboolean symlink;
     mode_t source_mode;
+    struct stat original_source;
     struct timespec source_mtime;
     int writer, writes, attributes, closed, periodic, syncs, range;
     int input_streams, input_closes, output_closes;
@@ -535,18 +539,30 @@ __wrap_openat64 (int dirfd, const char *name, int flags, ...)
     return __wrap_openat (dirfd, name, flags, mode);
 }
 
+static void
+create_raced_destination (const char *path)
+{
+    if (fixture.test->fault == FOLDER_DIRECTORY_RACE) {
+        g_assert_cmpint (g_mkdir (path, 0750), ==, 0);
+        fixture.foreign = g_build_filename (path, "existing", NULL);
+    } else {
+        fixture.foreign = g_strdup (path);
+    }
+    g_assert_true (g_file_set_contents (fixture.foreign, foreign_data, -1, NULL));
+    fixture.injections++;
+}
+
 int __real_mkdirat (int, const char *, mode_t);
 int
 __wrap_mkdirat (int dirfd, const char *name, mode_t mode)
 {
     g_autofree char *path = path_at (dirfd, name);
-    gboolean raced = fixture.running && fixture.test->fault == FOLDER_RACE &&
+    gboolean raced = fixture.running &&
+                     (fixture.test->fault == FOLDER_RACE ||
+                      fixture.test->fault == FOLDER_DIRECTORY_RACE) &&
                      g_strcmp0 (path, fixture.raced_destination) == 0;
-    if (raced && !fixture.injections) {
-        fixture.foreign = g_strdup (path);
-        g_assert_true (g_file_set_contents (path, foreign_data, -1, NULL));
-        fixture.injections++;
-    }
+    if (raced && !fixture.injections)
+        create_raced_destination (path);
     gboolean collided = FALSE;
     if (fixture.running && fixture.test->fault == COLLISION &&
         under (path, fixture.dest_dir) && strstr (path, "/.nemo-recovery-") &&
@@ -743,13 +759,12 @@ gboolean
 __wrap_g_file_make_directory (GFile *file, GCancellable *cancel, GError **error)
 {
     char *path = test_file_path (file);
-    gboolean raced = fixture.running && fixture.test->fault == FOLDER_RACE &&
+    gboolean raced = fixture.running &&
+                     (fixture.test->fault == FOLDER_RACE ||
+                      fixture.test->fault == FOLDER_DIRECTORY_RACE) &&
                      g_strcmp0 (path, fixture.raced_destination) == 0;
-    if (raced && !fixture.injections) {
-        fixture.foreign = g_strdup (path);
-        g_assert_true (g_file_set_contents (path, foreign_data, -1, NULL));
-        fixture.injections++;
-    }
+    if (raced && !fixture.injections)
+        create_raced_destination (path);
     gboolean ok = __real_g_file_make_directory (file, cancel, error);
     if (raced) {
         fixture.raced_mkdir_attempts++;
@@ -1568,7 +1583,7 @@ respond (gpointer unused)
             gtk_dialog_response (l->data,
                                  (named ("conflict-skip") || named ("partial-conflict-copy") ||
                                   named ("existing-skip") || named ("existing-unverified") ||
-                                  (named ("existing-unverified-tree") && fixture.conflicts > 2) ||
+                                  named ("existing-unverified-tree") ||
                                   g_str_has_suffix (fixture.test->name, "-skip")) ?
                                  CONFLICT_RESPONSE_SKIP :
                                  (named ("rename-conflict") || named ("existing-rename")) ?
@@ -1680,6 +1695,7 @@ add_item (const char *source, const char *dest, gboolean symlink)
     struct stat st;
     g_assert_cmpint (lstat (source, &st), ==, 0);
     item->source_mode = st.st_mode & 0777;
+    item->original_source = st;
     item->source_mtime = st.st_mtim;
     item->writer = -1;
     item->parent_fd = -1;
@@ -1706,7 +1722,7 @@ successful_case (void)
             fault == RANGE_ENOSYS || fault == RANGE_EOPNOTSUPP || fault == COLLISION ||
             fault == DEFAULT_PERMS || fault == SYNCFS_EINTR ||
             fault == ATTR_UNSUPPORTED || fault == ATTR_DENIED || fault == OPTIONAL_METADATA ||
-            fault == NO_VERSION) &&
+            fault == NO_VERSION || fault == FOLDER_DIRECTORY_RACE) &&
            !file_over_folder () && !folder_over_file () && !nested_type_conflict () &&
            !named ("conflict-skip") && !named ("partial-conflict-copy");
 }
@@ -1752,11 +1768,12 @@ assert_no_recovery_payloads (const char *root)
 static void
 test_existing_integrity (void)
 {
-    gboolean tree = named ("existing-tree") || named ("existing-directory-skip") ||
+    gboolean tree = named ("existing-tree") || named ("existing-merged-file-skip") ||
                     named ("existing-unverified-tree");
     gboolean links = named ("existing-symlink") || named ("existing-symlink-different") ||
                      named ("existing-link-over-unversioned");
     gboolean size_difference = named ("existing-unverified-size-skip") ||
+                               named ("existing-merged-file-skip") ||
                                g_str_has_suffix (fixture.test->name, "-version-size");
     gboolean fifo = named ("existing-fifo");
     gboolean duplicate = named ("existing-duplicate");
@@ -1870,8 +1887,8 @@ test_existing_integrity (void)
         g_assert_cmpint (fixture.injections, >, 0);
     if (fixture.test->fault == NO_VERSION || fixture.test->fault == EXIST_TARGET_NO_VERSION)
         g_assert_cmpint (fixture.conflicts, ==, 0);
-    else if (named ("existing-unverified-tree"))
-        g_assert_cmpint (fixture.conflicts, ==, 5);
+    else if (named ("existing-unverified-tree") || named ("existing-merged-file-skip"))
+        g_assert_cmpint (fixture.conflicts, ==, 3);
     else if (named ("existing-replace-all"))
         g_assert_cmpint (fixture.conflicts, ==, 1);
     else if (fixture.test->replace || skipped || fifo)
@@ -1999,9 +2016,11 @@ test_copy_integrity (void)
     gboolean empty_folder = named ("empty-folder-copy") || named ("empty-folder-move");
     gboolean new_folder = named ("folder-new-copy") || named ("folder-new-move") ||
                           named ("folder-parent-fsync") || fixture.test->fault == FOLDER_RACE ||
+                          fixture.test->fault == FOLDER_DIRECTORY_RACE ||
                           empty_folder || fixture.test->fault == SCAN_OPEN ||
                           fixture.test->fault == SCAN_READ;
     gboolean folder = new_folder || named ("folder-copy") || named ("folder-move") ||
+                      named ("folder-unverified-copy") || named ("folder-native-merge") ||
                       named ("merge-all") || named ("folder-partial-move") ||
                       nested_type_conflict ();
     gboolean is_link = named ("broken-symlink") || named ("fifo-symlink") ||
@@ -2036,7 +2055,7 @@ test_copy_integrity (void)
         char *name = named ("long-name") ? g_strnfill (240, 'a') : g_strdup_printf ("payload-%u", i);
         char *src = g_build_filename (fixture.source_dir, name, NULL);
         char *dst = g_build_filename (fixture.dest_dir, name, NULL);
-        if (fixture.test->fault == FOLDER_RACE)
+        if (fixture.test->fault == FOLDER_RACE || fixture.test->fault == FOLDER_DIRECTORY_RACE)
             fixture.raced_destination = g_strdup (dst);
         if (folder) {
             g_assert_cmpint (g_mkdir (src, 0700), ==, 0);
@@ -2176,11 +2195,17 @@ test_copy_integrity (void)
         g_assert_cmpuint (fixture.result.skipped_items, ==, 0);
         g_assert_cmpuint (fixture.result.failed_items, ==, 0);
     }
-    if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move") || empty_folder)
+    if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move") ||
+        named ("folder-native-merge") || empty_folder)
         g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
     if (named ("samefs-move") || named ("samefs-verified-move")) {
         g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
         g_assert_cmpuint (fixture.result.completed_items, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
+    }
+    if (named ("folder-native-merge")) {
+        g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_directories, ==, 1);
         g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
     }
     if (named ("verified-copy") || named ("fallback-move") || named ("folder-partial-move") ||
@@ -2274,8 +2299,20 @@ test_copy_integrity (void)
         g_assert_cmpint (fixture.readback_warnings, ==, 1);
     if (named ("skip-all"))
         g_assert_cmpint (fixture.warnings, ==, 1);
-    if (named ("replace-all") || named ("merge-all") || named ("rename-conflict"))
+    if (named ("replace-all") || named ("rename-conflict") || named ("folder-partial-move"))
         g_assert_cmpint (fixture.conflicts, ==, 1);
+    if (named ("folder-copy") || named ("folder-unverified-copy") || named ("folder-move") ||
+        named ("folder-native-merge") || named ("merge-all") || named ("folder-existing-race")) {
+        g_assert_cmpint (fixture.conflicts, ==, 0);
+        g_assert_cmpint (fixture.warnings, ==, 0);
+    }
+    if (fixture.test->fault == FOLDER_DIRECTORY_RACE) {
+        struct stat existing_directory;
+        g_assert_cmpint (fixture.raced_mkdir_attempts, ==, 1);
+        g_assert_cmpint (lstat (fixture.raced_destination, &existing_directory), ==, 0);
+        g_assert_cmpuint (existing_directory.st_mode & 0777, ==, 0750);
+        assert_contents (fixture.foreign, foreign_data);
+    }
     if (fixture.test->fault == COLLISION) {
         g_assert_cmpint (fixture.attempts, >=, 2);
         g_assert_cmpuint (fixture.recovery_collisions, ==, 1);
@@ -2388,7 +2425,7 @@ test_copy_integrity (void)
             else
                 g_assert_false (exists (item->dest));
             if (completed && !named ("copy") && !named ("samefs-move") &&
-                !named ("samefs-verified-move") && !pull_case () &&
+                !named ("samefs-verified-move") && !named ("folder-native-merge") && !pull_case () &&
                 (fixture.test->move || fixture.test->verify)) {
                 g_assert_cmpint (item->writes, >, 0);
                 assert_source_readback (item);
@@ -2403,7 +2440,12 @@ test_copy_integrity (void)
                 g_assert_cmpint (item->closed, >, item->syncs);
                 g_assert_cmpint (item->publish, >, item->closed);
             }
-            if (named ("samefs-move") || named ("samefs-verified-move")) {
+            if (named ("samefs-move") || named ("samefs-verified-move") ||
+                named ("folder-native-merge")) {
+                struct stat installed;
+                g_assert_cmpint (lstat (item->dest, &installed), ==, 0);
+                g_assert_cmpuint (installed.st_dev, ==, item->original_source.st_dev);
+                g_assert_cmpuint (installed.st_ino, ==, item->original_source.st_ino);
                 g_assert_cmpint (item->writes, ==, 0);
                 g_assert_cmpint (item->native_sync, >, 0);
             }

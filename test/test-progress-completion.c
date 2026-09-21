@@ -455,14 +455,22 @@ new_handler (void)
 }
 
 static NemoProgressInfo *
-new_operation (void)
+new_operation_kind (NemoProgressOperation operation)
 {
     NemoProgressInfo *info = nemo_progress_info_new ();
+    NemoProgressResult result = { .operation = operation };
+    nemo_progress_info_set_result (info, &result);
     nemo_progress_info_take_initial_details (info, g_strdup ("Waiting to copy test data"));
     nemo_progress_info_take_completion_details (info, g_strdup ("From: source\nTo: destination"));
     nemo_progress_info_queue (info);
     nemo_progress_info_start (info);
     return info;
+}
+
+static NemoProgressInfo *
+new_operation (void)
+{
+    return new_operation_kind (NEMO_PROGRESS_OPERATION_COPY);
 }
 
 static void
@@ -481,9 +489,12 @@ show_operation (NemoProgressUIHandler *handler, NemoProgressInfo *info)
 {
     OperationWatch *watch = g_hash_table_lookup (handler->priv->operations, info);
     g_assert_nonnull (watch);
-    g_source_remove (watch->timeout_id);
-    watch->timeout_id = 0;
-    g_assert_false (operation_show_timeout (watch));
+    if (watch->timeout_id != 0) {
+        g_source_remove (watch->timeout_id);
+        watch->timeout_id = 0;
+        g_assert_false (operation_show_timeout (watch));
+    }
+    g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
 }
 
 static const char *
@@ -619,7 +630,7 @@ test_verification_preference (void)
 }
 
 static void
-test_quick_hidden (void)
+test_quick_visible (void)
 {
     NemoProgressUIHandler *handler = new_handler ();
     NemoProgressInfo *info = new_operation ();
@@ -629,17 +640,16 @@ test_quick_hidden (void)
     /* queued, started and finished may all be delivered by the same idle. */
     finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
     g_assert_cmpuint (handler->priv->completed_count, ==, 1);
-    g_assert_cmpuint (notifications, ==, 1);
-    g_assert_nonnull (last_notification);
-    g_assert_cmpstr (notification_body, ==, last_summary (handler));
-    g_assert_cmpstr (notification_target, ==, notification_body);
-    g_assert_true (g_str_has_prefix (notification_body, "Copy completed.\n"));
-    g_assert_nonnull (strstr (notification_body, "From: source\nTo: destination"));
-    g_assert_null (strstr (notification_body, "Waiting"));
-    g_assert_null (strstr (notification_body, "Preparing"));
-    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
-    g_assert_false (handler->priv->window_held);
-    g_assert_cmpuint (holds, ==, 0);
+    g_assert_cmpuint (notifications, ==, 0);
+    g_assert_null (last_notification);
+    const char *summary = last_summary (handler);
+    g_assert_true (g_str_has_prefix (summary, "Copy completed.\n"));
+    g_assert_nonnull (strstr (summary, "From: source\nTo: destination"));
+    g_assert_null (strstr (summary, "Waiting"));
+    g_assert_null (strstr (summary, "Preparing"));
+    g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_true (handler->priv->window_held);
+    g_assert_cmpuint (holds, ==, 1);
     assert_empty_manager (handler);
 
     nemo_progress_info_finish (info);
@@ -648,6 +658,74 @@ test_quick_hidden (void)
     g_object_unref (info);
     g_assert_null (weak_info);
     g_object_unref (handler);
+    g_assert_cmpuint (holds, ==, 0);
+    drain ();
+}
+
+static void
+test_hidden_completion (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = new_operation ();
+    drain ();
+    show_operation (handler, info);
+    progress_window_close_clicked (NULL, handler);
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_cmpuint (notifications, ==, 1);
+    g_assert_nonnull (last_notification);
+    g_assert_cmpstr (notification_body, ==, last_summary (handler));
+    g_assert_cmpstr (notification_target, ==, notification_body);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (holds, ==, 0);
+    assert_empty_manager (handler);
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_quick_generic_hidden (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = new_operation_kind (NEMO_PROGRESS_OPERATION_UNKNOWN);
+    nemo_progress_info_finish (info);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_cmpuint (notifications, ==, 1);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (holds, ==, 0);
+    assert_empty_manager (handler);
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_queued_move_visible (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = nemo_progress_info_new ();
+    NemoProgressResult result = { .operation = NEMO_PROGRESS_OPERATION_MOVE };
+    nemo_progress_info_set_result (info, &result);
+    nemo_progress_info_take_initial_details (info, g_strdup ("Waiting to move test data"));
+    nemo_progress_info_pause (info);
+    nemo_progress_info_queue (info);
+    drain ();
+    show_operation (handler, info);
+    g_assert_false (nemo_progress_info_get_is_started (info));
+    g_assert_true (nemo_progress_info_get_is_paused (info));
+    OperationWatch *watch = g_hash_table_lookup (handler->priv->operations, info);
+    g_assert_cmpuint (watch->timeout_id, ==, 0);
+    g_assert_cmpuint (handler->priv->active_infos, ==, 1);
+    g_assert_cmpuint (holds, ==, 2);
+    result.outcome = NEMO_PROGRESS_OUTCOME_CANCELLED;
+    nemo_progress_info_set_result (info, &result);
+    nemo_progress_info_finish (info);
+    drain ();
+    assert_empty_manager (handler);
+    g_object_unref (info);
+    g_object_unref (handler);
+    g_assert_cmpuint (holds, ==, 0);
     drain ();
 }
 
@@ -694,13 +772,19 @@ test_concurrent_close (void)
     GCancellable *cancel = nemo_progress_info_get_cancellable (second);
     g_assert_false (g_cancellable_is_cancelled (cancel));
     g_object_unref (cancel);
+    NemoProgressInfo *third = new_operation ();
+    drain ();
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
     finish_operation (second, NEMO_PROGRESS_OUTCOME_SUCCESS);
     g_assert_cmpuint (notifications, ==, 1);
     g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    finish_operation (third, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_cmpuint (notifications, ==, 2);
     g_assert_cmpuint (holds, ==, 0);
     assert_empty_manager (handler);
     g_object_unref (first);
     g_object_unref (second);
+    g_object_unref (third);
     g_object_unref (handler);
     drain ();
 }
@@ -731,12 +815,13 @@ static void
 test_dispose_pending (void)
 {
     NemoProgressUIHandler *handler = new_handler ();
-    NemoProgressInfo *info = new_operation ();
+    NemoProgressInfo *info = new_operation_kind (NEMO_PROGRESS_OPERATION_UNKNOWN);
     gpointer weak_handler = handler;
     g_object_add_weak_pointer (G_OBJECT (handler), &weak_handler);
     drain ();
     OperationWatch *watch = g_hash_table_lookup (handler->priv->operations, info);
     guint timeout = watch->timeout_id;
+    g_assert_cmpuint (timeout, !=, 0);
     g_assert_cmpuint (holds, ==, 1);
     g_object_run_dispose (G_OBJECT (handler));
     g_object_run_dispose (G_OBJECT (handler));
@@ -794,8 +879,9 @@ test_history_limit (void)
     }
     g_assert_cmpuint (handler->priv->completed_count, ==, COMPLETION_HISTORY_LIMIT);
     g_assert_true (gtk_widget_get_visible (handler->priv->history_notice));
-    g_assert_cmpuint (holds, ==, 0);
+    g_assert_cmpuint (holds, ==, 1);
     progress_window_close_clicked (NULL, handler);
+    g_assert_cmpuint (holds, ==, 0);
     g_assert_cmpuint (handler->priv->completed_count, ==, 0);
     g_assert_false (gtk_widget_get_visible (handler->priv->history_notice));
     g_object_unref (handler);
@@ -974,14 +1060,20 @@ test_fresh_batch (void)
 {
     NemoProgressUIHandler *handler = new_handler ();
     NemoProgressInfo *info = new_operation ();
-    finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    drain ();
     progress_window_close_clicked (NULL, handler);
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_cmpuint (notifications, ==, 1);
     g_object_unref (info);
     info = new_operation ();
     drain ();
-    show_operation (handler, info);
     g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_false (handler->priv->should_show_status_icon);
     finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_cmpuint (notifications, ==, 1);
+    g_assert_cmpuint (handler->priv->completed_count, ==, 2);
     g_object_unref (info);
     g_object_unref (handler);
     drain ();
@@ -1067,6 +1159,8 @@ test_real_backend_lifecycle (void)
     NemoProgressUIHandler *handler = new_handler ();
     if (pending_backend_exit) {
         NemoProgressInfo *info = new_operation ();
+        drain ();
+        progress_window_close_clicked (NULL, handler);
         NemoProgressResult result = { .operation = NEMO_PROGRESS_OPERATION_COPY,
                                       .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS };
         nemo_progress_info_set_result (info, &result);
@@ -1079,13 +1173,14 @@ test_real_backend_lifecycle (void)
         NemoProgressInfo *pending = new_operation ();
         progress_info_queued_cb (pending, handler);
         OperationWatch *watch = g_hash_table_lookup (handler->priv->operations, pending);
-        guint timeout = watch->timeout_id;
+        g_assert_nonnull (watch);
+        g_assert_cmpuint (watch->timeout_id, ==, 0);
         guint summaries = handler->priv->completed_count;
         guint sent = notifications;
         nemo_progress_ui_handler_shutdown (handler);
         nemo_progress_ui_handler_shutdown (handler);
         g_assert_cmpuint (holds, ==, 0);
-        g_assert_null (g_main_context_find_source_by_id (NULL, timeout));
+        g_assert_null (handler->priv->operations);
         GCancellable *cancel = nemo_progress_info_get_cancellable (pending);
         g_assert_false (g_cancellable_is_cancelled (cancel));
         g_object_unref (cancel);
@@ -1165,7 +1260,10 @@ main (int argc, char **argv)
         pending_backend_exit = g_str_equal (argv[1], "--real-pending-exit");
         g_test_add_func ("/completion/real-backend-lifecycle", test_real_backend_lifecycle);
     } else {
-    g_test_add_func ("/completion/quick-hidden", test_quick_hidden);
+    g_test_add_func ("/completion/quick-visible", test_quick_visible);
+    g_test_add_func ("/completion/hidden-completion", test_hidden_completion);
+    g_test_add_func ("/completion/quick-generic-hidden", test_quick_generic_hidden);
+    g_test_add_func ("/completion/queued-move-visible", test_queued_move_visible);
     g_test_add_func ("/completion/visible-close", test_visible_and_close);
     g_test_add_func ("/completion/concurrent-close", test_concurrent_close);
     g_test_add_func ("/completion/mixed-results", test_mixed_results);

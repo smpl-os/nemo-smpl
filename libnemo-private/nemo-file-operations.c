@@ -1183,6 +1183,11 @@ generate_initial_job_details (NemoProgressInfo *info,
     }
 #ifdef NEMO_SMPL
     if (kind == OP_KIND_COPY || kind == OP_KIND_MOVE || kind == OP_KIND_DUPE) {
+        NemoProgressResult initial_result = {
+            .operation = kind == OP_KIND_MOVE ? NEMO_PROGRESS_OPERATION_MOVE :
+                                               NEMO_PROGRESS_OPERATION_COPY
+        };
+        nemo_progress_info_set_result (info, &initial_result);
         if (src_name != NULL && dest_name != NULL) {
             nemo_progress_info_take_completion_details (
                 info, f (_("From: %1$s\nTo: %2$s"), src_name, dest_name));
@@ -4044,7 +4049,8 @@ directory_copy_failed (CopyMoveJob *copy_job, GFile *src, GError *error)
 typedef enum {
 	CREATE_DEST_DIR_RETRY,
 	CREATE_DEST_DIR_FAILED,
-	CREATE_DEST_DIR_SUCCESS
+	CREATE_DEST_DIR_SUCCESS,
+	CREATE_DEST_DIR_MERGE
 } CreateDestDirResult;
 
 static CreateDestDirResult
@@ -4085,6 +4091,24 @@ create_dest_dir (CommonJob *job,
 		if (IS_IO_ERROR (error, CANCELLED)) {
 			g_error_free (error);
 			return CREATE_DEST_DIR_FAILED;
+#ifdef NEMO_SMPL
+		} else if (IS_IO_ERROR (error, EXISTS)) {
+			GError *inspect_error = NULL;
+			GFileInfo *existing = query_copy_source (pinned_destination,
+			                                         job->cancellable, &inspect_error);
+			if (existing != NULL &&
+			    g_file_info_get_file_type (existing) == G_FILE_TYPE_DIRECTORY) {
+				g_object_unref (existing);
+				g_error_free (error);
+				return CREATE_DEST_DIR_MERGE;
+			}
+			g_clear_object (&existing);
+			if (inspect_error != NULL) {
+				g_error_free (error);
+				directory_copy_failed ((CopyMoveJob *) job, src, inspect_error);
+				return CREATE_DEST_DIR_FAILED;
+			}
+#endif
 		} else if (IS_IO_ERROR (error, INVALID_FILENAME) &&
 			   !handled_invalid_filename) {
 			handled_invalid_filename = TRUE;
@@ -4218,6 +4242,7 @@ copy_move_directory (CopyMoveJob *copy_job,
 	}
 #endif
 	if (create_dest) {
+		CreateDestDirResult creation_result;
 #ifdef NEMO_SMPL
 		error = NULL;
 		pinned_destination = nemo_transfer_guard_file (copy_job->transfer_guard, *dest, TRUE, &error);
@@ -4230,7 +4255,8 @@ copy_move_directory (CopyMoveJob *copy_job,
 			return TRUE;
 		}
 #endif
-		switch (create_dest_dir (job, src, dest, same_fs, parent_dest_fs_type)) {
+		creation_result = create_dest_dir (job, src, dest, same_fs, parent_dest_fs_type);
+		switch (creation_result) {
 			case CREATE_DEST_DIR_RETRY:
 #ifdef NEMO_SMPL
 				if (parent_fd >= 0) {
@@ -4253,12 +4279,14 @@ copy_move_directory (CopyMoveJob *copy_job,
 				*skipped_file = TRUE;
 				return TRUE;
 
+			case CREATE_DEST_DIR_MERGE:
+				break;
 			case CREATE_DEST_DIR_SUCCESS:
 			default:
 				break;
 		}
 #ifdef NEMO_SMPL
-		copy_job->undo_has_changes = TRUE;
+		copy_job->undo_has_changes |= creation_result == CREATE_DEST_DIR_SUCCESS;
 		if (parent_fd >= 0) {
 			gboolean synced = sync_copy_fd (parent_fd, job->cancellable, &error);
 			if (close (parent_fd) < 0 && synced) {
@@ -4271,6 +4299,9 @@ copy_move_directory (CopyMoveJob *copy_job,
 			}
 		}
 #endif
+		/* Recheck conflicts so intentional duplicate names remain unique. */
+		if (creation_result == CREATE_DEST_DIR_MERGE)
+			return FALSE;
 
 		if (debuting_files) {
 			g_hash_table_replace (debuting_files, g_object_ref (*dest), GINT_TO_POINTER (TRUE));
@@ -6675,6 +6706,10 @@ copy_move_file (CopyMoveJob *copy_job,
 		if (!copy_conflict_is_merge (copy_job, src, dest, &is_a_merge, &retained_regular)) {
 			goto out;
 		}
+		if (is_a_merge) {
+			overwrite = TRUE;
+			goto retry;
+		}
 #else
 		if (is_dir (dest, job->cancellable) && is_dir (src, job->cancellable)) {
 			is_a_merge = TRUE;
@@ -6826,9 +6861,11 @@ copy_move_file (CopyMoveJob *copy_job,
 					  source_info, transfer_info,
 					  debuting_files, skipped_file,
 					  readonly_source_fs)) {
-			/* destination changed, since it was an invalid file name */
+			/* Retry a corrected name or a directory created concurrently. */
+#ifndef NEMO_SMPL
 			g_assert (*dest_fs_type != NULL);
-			handled_invalid_filename = TRUE;
+#endif
+			handled_invalid_filename = *dest_fs_type != NULL;
 			goto retry;
 		}
 
@@ -7453,6 +7490,10 @@ move_file_prepare (CopyMoveJob *move_job,
 #ifdef NEMO_SMPL
 		if (!copy_conflict_is_merge (move_job, src, dest, &is_merge, NULL)) {
 			goto out;
+		}
+		if (is_merge && !job->auto_rename_all && !auto_rename) {
+			overwrite = TRUE;
+			goto retry;
 		}
 #else
 		if (is_dir (dest, job->cancellable) && is_dir (src, job->cancellable)) {

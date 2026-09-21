@@ -7310,6 +7310,9 @@ action_move_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 		g_free (dest_location);
 		return;
 	}
+#ifdef NEMO_SMPL
+	g_object_ref (view);
+#endif
 
 	count = g_list_length (selection);
 	dest_file = g_file_new_for_uri (dest_location);
@@ -7350,19 +7353,32 @@ action_move_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 	gtk_widget_show (move_verify_check);
 #endif
 
+#ifdef NEMO_SMPL
+	g_object_ref (dialog);
+#endif
 	response = gtk_dialog_run (GTK_DIALOG (dialog));
 #ifndef NEMO_SMPL
 	move_verify_checked = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (move_verify_check));
 #endif
 	gtk_widget_destroy (dialog);
+#ifdef NEMO_SMPL
+	g_object_unref (dialog);
+#endif
 
 	if (response == GTK_RESPONSE_OK) {
-#ifndef NEMO_SMPL
+#ifdef NEMO_SMPL
+		if (!view->details->selection_disposed)
+			move_copy_files_to_location (view, selection, GDK_ACTION_MOVE,
+			                             dest_location, NULL);
+#else
 		nemo_file_operations_set_verify_copies (move_verify_checked);
-#endif
 		move_copy_selection_to_location (view, GDK_ACTION_MOVE, dest_location);
+#endif
 	}
 
+#ifdef NEMO_SMPL
+	g_object_unref (view);
+#endif
 	g_free (primary);
 	g_free (dest_basename);
 	g_object_unref (dest_file);
