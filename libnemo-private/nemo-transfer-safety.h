@@ -16,6 +16,7 @@ NemoTransferGuard *nemo_transfer_guard_ref (NemoTransferGuard *guard);
 void nemo_transfer_guard_unref (NemoTransferGuard *guard);
 gboolean nemo_transfer_guard_check (NemoTransferGuard *guard, GError **error);
 gboolean nemo_transfer_guard_release (NemoTransferGuard *guard, GError **error);
+gboolean nemo_transfer_guard_can_copy_fallback (NemoTransferGuard *guard);
 GFile *nemo_transfer_guard_file (NemoTransferGuard *guard, GFile *file,
                                gboolean destination, GError **error);
 GFile *nemo_transfer_guard_directory (NemoTransferGuard *guard, GFile *directory,

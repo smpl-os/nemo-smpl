@@ -5927,6 +5927,9 @@ copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
 		if (*published) {
 			goto out;
 		}
+		if (!nemo_transfer_guard_can_copy_fallback (copy_job->transfer_guard)) {
+			goto out;
+		}
 		if (!IS_IO_ERROR (*error, NOT_SUPPORTED) &&
 		    !IS_IO_ERROR (*error, WOULD_RECURSE) &&
 		    !IS_IO_ERROR (*error, WOULD_MERGE) &&
@@ -7465,7 +7468,11 @@ move_file_prepare (CopyMoveJob *move_job,
 
 	else if (IS_IO_ERROR (error, WOULD_RECURSE) ||
 		 IS_IO_ERROR (error, WOULD_MERGE) ||
-		 IS_IO_ERROR (error, NOT_SUPPORTED) ||
+		 (IS_IO_ERROR (error, NOT_SUPPORTED)
+#ifdef NEMO_SMPL
+		  && nemo_transfer_guard_can_copy_fallback (move_job->transfer_guard)
+#endif
+		 ) ||
 		 (overwrite && IS_IO_ERROR (error, IS_DIRECTORY))) {
 		g_error_free (error);
 
