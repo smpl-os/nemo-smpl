@@ -1,5 +1,7 @@
 #!/usr/bin/make -f
 
+include /usr/share/dpkg/architecture.mk
+
 # Force UTF8 to workaround build error
 export LC_ALL=C.UTF-8
 
@@ -22,8 +24,11 @@ override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_EXTRA_FLAGS)
 
 override_dh_auto_test:
-	# Disabled
-	:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	python3 test/run-release-regressions.py obj-$(DEB_HOST_GNU_TYPE)
+else
+	@echo "Skipping safety regressions: explicit DEB_BUILD_OPTIONS=nocheck"
+endif
 
 override_dh_strip:
 	dh_strip --dbg-package=nemo-dbg

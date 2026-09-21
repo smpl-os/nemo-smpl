@@ -36,10 +36,17 @@ jobs:
             gtk-doc-tools cinnamon-l10n libgtk-layer-shell-dev \
             libpango1.0-dev libatk1.0-dev libgail-3-dev \
             libxext-dev libxrender-dev libwayland-dev \
-            python3 python3-gi x11proto-dev
+            python3 python3-gi x11proto-dev \
+            dbus-daemon xvfb xauth
 
       - name: Build Debian package
         run: |
+          for option in ${DEB_BUILD_OPTIONS:-} ${DEB_BUILD_PROFILES:-}; do
+            if [ "$option" = nocheck ]; then
+              echo "Release builds must run the copy/move safety regressions." >&2
+              exit 1
+            fi
+          done
           VERSION=$(grep -Po "version\s*:\s*'\K[^']+" meson.build | head -n1)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 

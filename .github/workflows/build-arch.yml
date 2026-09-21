@@ -61,7 +61,8 @@ jobs:
                 base-devel git meson ninja pkgconf intltool \
                 gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop \
                 libexif exempi gstreamer gst-plugins-base-libs \
-                pango gobject-introspection libgsf python zstd
+                pango gobject-introspection libgsf python zstd \
+                dbus xorg-server-xvfb xorg-xauth
 
               meson setup build \
                 --prefix=/usr \
@@ -69,6 +70,7 @@ jobs:
                 -Dtracker=false
 
               ninja -C build
+              python3 test/run-release-regressions.py build
 
               rm -rf stage
               DESTDIR="$PWD/stage" ninja -C build install
