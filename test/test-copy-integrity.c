@@ -203,6 +203,7 @@ static struct {
     int sequence, injections, conflicts, warnings, cleanup_warnings, attempts, ancestor_syncs;
     int power_warnings, mismatch_warnings, readback_warnings, cleanup_logs;
     int raced_mkdir_attempts, source_move_attempts;
+    guint source_eof_reads, readback_refusals, recovery_collisions;
 } fixture;
 
 static const char payload[] = "Original source bytes: SHA-256 must match before deletion.\n";
@@ -320,8 +321,12 @@ __wrap_g_file_get_path (GFile *file)
 {
     char *path = __real_g_file_get_path (file);
     g_autofree char *actual = test_file_path (file);
-    if (fixture.running && (pull_case () || fixture.test->fault == SOURCE_EOF) &&
-        source_item (actual))
+    Item *item = fixture.running ? source_item (actual) : NULL;
+    gboolean anchored = path && g_str_has_prefix (path, "/proc/self/fd/");
+    /* Keep move preflight native. Force the opaque adapter only after binding
+     * the source, and force its source-readback failure only after the pull. */
+    if (item && ((pull_case () && (anchored || item->backend_copy > 0)) ||
+                 (fixture.test->fault == SOURCE_EOF && !fixture.test->move)))
         g_clear_pointer (&path, g_free);
     return path;
 }
@@ -524,17 +529,25 @@ __wrap_mkdirat (int dirfd, const char *name, mode_t mode)
         g_assert_true (g_file_set_contents (path, foreign_data, -1, NULL));
         fixture.injections++;
     }
+    gboolean collided = FALSE;
     if (fixture.running && fixture.test->fault == COLLISION &&
-        under (path, fixture.dest_dir) && g_str_has_prefix (name, ".nemo-recovery-")) {
+        under (path, fixture.dest_dir) && strstr (path, "/.nemo-recovery-") &&
+        g_str_has_prefix (name, "transaction-")) {
         fixture.attempts++;
         if (!fixture.foreign) {
             g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
             fixture.foreign = g_build_filename (path, "foreign-child", NULL);
             g_assert_true (g_file_set_contents (fixture.foreign, foreign_data, -1, NULL));
             fixture.injections++;
+            collided = TRUE;
         }
     }
     int result = __real_mkdirat (dirfd, name, mode);
+    if (collided) {
+        g_assert_cmpint (result, ==, -1);
+        g_assert_cmpint (errno, ==, EEXIST);
+        fixture.recovery_collisions++;
+    }
     if (raced) {
         fixture.raced_mkdir_attempts++;
         g_assert_cmpint (result, ==, -1);
@@ -752,6 +765,8 @@ __wrap_g_file_read (GFile *file, GCancellable *cancel, GError **error)
             g_object_add_weak_pointer (G_OBJECT (stream), (gpointer *) &fixture.pull_input);
             return stream;
         }
+        if (fixture.test->fault == READBACK && item->backend_copy > 0)
+            fixture.readback_refusals++;
         inject_io (error, G_IO_ERROR_NOT_SUPPORTED);
         return NULL;
     }
@@ -774,6 +789,7 @@ __wrap_g_input_stream_read (GInputStream *stream, void *buffer, gsize count,
         if (item) {
             if (item->closed > 0)
                 item->checksum = ++fixture.sequence;
+            fixture.source_eof_reads++;
             fixture.injections++;
             return 0;
         }
@@ -1605,6 +1621,24 @@ assert_staging (const char *root)
 }
 
 static void
+assert_no_recovery_payloads (const char *root)
+{
+    GDir *dir = g_dir_open (root, 0, NULL);
+    g_assert_nonnull (dir);
+    const char *name;
+    while ((name = g_dir_read_name (dir))) {
+        g_assert_cmpstr (name, !=, "payload");
+        g_assert_cmpstr (name, !=, "captured-source");
+        g_autofree char *path = g_build_filename (root, name, NULL);
+        struct stat st;
+        g_assert_cmpint (lstat (path, &st), ==, 0);
+        if (S_ISDIR (st.st_mode))
+            assert_no_recovery_payloads (path);
+    }
+    g_dir_close (dir);
+}
+
+static void
 test_existing_integrity (void)
 {
     gboolean tree = named ("existing-tree") || named ("existing-directory-skip") ||
@@ -1814,8 +1848,7 @@ test_existing_integrity (void)
                 g_assert_true (S_ISDIR (st.st_mode));
                 g_assert_cmpuint (st.st_mode & 0700, ==, 0700);
                 g_assert_cmpuint (st.st_mode & 0022, ==, 0);
-                g_autofree char *payload_path = g_build_filename (path, "payload", NULL);
-                g_assert_false (exists (payload_path));
+                assert_no_recovery_payloads (path);
                 continue;
             }
             assert_contents (path, fixture.contents);
@@ -2091,6 +2124,15 @@ test_copy_integrity (void)
     g_free (completion);
     if (fixture.test->fault != NONE)
         g_assert_cmpint (fixture.injections, >, 0);
+    if (fixture.test->fault == SOURCE_EOF) {
+        g_assert_cmpuint (fixture.source_eof_reads, >, 0);
+        Item *item = g_ptr_array_index (fixture.items, 0);
+        g_assert_cmpuint (item->input_streams, >, 0);
+        g_assert_cmpuint (item->publish, ==, 0);
+        g_assert_cmpuint (item->deleted, ==, 0);
+    }
+    if (pull_case () && fixture.test->fault == READBACK)
+        g_assert_cmpuint (fixture.readback_refusals, >, 0);
     if (fixture.test->fault == DIR_SYNC) {
         Item *item = g_ptr_array_index (fixture.items, 0);
         g_assert_cmpint (item->publish, >, 0);
@@ -2124,6 +2166,7 @@ test_copy_integrity (void)
         g_assert_cmpint (fixture.conflicts, ==, 1);
     if (fixture.test->fault == COLLISION) {
         g_assert_cmpint (fixture.attempts, >=, 2);
+        g_assert_cmpuint (fixture.recovery_collisions, ==, 1);
         assert_contents (fixture.foreign, foreign_data);
     }
     if (fixture.test->fault == FOLDER_RACE) {

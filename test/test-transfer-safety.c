@@ -10,6 +10,7 @@
 #include <linux/fs.h>
 #include <linux/magic.h>
 #include <stdarg.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
@@ -20,6 +21,7 @@
 #include "libnemo-private/nemo-file-undo-manager.h"
 #include "libnemo-private/nemo-global-preferences.h"
 #include "libnemo-private/nemo-progress-info-manager.h"
+#include "libnemo-private/nemo-transfer-safety.h"
 
 typedef enum {
     FAULT_NONE, BACKEND_NFS, BACKEND_FUSE, BACKEND_TMPFS, BACKEND_UNKNOWN,
@@ -32,7 +34,12 @@ typedef enum {
     ROOT_SWAP, ANCESTOR_SWAP, SOURCE_PARENT_SWAP, MOUNT_SWAP,
     UNDO_TARGET_RACE, UNDO_RESTORE_RACE, UNDO_FSYNC, UNDO_POSTCAPTURE_FSYNC,
     CAPTURE_RESULT_EIO, PUBLISH_RESULT_EIO, PUBLISH_RESULT_EINTR, FINAL_ANCHOR_CLOSE,
-    UNDO_CANCEL_PREFLIGHT, UNDO_CANCEL_CAPTURE, RECOVERY_READABLE, RECOVERY_CLOSE, LINK_SYNCFS
+    UNDO_CANCEL_PREFLIGHT, UNDO_CANCEL_CAPTURE, RECOVERY_READABLE, RECOVERY_CLOSE, LINK_SYNCFS,
+    LARGE_WRITE_SYNC, RECOVERY_UNKNOWN, EXCHANGE_EINVAL, EXCHANGE_EOPNOTSUPP,
+    BACKEND_EXCHANGE_EINVAL, BACKEND_EXCHANGE_EOPNOTSUPP, BACKEND_EXCHANGE_ENOSYS,
+    RECOVERY_RESERVED, RECOVERY_GROUP_WRITABLE, RECOVERY_OTHER_WRITABLE,
+    MARKER_INODE, MARKER_METADATA, MARKER_CONTENT,
+    RECORD_INODE, RECORD_METADATA, RECORD_CONTENT, RECOVERY_FOREIGN_PAYLOAD, RECOVERY_FOREIGN_CHILD
 } Fault;
 
 typedef enum { COPY, COPY_FILE, DUPLICATE, MOVE } Operation;
@@ -62,6 +69,7 @@ static const Scenario scenarios[] = {
     { "remote-destination", REMOTE_DEST, COPY },
     { "remote-source-move", REMOTE_SOURCE, MOVE },
     { "remote-source-copy", REMOTE_SOURCE, COPY },
+    { "trash-source-copy", REMOTE_SOURCE, COPY },
     { "removal-inflight-copy", REMOVAL_INFLIGHT, COPY },
     { "removal-inflight-move", REMOVAL_INFLIGHT, MOVE },
     { "existing-match-fsync", MATCH_FSYNC, COPY, FALSE, TRUE },
@@ -70,6 +78,17 @@ static const Scenario scenarios[] = {
     { "publish-new-symlink-race", NEW_SYMLINK_RACE, COPY, FALSE, FALSE, FALSE, TRUE },
     { "publish-exchange-race", EXCHANGE_RACE, COPY, FALSE, TRUE },
     { "exchange-unsupported", EXCHANGE_UNSUPPORTED, COPY, FALSE, TRUE },
+    { "exchange-einval", EXCHANGE_EINVAL, COPY, FALSE, TRUE },
+    { "exchange-eopnotsupp", EXCHANGE_EOPNOTSUPP, COPY, FALSE, TRUE },
+    { "backend-exchange-einval-copy", BACKEND_EXCHANGE_EINVAL, COPY, FALSE, TRUE },
+    { "backend-exchange-eopnotsupp-copy", BACKEND_EXCHANGE_EOPNOTSUPP, COPY, FALSE, TRUE },
+    { "backend-exchange-enosys-copy", BACKEND_EXCHANGE_ENOSYS, COPY, FALSE, TRUE },
+    { "backend-exchange-einval-native", BACKEND_EXCHANGE_EINVAL, MOVE, FALSE, TRUE },
+    { "backend-exchange-eopnotsupp-native", BACKEND_EXCHANGE_EOPNOTSUPP, MOVE, FALSE, TRUE },
+    { "backend-exchange-enosys-native", BACKEND_EXCHANGE_ENOSYS, MOVE, FALSE, TRUE },
+    { "backend-exchange-einval-crossfs", BACKEND_EXCHANGE_EINVAL, MOVE, TRUE, TRUE },
+    { "backend-exchange-eopnotsupp-crossfs", BACKEND_EXCHANGE_EOPNOTSUPP, MOVE, TRUE, TRUE },
+    { "backend-exchange-enosys-crossfs", BACKEND_EXCHANGE_ENOSYS, MOVE, TRUE, TRUE },
     { "publish-eintr", RENAME_EINTR, COPY },
     { "publish-eio", RENAME_EIO, COPY },
     { "copy-publish-fsync", PUBLISH_FSYNC, COPY },
@@ -118,6 +137,26 @@ static const Scenario scenarios[] = {
     { "recovery-finalization", FAULT_NONE, COPY, FALSE, TRUE },
     { "recovery-entry-details", FAULT_NONE, COPY, FALSE, TRUE },
     { "history-releases-anchors", FAULT_NONE, COPY, FALSE, TRUE },
+    { "large-copy-low-fd", FAULT_NONE, COPY, FALSE, FALSE, TRUE },
+    { "large-move-low-fd", FAULT_NONE, MOVE, TRUE, FALSE, TRUE },
+    { "large-move-low-fd-failure", LARGE_WRITE_SYNC, MOVE, TRUE, FALSE, TRUE },
+    { "bulk-copy-recovery-bounded", FAULT_NONE, COPY, FALSE, FALSE, TRUE },
+    { "bulk-copy-recovery-preserved", RECOVERY_UNKNOWN, COPY, FALSE, TRUE, TRUE },
+    { "namespace-copy", FAULT_NONE, COPY },
+    { "namespace-native-move", FAULT_NONE, MOVE },
+    { "namespace-copied-move", FAULT_NONE, MOVE, TRUE },
+    { "recovery-undo-check-no-mutation", FAULT_NONE, COPY },
+    { "recovery-reserved-container", RECOVERY_RESERVED, COPY },
+    { "recovery-group-writable", RECOVERY_GROUP_WRITABLE, COPY },
+    { "recovery-other-writable", RECOVERY_OTHER_WRITABLE, COPY },
+    { "recovery-marker-inode", MARKER_INODE, COPY },
+    { "recovery-marker-metadata", MARKER_METADATA, COPY },
+    { "recovery-marker-content", MARKER_CONTENT, COPY },
+    { "recovery-record-inode", RECORD_INODE, COPY },
+    { "recovery-record-metadata", RECORD_METADATA, COPY },
+    { "recovery-record-content", RECORD_CONTENT, COPY },
+    { "recovery-foreign-payload", RECOVERY_FOREIGN_PAYLOAD, COPY },
+    { "recovery-foreign-child", RECOVERY_FOREIGN_CHILD, COPY },
     { "undo-replacement", FAULT_NONE, COPY, FALSE, TRUE },
     { "undo-newer-target", FAULT_NONE, COPY },
     { "undo-newer-source", FAULT_NONE, MOVE },
@@ -152,6 +191,11 @@ secondary_fs_root (void)
 }
 
 static const Scenario *scenario;
+typedef struct {
+    char *source, *destination, *destination_parent, *contents;
+    guint published_at, synced_at, deleted_at;
+} LargeFile;
+
 static struct {
     char *root, *source_dir, *dest_dir, *source, *dest, *saved, *capture;
     char *extra_source, *extra_dest, *undo_capture;
@@ -166,6 +210,7 @@ static struct {
     guint record_flushes;
     guint undo_captures, manager_events;
     guint capture_calls, publication_calls;
+    guint exchange_attempts, exchange_probes, stage_creations;
     GHashTable *writers;
     GHashTable *anchors;
     GHashTable *undo_targets;
@@ -176,17 +221,74 @@ static struct {
     int recovery_fd;
     gboolean recovery_closed;
     struct stat source_identity;
+    struct stat destination_identity;
     struct stat merged_root_identity, merged_nested_identity;
     NemoProgressInfo *progress;
     NemoProgressInfo *undo_progress;
     NemoProgressResult result;
     NemoProgressInfoManager *manager;
+    GPtrArray *large_files;
+    GHashTable *large_destinations, *large_sources, *large_captures;
+    guint large_directories, large_publications;
+    char *unknown_recovery_entry;
+    GString *dialog_text;
+    NemoTransferUndo *preflight_record;
+    char *protected_path, *retained_record;
+    GString *protected_snapshot;
+    char *trash_root, *trash_original;
+    GString *trash_snapshot;
+    guint trash_uris, trash_metadata, trash_records;
 } f;
 
 static gboolean
 named (const char *name)
 {
     return strcmp (scenario->name, name) == 0;
+}
+
+static gboolean
+large_case (void)
+{
+    return g_str_has_prefix (scenario->name, "large-") ||
+           g_str_has_prefix (scenario->name, "bulk-");
+}
+
+static int
+exchange_backend_errno (void)
+{
+    switch (scenario->fault) {
+    case BACKEND_EXCHANGE_EINVAL: return EINVAL;
+    case BACKEND_EXCHANGE_EOPNOTSUPP: return EOPNOTSUPP;
+    case BACKEND_EXCHANGE_ENOSYS: return ENOSYS;
+    default: return 0;
+    }
+}
+
+static gboolean
+changed_marker (void)
+{
+    return scenario->fault == MARKER_INODE || scenario->fault == MARKER_METADATA ||
+           scenario->fault == MARKER_CONTENT;
+}
+
+static gboolean
+changed_record (void)
+{
+    return scenario->fault == RECORD_INODE || scenario->fault == RECORD_METADATA ||
+           scenario->fault == RECORD_CONTENT;
+}
+
+static gboolean
+retained_recovery_entry (void)
+{
+    return changed_record () || scenario->fault == RECOVERY_FOREIGN_PAYLOAD ||
+           scenario->fault == RECOVERY_FOREIGN_CHILD;
+}
+
+static gboolean
+low_fd_case (void)
+{
+    return g_str_has_prefix (scenario->name, "large-");
 }
 
 static gboolean
@@ -278,6 +380,270 @@ write_contents (const char *path, const char *contents)
     g_assert_true (g_file_set_contents (path, contents, -1, NULL));
 }
 
+static void
+large_file_free (gpointer data)
+{
+    LargeFile *file = data;
+    g_free (file->source);
+    g_free (file->destination);
+    g_free (file->destination_parent);
+    g_free (file->contents);
+    g_free (file);
+}
+
+static void
+add_large_file (const char *relative)
+{
+    LargeFile *file = g_new0 (LargeFile, 1);
+    file->source = g_build_filename (f.source, relative, NULL);
+    file->destination = g_build_filename (f.dest, relative, NULL);
+    file->destination_parent = g_path_get_dirname (file->destination);
+    file->contents = g_strdup_printf ("Large transfer fixture: %s\n", relative);
+    write_contents (file->source, file->contents);
+    g_hash_table_insert (f.large_destinations, g_strdup (file->destination), file);
+    g_hash_table_insert (f.large_sources, g_strdup (file->source), file);
+    g_ptr_array_add (f.large_files, file);
+}
+
+static void
+create_large_fixture (void)
+{
+    f.large_files = g_ptr_array_new_with_free_func (large_file_free);
+    f.large_destinations = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    f.large_sources = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    f.large_captures = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    g_assert_cmpint (g_mkdir (f.source, 0700), ==, 0);
+    f.large_directories = 1;
+    if (low_fd_case ()) {
+        for (guint group = 0; group < 16; group++) {
+            g_autofree char *group_name = g_strdup_printf ("group-%02u", group);
+            g_autofree char *group_path = g_build_filename (f.source, group_name, NULL);
+            g_assert_cmpint (g_mkdir (group_path, 0700), ==, 0);
+            f.large_directories++;
+            for (guint leaf = 0; leaf < 36; leaf++) {
+                g_autofree char *leaf_name = g_strdup_printf ("leaf-%02u", leaf);
+                g_autofree char *leaf_path = g_build_filename (group_path, leaf_name, NULL);
+                g_assert_cmpint (g_mkdir (leaf_path, 0700), ==, 0);
+                f.large_directories++;
+                g_autofree char *relative = g_build_filename (group_name, leaf_name, "data", NULL);
+                add_large_file (relative);
+            }
+        }
+        g_assert_cmpuint (f.large_directories, ==, 593);
+        g_assert_cmpuint (f.large_files->len, ==, 576);
+    } else {
+        for (guint i = 0; i < 512; i++) {
+            g_autofree char *relative = g_strdup_printf ("file-%04u", i);
+            add_large_file (relative);
+        }
+    }
+    if (scenario->replace) {
+        g_assert_cmpint (g_mkdir (f.dest, 0700), ==, 0);
+        LargeFile *first = g_ptr_array_index (f.large_files, 0);
+        write_contents (first->destination, previous);
+    }
+}
+
+static void
+check_large_contents (void)
+{
+    for (guint i = 0; i < f.large_files->len; i++) {
+        LargeFile *file = g_ptr_array_index (f.large_files, i);
+        gboolean source_exists = exists (file->source);
+        gboolean destination_exists = exists (file->destination);
+        g_assert_true (source_exists || destination_exists);
+        if (source_exists)
+            assert_contents (file->source, file->contents);
+        if (destination_exists)
+            assert_contents (file->destination, file->contents);
+        if (scenario->operation == COPY || scenario->fault == LARGE_WRITE_SYNC)
+            g_assert_true (source_exists);
+        if (f.success) {
+            g_assert_true (destination_exists);
+            if (scenario->operation == MOVE) {
+                g_assert_false (source_exists);
+                g_assert_cmpuint (file->synced_at, >, file->published_at);
+                g_assert_cmpuint (file->deleted_at, >, file->published_at);
+            }
+        }
+        if (scenario->fault == LARGE_WRITE_SYNC)
+            g_assert_false (destination_exists);
+    }
+    g_test_message ("%u/%u large-fixture payloads published; %u source directories",
+                    f.large_publications, f.large_files->len, f.large_directories);
+}
+
+static guint
+count_root_recovery_directories (const char *root)
+{
+    GDir *directory = g_dir_open (root, 0, NULL);
+    g_assert_nonnull (directory);
+    guint count = 0;
+    const char *name;
+    while ((name = g_dir_read_name (directory))) {
+        if (g_str_has_prefix (name, ".nemo-recovery-")) {
+            g_autofree char *path = g_build_filename (root, name, NULL);
+            struct stat st;
+            g_assert_cmpint (lstat (path, &st), ==, 0);
+            g_assert_true (S_ISDIR (st.st_mode));
+            count++;
+        }
+    }
+    g_dir_close (directory);
+    return count;
+}
+
+static void
+snapshot_namespace (const char *path, GString *snapshot)
+{
+    struct stat st;
+    g_assert_cmpint (lstat (path, &st), ==, 0);
+    g_string_append_printf (snapshot, "%s:%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT
+                            ":%o:%u:%u:%" G_GINT64_FORMAT ":%" G_GUINT64_FORMAT
+                            ":%" G_GINT64_FORMAT ".%ld:%" G_GINT64_FORMAT ".%ld\n",
+                            path, (guint64) st.st_dev, (guint64) st.st_ino, st.st_mode,
+                            st.st_uid, st.st_gid, (gint64) st.st_size, (guint64) st.st_nlink,
+                            (gint64) st.st_mtim.tv_sec, st.st_mtim.tv_nsec,
+                            (gint64) st.st_ctim.tv_sec, st.st_ctim.tv_nsec);
+    if (S_ISDIR (st.st_mode)) {
+        GDir *directory = g_dir_open (path, 0, NULL);
+        g_assert_nonnull (directory);
+        GList *names = NULL;
+        const char *name;
+        while ((name = g_dir_read_name (directory)))
+            names = g_list_prepend (names, g_strdup (name));
+        g_dir_close (directory);
+        names = g_list_sort (names, (GCompareFunc) g_strcmp0);
+        for (GList *l = names; l; l = l->next) {
+            g_autofree char *child = g_build_filename (path, l->data, NULL);
+            snapshot_namespace (child, snapshot);
+        }
+        g_list_free_full (names, g_free);
+    } else if (S_ISREG (st.st_mode)) {
+        g_autofree char *contents = NULL;
+        gsize length;
+        g_assert_true (g_file_get_contents (path, &contents, &length, NULL));
+        g_autofree char *checksum = g_compute_checksum_for_data (
+            G_CHECKSUM_SHA256, (const guchar *) contents, length);
+        g_string_append_printf (snapshot, "%s\n", checksum);
+    } else {
+        g_assert_true (S_ISLNK (st.st_mode));
+        g_autofree char *target = g_file_read_link (path, NULL);
+        g_assert_nonnull (target);
+        g_string_append_printf (snapshot, "%s\n", target);
+    }
+}
+
+static char *
+recovery_container_path (void)
+{
+    g_autofree char *name = g_strdup_printf (".nemo-recovery-%" G_GUINT64_FORMAT,
+                                           (guint64) geteuid ());
+    return g_build_filename (f.dest_dir, name, NULL);
+}
+
+static void
+protect_entry (const char *path)
+{
+    g_assert_null (f.protected_path);
+    f.protected_path = g_strdup (path);
+    f.protected_snapshot = g_string_new (NULL);
+    snapshot_namespace (path, f.protected_snapshot);
+}
+
+static void
+assert_protected_entry (void)
+{
+    g_assert_nonnull (f.protected_path);
+    GString *current = g_string_new (NULL);
+    snapshot_namespace (f.protected_path, current);
+    g_assert_cmpstr (current->str, ==, f.protected_snapshot->str);
+    g_string_free (current, TRUE);
+    if (f.retained_record)
+        g_assert_true (exists (f.retained_record));
+}
+
+static void
+change_recovery_entry (int recovery_fd)
+{
+    g_autofree char *directory = fd_path (recovery_fd);
+    g_assert_nonnull (directory);
+    f.retained_record = g_build_filename (directory, "record-prepared", NULL);
+    g_assert_true (exists (f.retained_record));
+    g_autofree char *path = NULL;
+    if (changed_marker ()) {
+        g_autofree char *container = recovery_container_path ();
+        path = g_build_filename (container, "owner", NULL);
+    } else if (changed_record ())
+        path = g_strdup (f.retained_record);
+    else
+        path = g_build_filename (directory, scenario->fault == RECOVERY_FOREIGN_PAYLOAD ?
+                                            "payload" : "foreign-child", NULL);
+    if (changed_marker () || changed_record ()) {
+        struct stat before, after;
+        g_assert_cmpint (lstat (path, &before), ==, 0);
+        g_assert_true (S_ISREG (before.st_mode));
+        g_autofree char *contents = NULL;
+        gsize length;
+        g_assert_true (g_file_get_contents (path, &contents, &length, NULL));
+        if (scenario->fault == MARKER_INODE || scenario->fault == RECORD_INODE) {
+            /* Keep the namespace otherwise unchanged, so retention cannot be
+             * attributed to an extra unknown sibling instead of the new inode. */
+            write_contents (f.saved, contents);
+            g_assert_cmpint (rename (f.saved, path), ==, 0);
+        } else if (scenario->fault == MARKER_METADATA || scenario->fault == RECORD_METADATA) {
+            g_assert_cmpint (chmod (path, (before.st_mode & 0777) ^ S_IRGRP), ==, 0);
+        } else {
+            g_assert_cmpuint (length, >, 2);
+            char byte = contents[length - 2] == 'a' ? 'b' : 'a';
+            int fd = open (path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+            g_assert_cmpint (fd, >=, 0);
+            g_assert_cmpint (pwrite (fd, &byte, 1, length - 2), ==, 1);
+            g_assert_cmpint (fsync (fd), ==, 0);
+            g_assert_cmpint (close (fd), ==, 0);
+        }
+        g_assert_cmpint (lstat (path, &after), ==, 0);
+        if (scenario->fault == MARKER_INODE || scenario->fault == RECORD_INODE) {
+            g_assert_cmpuint (before.st_ino, !=, after.st_ino);
+            assert_contents (path, contents);
+        } else {
+            g_assert_cmpuint (before.st_ino, ==, after.st_ino);
+            if (scenario->fault == MARKER_METADATA || scenario->fault == RECORD_METADATA) {
+                g_assert_cmpuint (before.st_mode, !=, after.st_mode);
+                assert_contents (path, contents);
+            } else {
+                g_autofree char *altered = NULL;
+                g_assert_true (g_file_get_contents (path, &altered, NULL, NULL));
+                g_assert_cmpstr (altered, !=, contents);
+            }
+        }
+    } else if (scenario->fault == RECOVERY_FOREIGN_PAYLOAD) {
+        g_assert_false (exists (path));
+        write_contents (path, foreign);
+    } else {
+        g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+        g_autofree char *child = g_build_filename (path, "untouched", NULL);
+        write_contents (child, foreign);
+    }
+    protect_entry (path);
+    f.injections++;
+}
+
+static void
+lower_fd_limit (struct rlimit *saved)
+{
+    g_assert_cmpint (getrlimit (RLIMIT_NOFILE, saved), ==, 0);
+    g_assert_cmpuint (saved->rlim_cur, >=, 64);
+    struct rlimit limited = *saved;
+    limited.rlim_cur = 64;
+    g_assert_cmpint (setrlimit (RLIMIT_NOFILE, &limited), ==, 0);
+    struct rlimit current;
+    g_assert_cmpint (getrlimit (RLIMIT_NOFILE, &current), ==, 0);
+    g_assert_cmpuint (current.rlim_cur, ==, 64);
+    g_test_message ("RLIMIT_NOFILE=64 for %u directories and %u files",
+                    f.large_directories, f.large_files->len);
+}
+
 int __real_fstatfs (int, struct statfs *);
 int
 __wrap_fstatfs (int fd, struct statfs *st)
@@ -341,6 +707,28 @@ __wrap_statx (int fd, const char *path, int flags, unsigned int mask, struct sta
 }
 
 char *__real_g_file_get_path (GFile *);
+char *__real_g_file_get_uri (GFile *);
+char *
+__wrap_g_file_get_uri (GFile *file)
+{
+    g_autofree char *path = __real_g_file_get_path (file);
+    if (f.active && named ("trash-source-copy") && under (path, f.source_dir)) {
+        f.trash_uris++;
+        return g_strdup (strcmp (path, f.source) == 0 ? "trash:///payload" : "trash:///");
+    }
+    return __real_g_file_get_uri (file);
+}
+
+gboolean __real_g_file_has_uri_scheme (GFile *, const char *);
+gboolean
+__wrap_g_file_has_uri_scheme (GFile *file, const char *scheme)
+{
+    g_autofree char *path = __real_g_file_get_path (file);
+    if (f.active && named ("trash-source-copy") && under (path, f.source_dir))
+        return g_ascii_strcasecmp (scheme, "trash") == 0;
+    return __real_g_file_has_uri_scheme (file, scheme);
+}
+
 char *
 __wrap_g_file_get_path (GFile *file)
 {
@@ -386,7 +774,15 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
     g_autofree char *path = f.active ? __real_g_file_get_path (file) : NULL;
     if (under (path, f.source_dir))
         f.source_queries++;
-    return __real_g_file_query_info (file, attributes, flags, cancel, error);
+    GFileInfo *info = __real_g_file_query_info (file, attributes, flags, cancel, error);
+    if (info && f.active && named ("trash-source-copy") && g_strcmp0 (path, f.source) == 0) {
+        g_autofree char *target_uri = __real_g_file_get_uri (file);
+        g_file_info_set_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_TARGET_URI, target_uri);
+        g_file_info_set_attribute_byte_string (info, G_FILE_ATTRIBUTE_TRASH_ORIG_PATH,
+                                              f.trash_original);
+        f.trash_metadata++;
+    }
+    return info;
 }
 
 static void
@@ -421,6 +817,10 @@ __wrap_nemo_file_undo_info_ext_add_transfer (NemoFileUndoInfoExt *info, GFile *o
                                            GFile *target, NemoTransferUndo *transfer)
 {
     record_undo_target (target, transfer != NULL);
+    if (named ("recovery-undo-check-no-mutation") && !f.preflight_record) {
+        g_assert_nonnull (transfer);
+        f.preflight_record = nemo_transfer_undo_ref (transfer);
+    }
     gboolean nested = f.adding_transfer;
     f.adding_transfer = TRUE;
     __real_nemo_file_undo_info_ext_add_transfer (info, origin, target, transfer);
@@ -445,13 +845,20 @@ __wrap_openat (int dirfd, const char *path, int flags, ...)
         if (under (actual, f.dest_dir) && strstr (actual, "/.nemo-recovery-"))
             f.recovery_fd = fd;
     }
+    if (f.active && fd >= 0 && (flags & O_DIRECTORY) && scenario->fault == RECOVERY_RESERVED) {
+        g_autofree char *actual = resolved (dirfd, path);
+        if (g_strcmp0 (actual, f.protected_path) == 0)
+            f.injections++;
+    }
     if (f.active && fd >= 0 && (flags & O_CREAT)) {
         g_autofree char *actual = resolved (dirfd, path);
         if (destination_path (actual)) {
             f.mutations++;
             if (strstr (actual, ".nemo") && g_str_has_suffix (actual, "/payload") &&
-                !(flags & O_DIRECTORY))
+                !(flags & O_DIRECTORY)) {
+                f.stage_creations++;
                 g_hash_table_insert (f.writers, GINT_TO_POINTER (fd + 1), g_strdup (actual));
+            }
         }
     }
     return fd;
@@ -480,8 +887,16 @@ __wrap_mkdirat (int dirfd, const char *name, mode_t mode)
     if (f.active && result == 0 && destination_path (path))
         f.mutations++;
     if (f.active && result == 0 && scenario->fault == RECOVERY_READABLE &&
-        under (path, f.dest_dir) && g_str_has_prefix (name, ".nemo-recovery-")) {
+        under (path, f.dest_dir) && strstr (path, "/.nemo-recovery-")) {
         g_assert_cmpint (fchmodat (dirfd, name, 0755, 0), ==, 0);
+        f.injections++;
+    }
+    if (f.active && result == 0 && under (path, f.dest_dir) &&
+        g_str_has_prefix (name, ".nemo-recovery-") &&
+        (scenario->fault == RECOVERY_GROUP_WRITABLE || scenario->fault == RECOVERY_OTHER_WRITABLE)) {
+        g_assert_cmpint (fchmodat (dirfd, name,
+            scenario->fault == RECOVERY_GROUP_WRITABLE ? 0720 : 0702, 0), ==, 0);
+        protect_entry (path);
         f.injections++;
     }
     return result;
@@ -499,6 +914,8 @@ __wrap_g_file_create (GFile *file, GFileCreateFlags flags, GCancellable *cancel,
         f.mutations++;
         g_assert_cmpstr (actual, !=, f.dest);
         g_assert_true (G_IS_FILE_DESCRIPTOR_BASED (stream));
+        if (strstr (actual, ".nemo") && g_str_has_suffix (actual, "/payload"))
+            f.stage_creations++;
         g_hash_table_insert (f.writers, GINT_TO_POINTER (
             g_file_descriptor_based_get_fd (G_FILE_DESCRIPTOR_BASED (stream)) + 1), g_strdup (actual));
     }
@@ -624,6 +1041,9 @@ __wrap_fsync (int fd)
         (scenario->fault == DELETE_DIR_FSYNC && f.deletes &&
          under (path, f.source_dir) && !regular) ||
         (scenario->fault == UNDO_FSYNC && f.undoing && (directory || target)));
+    fail |= f.active && scenario->fault == LARGE_WRITE_SYNC && !f.injections &&
+            regular && (fcntl (fd, F_GETFL) & O_ACCMODE) != O_RDONLY &&
+            g_strcmp0 (path, g_hash_table_lookup (f.writers, GINT_TO_POINTER (fd + 1))) == 0;
     fail |= f.active && f.undoing && scenario->fault == UNDO_POSTCAPTURE_FSYNC &&
             f.undo_captures > 0 && directory;
     if (fail) {
@@ -647,6 +1067,11 @@ __wrap_fsync (int fd)
             f.destination_flushes++;
             if (f.publications)
                 f.synced_at = ++f.sequence;
+            for (guint i = 0; f.large_files && i < f.large_files->len; i++) {
+                LargeFile *file = g_ptr_array_index (f.large_files, i);
+                if (file->published_at && strcmp (path, file->destination_parent) == 0)
+                    file->synced_at = ++f.sequence;
+            }
         }
     }
     return result;
@@ -677,8 +1102,27 @@ rename_boundary (int oldfd, const char *old, int newfd, const char *new, unsigne
     g_autofree char *src = resolved (oldfd, old);
     g_autofree char *dst = resolved (newfd, new);
     gboolean ours = f.active && (under (src, f.source_dir) || under (src, f.dest_dir));
+    if (f.active && flags == RENAME_EXCHANGE) {
+        f.exchange_attempts++;
+        if (strcmp (old, "probe-a") == 0 && strcmp (new, "probe-b") == 0)
+            f.exchange_probes++;
+        int unsupported = exchange_backend_errno ();
+        if (unsupported) {
+            g_assert_true (ours);
+            f.injections++;
+            errno = unsupported;
+            return -1;
+        }
+    }
     gboolean publish = ours && g_strcmp0 (dst, f.dest) == 0 && !f.undoing;
     gboolean capture = ours && g_strcmp0 (src, f.source) == 0;
+    LargeFile *large_capture = ours && f.large_sources ?
+                              g_hash_table_lookup (f.large_sources, src) : NULL;
+    if (large_capture) {
+        g_assert_cmpuint (large_capture->published_at, >, 0);
+        g_assert_cmpuint (large_capture->synced_at, >, large_capture->published_at);
+        g_assert_cmpuint (flags, ==, RENAME_NOREPLACE);
+    }
     gboolean undo_capture = ours && f.undoing &&
         (g_strcmp0 (src, f.dest) == 0 || g_hash_table_contains (f.undo_targets, src));
     gboolean undo_restore = ours && f.undoing && g_strcmp0 (dst, f.dest) == 0;
@@ -706,13 +1150,31 @@ rename_boundary (int oldfd, const char *old, int newfd, const char *new, unsigne
         if (scenario->fault == NEW_FILE_RACE || scenario->fault == NEW_DIRECTORY_RACE ||
             scenario->fault == NEW_SYMLINK_RACE || scenario->fault == EXCHANGE_RACE)
             f.injections++;
-        if (scenario->fault == EXCHANGE_UNSUPPORTED || scenario->fault == RENAME_EINTR ||
+        if (scenario->fault == EXCHANGE_UNSUPPORTED || scenario->fault == EXCHANGE_EINVAL ||
+            scenario->fault == EXCHANGE_EOPNOTSUPP || scenario->fault == RENAME_EINTR ||
             scenario->fault == RENAME_EIO) {
             f.injections++;
-            errno = scenario->fault == EXCHANGE_UNSUPPORTED ? EOPNOTSUPP :
+            errno = scenario->fault == EXCHANGE_EINVAL ? EINVAL :
+                    (scenario->fault == EXCHANGE_UNSUPPORTED ||
+                     scenario->fault == EXCHANGE_EOPNOTSUPP) ? EOPNOTSUPP :
                     scenario->fault == RENAME_EINTR ? EINTR : EIO;
+            if (scenario->fault == EXCHANGE_EINVAL || scenario->fault == EXCHANGE_EOPNOTSUPP)
+                g_assert_cmpuint (flags, ==, RENAME_EXCHANGE);
             return -1;
         }
+    }
+    if (publish && named ("trash-source-copy")) {
+        g_autofree char *directory = fd_path (oldfd);
+        g_autofree char *path = g_build_filename (directory, "record-prepared", NULL);
+        g_autoptr (GKeyFile) record = g_key_file_new ();
+        g_assert_true (g_key_file_load_from_file (record, path, G_KEY_FILE_NONE, NULL));
+        g_autofree char *encoded = g_key_file_get_string (record, "Transfer",
+                                                        "source-uri-base64", NULL);
+        g_assert_nonnull (encoded);
+        gsize length;
+        g_autofree guchar *uri = g_base64_decode (encoded, &length);
+        g_assert_cmpmem (uri, length, "trash:///payload", strlen ("trash:///payload"));
+        f.trash_records++;
     }
     if (capture && f.injections == 0 && scenario->fault == CAPTURE_SWAP) {
         g_assert_cmpint (rename (src, f.saved), ==, 0);
@@ -735,6 +1197,26 @@ rename_boundary (int oldfd, const char *old, int newfd, const char *new, unsigne
     int ret = __real_renameat2 (oldfd, old, newfd, new, flags);
     if (ours && ret == 0) {
         f.mutations++;
+        if (publish && !f.injections && (changed_marker () || retained_recovery_entry ()))
+            change_recovery_entry (oldfd);
+        if (!f.undoing && f.large_destinations && g_hash_table_contains (f.large_destinations, dst)) {
+            LargeFile *file = g_hash_table_lookup (f.large_destinations, dst);
+            g_assert_cmpuint (file->published_at, ==, 0);
+            file->published_at = ++f.sequence;
+            f.large_publications++;
+            if (scenario->fault == RECOVERY_UNKNOWN && flags == RENAME_NOREPLACE &&
+                !f.unknown_recovery_entry) {
+                g_autofree char *directory = fd_path (oldfd);
+                g_assert_nonnull (directory);
+                g_assert_true (under (directory, f.dest_dir));
+                f.unknown_recovery_entry = g_build_filename (directory, "external-note", NULL);
+                g_assert_false (exists (f.unknown_recovery_entry));
+                write_contents (f.unknown_recovery_entry, foreign);
+                f.injections++;
+            }
+        }
+        if (large_capture)
+            g_hash_table_insert (f.large_captures, g_strdup (dst), large_capture);
         if (undo_capture) {
             f.undo_captures++;
             g_free (f.undo_capture);
@@ -818,9 +1300,25 @@ __wrap_unlinkat (int dirfd, const char *path, int flags)
 {
     g_autofree char *actual = resolved (dirfd, path);
     gboolean capture = f.active && f.capture && g_strcmp0 (actual, f.capture) == 0;
+    LargeFile *large_capture = f.active && f.large_captures ?
+                              g_hash_table_lookup (f.large_captures, actual) : NULL;
+    if (large_capture) {
+        g_assert_cmpint (flags, ==, 0);
+        g_assert_cmpuint (large_capture->published_at, >, 0);
+        g_assert_cmpuint (large_capture->synced_at, >, large_capture->published_at);
+    }
     if (capture && scenario->crossfs) {
-        g_assert_cmpuint (f.publications, ==, 1);
-        g_assert_cmpuint (f.synced_at, >, f.published_at);
+        if (f.large_files) {
+            g_assert_cmpint (flags, ==, AT_REMOVEDIR);
+            g_assert_cmpuint (f.large_publications, ==, f.large_files->len);
+            for (guint i = 0; i < f.large_files->len; i++) {
+                LargeFile *file = g_ptr_array_index (f.large_files, i);
+                g_assert_cmpuint (file->deleted_at, >, file->published_at);
+            }
+        } else {
+            g_assert_cmpuint (f.publications, ==, 1);
+            g_assert_cmpuint (f.synced_at, >, f.published_at);
+        }
         if (scenario->fault == DELETE_FAILURE) {
             f.injections++;
             errno = EACCES;
@@ -828,6 +1326,8 @@ __wrap_unlinkat (int dirfd, const char *path, int flags)
         }
     }
     int ret = __real_unlinkat (dirfd, path, flags);
+    if (large_capture && ret == 0)
+        large_capture->deleted_at = ++f.sequence;
     if (capture && ret == 0)
         f.deletes++;
     return ret;
@@ -898,6 +1398,17 @@ assert_no_fixture_directory_handles (void)
     g_dir_close (fds);
 }
 
+static void
+collect_dialog_text (GtkWidget *widget, gpointer unused)
+{
+    if (GTK_IS_LABEL (widget))
+        g_string_append_printf (f.dialog_text, "%s\n", gtk_label_get_text (GTK_LABEL (widget)));
+    if (GTK_IS_EXPANDER (widget))
+        gtk_expander_set_expanded (GTK_EXPANDER (widget), TRUE);
+    if (GTK_IS_CONTAINER (widget))
+        gtk_container_foreach (GTK_CONTAINER (widget), collect_dialog_text, NULL);
+}
+
 static gboolean
 respond (gpointer unused)
 {
@@ -913,10 +1424,15 @@ respond (gpointer unused)
                 gtk_dialog_response (l->data, CONFLICT_RESPONSE_REPLACE);
                 continue;
             }
-            gtk_dialog_response (l->data, f.injections ? CONFLICT_RESPONSE_SKIP :
+            gtk_dialog_response (l->data, f.injections && scenario->fault != RECOVERY_UNKNOWN ?
+                                                       CONFLICT_RESPONSE_SKIP :
                                                        CONFLICT_RESPONSE_REPLACE);
-        } else
+        } else {
+            if (GTK_IS_MESSAGE_DIALOG (l->data)) {
+                collect_dialog_text (gtk_message_dialog_get_message_area (l->data), NULL);
+            }
             gtk_dialog_response (l->data, 0);
+        }
     }
     g_list_free (windows);
     return G_SOURCE_CONTINUE;
@@ -971,7 +1487,7 @@ deadline (gpointer unused)
 static void
 wait_for_operation (void)
 {
-    guint timeout = g_timeout_add_seconds (15, deadline, NULL);
+    guint timeout = g_timeout_add_seconds (large_case () ? 150 : 15, deadline, NULL);
     guint responder = g_timeout_add (10, respond, NULL);
     gtk_main ();
     g_source_remove (responder);
@@ -1157,6 +1673,22 @@ setup_fixture (void)
     f.source_dir = scenario->crossfs ?
         g_build_filename (secondary_fs_root (), "nemo-transfer-XXXXXX", NULL) :
         g_build_filename (f.root, "source", NULL);
+    if (named ("trash-source-copy")) {
+        f.trash_root = g_build_filename (f.root, "controlled-trash", NULL);
+        g_assert_cmpint (g_mkdir (f.trash_root, 0700), ==, 0);
+        g_free (f.source_dir);
+        f.source_dir = g_build_filename (f.trash_root, "files", NULL);
+        g_autofree char *info = g_build_filename (f.trash_root, "info", NULL);
+        g_assert_cmpint (g_mkdir (info, 0700), ==, 0);
+        f.trash_original = g_build_filename (f.root, "original-location", "payload", NULL);
+        g_autofree char *escaped = g_uri_escape_string (f.trash_original,
+                                                       G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
+        g_autofree char *metadata = g_strdup_printf (
+            "[Trash Info]\nPath=%s\nDeletionDate=2026-01-01T00:00:00\n", escaped);
+        g_autofree char *trashinfo = g_build_filename (info, "payload.trashinfo", NULL);
+        write_contents (trashinfo, metadata);
+        g_assert_cmpint (chmod (trashinfo, 0600), ==, 0);
+    }
     if (scenario->crossfs)
         g_assert_nonnull (g_mkdtemp (f.source_dir));
     else
@@ -1179,7 +1711,9 @@ setup_fixture (void)
         g_free (f.saved);
         f.saved = g_strconcat (f.source_dir, "-saved", NULL);
     }
-    if (scenario->directory) {
+    if (large_case ()) {
+        create_large_fixture ();
+    } else if (scenario->directory) {
         g_assert_cmpint (g_mkdir (f.source, 0700), ==, 0);
         g_autofree char *child = g_build_filename (f.source, "first", NULL);
         write_contents (child, payload);
@@ -1209,6 +1743,13 @@ setup_fixture (void)
         write_contents (f.source, payload);
     if (scenario->replace && !scenario->directory)
         write_contents (f.dest, scenario->fault == MATCH_FSYNC ? payload : previous);
+    if (scenario->fault == RECOVERY_RESERVED) {
+        g_autofree char *container = recovery_container_path ();
+        g_assert_cmpint (g_mkdir (container, 0700), ==, 0);
+        g_autofree char *owner = g_build_filename (container, "owner", NULL);
+        write_contents (owner, foreign);
+        protect_entry (container);
+    }
     if (mixed_undo ()) {
         f.extra_source = g_build_filename (f.source_dir, "folder", NULL);
         f.extra_dest = g_build_filename (f.dest_dir, "folder", NULL);
@@ -1217,6 +1758,12 @@ setup_fixture (void)
         write_contents (child, previous);
     }
     g_assert_cmpint (lstat (f.source, &f.source_identity), ==, 0);
+    if (f.trash_root) {
+        f.trash_snapshot = g_string_new (NULL);
+        snapshot_namespace (f.trash_root, f.trash_snapshot);
+    }
+    if (exchange_backend_errno ())
+        g_assert_cmpint (lstat (f.dest, &f.destination_identity), ==, 0);
     if (scenario->crossfs) {
         struct stat source, dest;
         g_assert_cmpint (stat (f.source_dir, &source), ==, 0);
@@ -1232,6 +1779,7 @@ setup_fixture (void)
     f.root_anchor_fd = -1;
     f.recovery_fd = -1;
     f.manager = nemo_progress_info_manager_new ();
+    f.dialog_text = g_string_new (NULL);
     g_signal_connect (f.manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
     g_assert_true (g_settings_set_boolean (nemo_preferences, "safe-cross-fs-copy", FALSE));
     g_assert_true (g_settings_set_boolean (nemo_preferences, "verify-file-copies", TRUE));
@@ -1259,6 +1807,81 @@ assert_failure (void)
 }
 
 static void
+check_namespace_reuse (void)
+{
+    for (guint i = 0; i < 32; i++) {
+        g_autofree char *name = g_strdup_printf ("repeat-%02u", i);
+        g_autofree char *contents = g_strdup_printf ("Independent transfer %u\n", i);
+        g_free (f.source);
+        g_free (f.dest);
+        f.source = g_build_filename (f.source_dir, name, NULL);
+        f.dest = g_build_filename (f.dest_dir, name, NULL);
+        write_contents (f.source, contents);
+        f.publications = f.captures = f.deletes = 0;
+        f.capture_calls = f.publication_calls = f.stage_creations = f.writes = 0;
+        f.published_at = f.synced_at = 0;
+        run_operation (scenario->operation, 1);
+        assert_success ();
+        assert_contents (f.dest, contents);
+        g_assert_cmpuint (f.publications, ==, 1);
+        gboolean native = scenario->operation == MOVE && !scenario->crossfs;
+        g_assert_cmpuint (f.result.completed_regular_files, ==, native ? 0 : 1);
+        g_assert_cmpuint (f.result.completed_items, ==, 1);
+        g_assert_cmpuint (f.result.atomic_moves, ==, native ? 1 : 0);
+        g_assert_cmpuint (f.result.checksum_verified_files, ==, native ? 0 : 1);
+        if (scenario->operation == COPY)
+            assert_contents (f.source, contents);
+        else {
+            g_assert_false (exists (f.source));
+            g_assert_cmpuint (f.captures, ==, 1);
+            g_assert_cmpuint (f.deletes, ==, scenario->crossfs ? 1 : 0);
+        }
+        if (native) {
+            g_assert_cmpuint (f.stage_creations, ==, 0);
+            g_assert_cmpuint (f.writes, ==, 0);
+        }
+        g_assert_cmpuint (count_root_recovery_directories (f.dest_dir), ==, 1);
+        g_assert_cmpuint (count_root_recovery_directories (f.source_dir), <=, 1);
+    }
+}
+
+static void
+check_undo_preflight_namespace (void)
+{
+    g_assert_nonnull (f.preflight_record);
+    NemoFileUndoInfo *info = g_object_ref (nemo_file_undo_manager_get_action ());
+    for (guint i = 0; i < 3; i++) {
+        GString *before = g_string_new (NULL);
+        snapshot_namespace (f.root, before);
+        g_autoptr (GError) error = NULL;
+        g_autoptr (GCancellable) cancel = g_cancellable_new ();
+        guint mutations = f.mutations;
+        f.active = TRUE;
+        g_assert_true (nemo_transfer_undo_check (f.preflight_record, FALSE, cancel, &error));
+        g_assert_no_error (error);
+        g_assert_true (nemo_transfer_undo_release (f.preflight_record, &error));
+        g_assert_no_error (error);
+        f.active = FALSE;
+        g_assert_cmpuint (f.mutations, ==, mutations);
+        GString *after = g_string_new (NULL);
+        snapshot_namespace (f.root, after);
+        g_assert_cmpstr (before->str, ==, after->str);
+        g_string_free (before, TRUE);
+        g_string_free (after, TRUE);
+        assert_no_fixture_directory_handles ();
+        g_assert_true (nemo_file_undo_manager_get_action () == info);
+    }
+    run_manager_undo (info);
+    g_assert_true (f.success);
+    g_assert_false (exists (f.dest));
+    assert_contents (f.source, payload);
+    run_manager_apply (info, FALSE);
+    g_assert_true (f.success);
+    assert_contents (f.dest, payload);
+    g_object_unref (info);
+}
+
+static void
 test_transfer (void)
 {
     setup_fixture ();
@@ -1276,14 +1899,22 @@ test_transfer (void)
         g_settings_set_boolean (nemo_preferences, "verify-file-copies", FALSE);
         override = 0;
     }
+    struct rlimit original_limit;
+    if (low_fd_case ())
+        lower_fd_limit (&original_limit);
     run_operation (scenario->operation, override);
+    if (low_fd_case ())
+        g_assert_cmpint (setrlimit (RLIMIT_NOFILE, &original_limit), ==, 0);
+    if (large_case ())
+        check_large_contents ();
     gboolean should_succeed = (scenario->fault == FAULT_NONE &&
                                !named ("real-tmpfs-destination")) || scenario->fault == RENAME_EINTR ||
         (scenario->fault == REMOTE_SOURCE && scenario->operation == COPY) ||
         scenario->fault == UNDO_TARGET_RACE || scenario->fault == UNDO_RESTORE_RACE ||
         scenario->fault == UNDO_FSYNC || scenario->fault == UNDO_POSTCAPTURE_FSYNC ||
         scenario->fault == UNDO_CANCEL_PREFLIGHT || scenario->fault == UNDO_CANCEL_CAPTURE ||
-        scenario->fault == RECOVERY_READABLE;
+        scenario->fault == RECOVERY_READABLE || scenario->fault == RECOVERY_UNKNOWN ||
+        retained_recovery_entry ();
     if (should_succeed)
         assert_success ();
     else if (scenario->fault == FINAL_ANCHOR_CLOSE) {
@@ -1295,6 +1926,26 @@ test_transfer (void)
         assert_failure ();
     if (scenario->fault != FAULT_NONE && !undo)
         g_assert_cmpuint (f.injections, >, 0);
+    if (large_case ()) {
+        if (scenario->fault == LARGE_WRITE_SYNC) {
+            g_assert_cmpuint (f.injections, ==, 1);
+            g_assert_cmpuint (f.large_publications, ==, 0);
+            g_assert_true (exists (f.source));
+        } else {
+            g_assert_cmpuint (f.large_publications, ==, f.large_files->len);
+            g_assert_cmpuint (f.result.completed_regular_files, ==, f.large_files->len);
+            g_assert_cmpuint (f.result.atomic_moves, ==, 0);
+            g_assert_cmpuint (f.result.checksum_verified_files, ==, f.large_files->len);
+            guint recoveries = count_root_recovery_directories (f.dest_dir);
+            g_test_message ("Destination ROOT recovery directories after %u files: %u",
+                            f.large_files->len, recoveries);
+            g_assert_cmpuint (recoveries, <=, scenario->fault == RECOVERY_UNKNOWN ? 3 : 1);
+            if (scenario->operation == MOVE) {
+                g_assert_false (exists (f.source));
+                g_assert_cmpuint (count_root_recovery_directories (f.source_dir), <=, 1);
+            }
+        }
+    }
 
     if (named ("mandatory-stage") || preferences) {
         g_assert_cmpint (f.result.verification_requested, ==, override == 1);
@@ -1413,6 +2064,19 @@ test_transfer (void)
         g_assert_cmpuint (f.source_queries, ==, 0);
         assert_contents (f.source, payload);
     }
+    if (named ("trash-source-copy")) {
+        g_assert_cmpuint (f.trash_uris, >, 0);
+        g_assert_cmpuint (f.trash_metadata, >, 0);
+        g_assert_cmpuint (f.trash_records, ==, 1);
+        g_assert_cmpuint (f.stage_creations, >, 0);
+        g_assert_cmpuint (f.publications, ==, 1);
+        g_assert_cmpuint (f.captures, ==, 0);
+        g_assert_cmpuint (f.deletes, ==, 0);
+        g_assert_cmpuint (f.result.completed_regular_files, ==, 1);
+        g_assert_cmpuint (f.result.checksum_verified_files, ==, 1);
+        assert_contents (f.dest, payload);
+        assert_contents (f.source, payload);
+    }
     if (scenario->fault == REMOVAL_INFLIGHT) {
         g_assert_cmpuint (f.mutations, ==, 0);
         assert_contents (f.source, payload);
@@ -1432,6 +2096,19 @@ test_transfer (void)
         g_assert_cmpuint (f.deletes, ==, 0);
         assert_contents (f.source, payload);
         assert_contents (f.dest, payload);
+    }
+    if (f.protected_path) {
+        assert_protected_entry ();
+        assert_contents (f.source, payload);
+        if (changed_marker () || retained_recovery_entry ()) {
+            g_assert_cmpuint (f.publications, ==, 1);
+            assert_contents (f.dest, payload);
+        } else {
+            g_assert_cmpuint (f.publications, ==, 0);
+            g_assert_cmpuint (f.stage_creations, ==, 0);
+            g_assert_cmpuint (f.captures, ==, 0);
+            g_assert_false (exists (f.dest));
+        }
     }
     if (scenario->fault == LINK_SYNCFS) {
         g_assert_cmpuint (f.publications, ==, 0);
@@ -1491,10 +2168,42 @@ test_transfer (void)
         g_autofree char *recovery = g_path_get_dirname (retained);
         g_assert_nonnull (strstr (text, recovery));
     }
-    if (scenario->fault == EXCHANGE_UNSUPPORTED) {
+    if (scenario->fault == EXCHANGE_UNSUPPORTED || scenario->fault == EXCHANGE_EINVAL ||
+        scenario->fault == EXCHANGE_EOPNOTSUPP || exchange_backend_errno ()) {
         assert_contents (f.source, payload);
         assert_contents (f.dest, previous);
         g_assert_cmpuint (f.publications, ==, 0);
+        if (scenario->fault != EXCHANGE_UNSUPPORTED) {
+            g_autofree char *text = g_utf8_strdown (f.dialog_text->str, -1);
+            g_test_message ("Unsupported replacement message: %s", f.dialog_text->str);
+            g_assert_nonnull (strstr (text, "support"));
+            g_assert_true (strstr (text, "another name") || strstr (text, "different name"));
+            g_assert_null (strstr (text, "invalid argument"));
+        }
+        if (exchange_backend_errno ()) {
+            g_assert_cmpuint (f.exchange_attempts, ==, 1);
+            g_assert_cmpuint (f.exchange_probes, ==, 1);
+            g_assert_cmpuint (f.injections, ==, 1);
+            g_assert_cmpuint (f.stage_creations, ==, 0);
+            g_assert_cmpuint (f.writes, ==, 0);
+            g_assert_cmpuint (f.capture_calls, ==, 0);
+            g_assert_cmpuint (f.captures, ==, 0);
+            g_assert_cmpuint (f.deletes, ==, 0);
+            g_assert_cmpuint (f.publication_calls, ==, 0);
+            g_assert_cmpuint (f.result.completed_regular_files, ==, 0);
+            g_assert_cmpuint (f.result.atomic_moves, ==, 0);
+            struct stat source, destination;
+            g_assert_cmpint (lstat (f.source, &source), ==, 0);
+            g_assert_cmpint (lstat (f.dest, &destination), ==, 0);
+            g_assert_cmpuint (source.st_dev, ==, f.source_identity.st_dev);
+            g_assert_cmpuint (source.st_ino, ==, f.source_identity.st_ino);
+            g_assert_cmpuint (destination.st_dev, ==, f.destination_identity.st_dev);
+            g_assert_cmpuint (destination.st_ino, ==, f.destination_identity.st_ino);
+        } else if (scenario->fault != EXCHANGE_UNSUPPORTED) {
+            g_assert_cmpuint (f.exchange_probes, >, 0);
+            g_assert_cmpuint (f.stage_creations, >, 0);
+            g_assert_cmpuint (f.publication_calls, ==, 1);
+        }
     }
     if (scenario->fault == CAPTURE_SWAP) {
         assert_contents (f.saved, payload);
@@ -1567,6 +2276,14 @@ test_transfer (void)
 
     g_autofree char *backup = scenario->replace && !scenario->directory && should_succeed ?
         find_contents (f.dest_dir, previous, TRUE) : NULL;
+    g_autofree char *bulk_backup = scenario->fault == RECOVERY_UNKNOWN ?
+        find_contents (f.dest_dir, previous, TRUE) : NULL;
+    if (scenario->fault == RECOVERY_UNKNOWN) {
+        g_assert_nonnull (bulk_backup);
+        g_assert_nonnull (f.unknown_recovery_entry);
+        assert_contents (bulk_backup, previous);
+        assert_contents (f.unknown_recovery_entry, foreign);
+    }
     if (scenario->replace && !scenario->directory && should_succeed) {
         g_assert_nonnull (backup);
         g_assert_cmpuint (f.exchanges, ==, 1);
@@ -1816,7 +2533,25 @@ test_transfer (void)
         if (scenario->fault == UNDO_RESTORE_RACE)
             assert_contents (backup, previous);
     }
+    if (g_str_has_prefix (scenario->name, "namespace-"))
+        check_namespace_reuse ();
+    if (named ("recovery-undo-check-no-mutation"))
+        check_undo_preflight_namespace ();
+    g_clear_pointer (&f.preflight_record, nemo_transfer_undo_unref);
     nemo_file_undo_manager_set_action (NULL);
+    if (f.trash_root) {
+        GString *after = g_string_new (NULL);
+        snapshot_namespace (f.trash_root, after);
+        g_assert_cmpstr (after->str, ==, f.trash_snapshot->str);
+        g_string_free (after, TRUE);
+        g_string_free (f.trash_snapshot, TRUE);
+    }
+    if (f.protected_path)
+        assert_protected_entry ();
+    if (scenario->fault == RECOVERY_UNKNOWN) {
+        assert_contents (bulk_backup, previous);
+        assert_contents (f.unknown_recovery_entry, foreign);
+    }
     if (named ("recovery-finalization") || named ("recovery-entry-details"))
         assert_contents (backup, previous);
     g_clear_object (&f.progress);
@@ -1825,6 +2560,13 @@ test_transfer (void)
     g_hash_table_unref (f.writers);
     g_hash_table_unref (f.anchors);
     g_hash_table_unref (f.undo_targets);
+    g_clear_pointer (&f.large_destinations, g_hash_table_unref);
+    g_clear_pointer (&f.large_sources, g_hash_table_unref);
+    g_clear_pointer (&f.large_captures, g_hash_table_unref);
+    g_clear_pointer (&f.large_files, g_ptr_array_unref);
+    g_string_free (f.dialog_text, TRUE);
+    if (f.protected_snapshot)
+        g_string_free (f.protected_snapshot, TRUE);
     if (scenario->crossfs)
         remove_fixture (f.source_dir);
     if (named ("real-tmpfs-destination"))
@@ -1842,6 +2584,11 @@ test_transfer (void)
     g_free (f.extra_source);
     g_free (f.extra_dest);
     g_free (f.undo_capture);
+    g_free (f.unknown_recovery_entry);
+    g_free (f.protected_path);
+    g_free (f.retained_record);
+    g_free (f.trash_root);
+    g_free (f.trash_original);
     g_mutex_clear (&f.lock);
     g_cond_clear (&f.ready);
 }
