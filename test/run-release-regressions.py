@@ -91,27 +91,29 @@ def run(build_dir):
     selected = select_tests(json.loads(metadata.stdout))
     names = [test["name"] for test in selected]
     crossfs = next(test for test in selected if test["name"] == CROSSFS_TEST)
-    source_dir = Path(crossfs["workdir"] or build_dir)
+    fixture_dir = Path(crossfs["workdir"] or build_dir)
     if "NEMO_TEST_CROSS_FS_ROOT" in crossfs["env"]:
         raise GateError("The cross-filesystem test must inherit the gate's disposable root.")
 
     # An override is a parent directory, never a fixture itself. Only our unique
     # child is removed; no mounts or existing files on that filesystem are changed.
+    # The scenario chooses which side uses this secondary filesystem; durable
+    # destinations belong in the build workspace, not the default tmpfs root.
     crossfs_parent = Path(os.environ.get("NEMO_TEST_CROSS_FS_ROOT", "/dev/shm")).resolve()
     with tempfile.TemporaryDirectory(
         prefix="nemo-release-crossfs-", dir=crossfs_parent,
     ) as crossfs_root:
-        source_device = source_dir.stat().st_dev
-        target_device = Path(crossfs_root).stat().st_dev
-        if source_device == target_device:
+        fixture_device = fixture_dir.stat().st_dev
+        crossfs_device = Path(crossfs_root).stat().st_dev
+        if fixture_device == crossfs_device:
             raise GateError(
-                f"{source_dir} and {crossfs_parent} are on the same filesystem "
-                f"(st_dev={source_device}). Set NEMO_TEST_CROSS_FS_ROOT to a writable "
+                f"{fixture_dir} and {crossfs_parent} are on the same filesystem "
+                f"(st_dev={fixture_device}). Set NEMO_TEST_CROSS_FS_ROOT to a writable "
                 "directory on a different filesystem; release coverage cannot skip this test."
             )
         print(
-            f"Release safety gate: {len(names)} tests; cross-filesystem devices "
-            f"{source_device} -> {target_device}", flush=True,
+            f"Release safety gate: {len(names)} tests; workspace device "
+            f"{fixture_device}, secondary device {crossfs_device}", flush=True,
         )
         env = os.environ.copy()
         env["NEMO_TEST_CROSS_FS_ROOT"] = crossfs_root
