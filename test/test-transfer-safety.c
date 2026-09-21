@@ -39,7 +39,8 @@ typedef enum {
     BACKEND_EXCHANGE_EINVAL, BACKEND_EXCHANGE_EOPNOTSUPP, BACKEND_EXCHANGE_ENOSYS,
     RECOVERY_RESERVED, RECOVERY_GROUP_WRITABLE, RECOVERY_OTHER_WRITABLE,
     MARKER_INODE, MARKER_METADATA, MARKER_CONTENT,
-    RECORD_INODE, RECORD_METADATA, RECORD_CONTENT, RECOVERY_FOREIGN_PAYLOAD, RECOVERY_FOREIGN_CHILD
+    RECORD_INODE, RECORD_METADATA, RECORD_CONTENT, RECORD_NLINK, RECORD_UID,
+    RECOVERY_FOREIGN_PAYLOAD, RECOVERY_FOREIGN_CHILD
 } Fault;
 
 typedef enum { COPY, COPY_FILE, DUPLICATE, MOVE } Operation;
@@ -100,6 +101,7 @@ static const Scenario scenarios[] = {
     { "writer-close", WRITER_CLOSE, COPY },
     { "directory-close", DIRECTORY_CLOSE, COPY },
     { "native-file", FAULT_NONE, MOVE },
+    { "native-undo-roundtrip", FAULT_NONE, MOVE },
     { "native-symlink", FAULT_NONE, MOVE, FALSE, FALSE, FALSE, TRUE },
     { "native-directory", FAULT_NONE, MOVE, FALSE, FALSE, TRUE },
     { "native-replacement", FAULT_NONE, MOVE, FALSE, TRUE },
@@ -155,6 +157,8 @@ static const Scenario scenarios[] = {
     { "recovery-record-inode", RECORD_INODE, COPY },
     { "recovery-record-metadata", RECORD_METADATA, COPY },
     { "recovery-record-content", RECORD_CONTENT, COPY },
+    { "recovery-record-nlink", RECORD_NLINK, COPY },
+    { "recovery-record-uid", RECORD_UID, COPY },
     { "recovery-foreign-payload", RECOVERY_FOREIGN_PAYLOAD, COPY },
     { "recovery-foreign-child", RECOVERY_FOREIGN_CHILD, COPY },
     { "undo-replacement", FAULT_NONE, COPY, FALSE, TRUE },
@@ -238,6 +242,8 @@ static struct {
     char *trash_root, *trash_original;
     GString *trash_snapshot;
     guint trash_uris, trash_metadata, trash_records;
+    uid_t record_uid;
+    guint record_uid_fd_reads, record_uid_named_reads;
 } f;
 
 static gboolean
@@ -275,7 +281,8 @@ static gboolean
 changed_record (void)
 {
     return scenario->fault == RECORD_INODE || scenario->fault == RECORD_METADATA ||
-           scenario->fault == RECORD_CONTENT;
+           scenario->fault == RECORD_CONTENT || scenario->fault == RECORD_NLINK ||
+           scenario->fault == RECORD_UID;
 }
 
 static gboolean
@@ -295,6 +302,13 @@ static gboolean
 mixed_undo (void)
 {
     return named ("undo-mixed-file-folder") || named ("undo-mixed-folder-file");
+}
+
+static gboolean
+checked_no_backup_move (void)
+{
+    return named ("native-file") || named ("copied-source-reclaimed") ||
+           named ("native-undo-roundtrip");
 }
 
 static gboolean
@@ -493,6 +507,85 @@ count_root_recovery_directories (const char *root)
     return count;
 }
 
+typedef struct {
+    guint entries, buckets, owners, transactions, other_directories, other_files;
+} RecoveryNamespaceCounts;
+
+static void
+count_recovery_namespace (const char *path, guint depth, gboolean marker_directory,
+                          RecoveryNamespaceCounts *counts)
+{
+    struct stat identity;
+    g_assert_cmpint (lstat (path, &identity), ==, 0);
+    g_assert_true (S_ISDIR (identity.st_mode));
+    g_assert_cmpuint (identity.st_uid, ==, geteuid ());
+    g_assert_cmpuint (identity.st_mode & 0022, ==, 0);
+    GDir *directory = g_dir_open (path, 0, NULL);
+    g_assert_nonnull (directory);
+    const char *name;
+    guint owners = 0;
+    while ((name = g_dir_read_name (directory))) {
+        g_autofree char *child = g_build_filename (path, name, NULL);
+        struct stat st;
+        g_assert_cmpint (lstat (child, &st), ==, 0);
+        counts->entries++;
+        if (S_ISDIR (st.st_mode)) {
+            gboolean bucket = depth == 0 && strlen (name) == 2 &&
+                              strspn (name, "0123456789abcdef") == 2;
+            if (g_str_has_prefix (name, "transaction-"))
+                counts->transactions++;
+            if (bucket)
+                counts->buckets++;
+            else
+                counts->other_directories++;
+            count_recovery_namespace (child, depth + 1, bucket, counts);
+        } else if (marker_directory && S_ISREG (st.st_mode) && strcmp (name, "owner") == 0) {
+            g_assert_cmpuint (st.st_uid, ==, geteuid ());
+            g_assert_cmpuint (st.st_mode & 0022, ==, 0);
+            counts->owners++;
+            owners++;
+        } else {
+            counts->other_files++;
+        }
+    }
+    g_dir_close (directory);
+    if (marker_directory)
+        g_assert_cmpuint (owners, ==, 1);
+}
+
+static guint
+assert_completed_recovery_namespace (const char *root)
+{
+    GDir *directory = g_dir_open (root, 0, NULL);
+    g_assert_nonnull (directory);
+    g_autofree char *expected = g_strdup_printf (".nemo-recovery-%" G_GUINT64_FORMAT,
+                                                (guint64) geteuid ());
+    const char *name;
+    guint containers = 0, entries = 0;
+    while ((name = g_dir_read_name (directory))) {
+        if (!g_str_has_prefix (name, ".nemo-recovery-"))
+            continue;
+        g_assert_cmpstr (name, ==, expected);
+        containers++;
+        g_autofree char *path = g_build_filename (root, name, NULL);
+        RecoveryNamespaceCounts counts = { 0 };
+        count_recovery_namespace (path, 0, TRUE, &counts);
+        g_test_message ("Completed recovery namespace: %u transactions, %u owners, %u buckets, %u entries",
+                        counts.transactions, counts.owners, counts.buckets, counts.entries);
+        g_assert_cmpuint (counts.transactions, ==, 0);
+        g_assert_cmpuint (counts.other_directories, ==, 0);
+        g_assert_cmpuint (counts.other_files, ==, 0);
+        g_assert_cmpuint (counts.buckets, <=, 256);
+        g_assert_cmpuint (counts.owners, ==, 1 + counts.buckets);
+        g_assert_cmpuint (counts.entries, ==, 1 + 2 * counts.buckets);
+        g_assert_cmpuint (counts.entries, <=, 513);
+        entries += 1 + counts.entries;
+    }
+    g_dir_close (directory);
+    g_assert_cmpuint (containers, <=, 1);
+    return entries;
+}
+
 static void
 snapshot_namespace (const char *path, GString *snapshot)
 {
@@ -593,12 +686,19 @@ change_recovery_entry (int recovery_fd)
             g_assert_cmpint (rename (f.saved, path), ==, 0);
         } else if (scenario->fault == MARKER_METADATA || scenario->fault == RECORD_METADATA) {
             g_assert_cmpint (chmod (path, (before.st_mode & 0777) ^ S_IRGRP), ==, 0);
+        } else if (scenario->fault == RECORD_NLINK) {
+            g_assert_cmpint (link (path, f.saved), ==, 0);
+        } else if (scenario->fault == RECORD_UID) {
+            f.record_uid = before.st_uid;
+            g_assert_cmpuint (f.record_uid, ==, geteuid ());
         } else {
             g_assert_cmpuint (length, >, 2);
             char byte = contents[length - 2] == 'a' ? 'b' : 'a';
             int fd = open (path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
             g_assert_cmpint (fd, >=, 0);
             g_assert_cmpint (pwrite (fd, &byte, 1, length - 2), ==, 1);
+            const struct timespec original_times[] = { before.st_atim, before.st_mtim };
+            g_assert_cmpint (futimens (fd, original_times), ==, 0);
             g_assert_cmpint (fsync (fd), ==, 0);
             g_assert_cmpint (close (fd), ==, 0);
         }
@@ -611,10 +711,19 @@ change_recovery_entry (int recovery_fd)
             if (scenario->fault == MARKER_METADATA || scenario->fault == RECORD_METADATA) {
                 g_assert_cmpuint (before.st_mode, !=, after.st_mode);
                 assert_contents (path, contents);
+            } else if (scenario->fault == RECORD_NLINK) {
+                g_assert_cmpuint (after.st_nlink, ==, before.st_nlink + 1);
+                assert_contents (path, contents);
+                assert_contents (f.saved, contents);
+            } else if (scenario->fault == RECORD_UID) {
+                g_assert_cmpuint (after.st_uid, ==, before.st_uid);
+                assert_contents (path, contents);
             } else {
                 g_autofree char *altered = NULL;
                 g_assert_true (g_file_get_contents (path, &altered, NULL, NULL));
                 g_assert_cmpstr (altered, !=, contents);
+                g_assert_cmpint (after.st_mtim.tv_sec, ==, before.st_mtim.tv_sec);
+                g_assert_cmpint (after.st_mtim.tv_nsec, ==, before.st_mtim.tv_nsec);
             }
         }
     } else if (scenario->fault == RECOVERY_FOREIGN_PAYLOAD) {
@@ -662,6 +771,45 @@ __wrap_fstatfs (int fd, struct statfs *st)
         }
     }
     return ret;
+}
+
+static void
+report_record_uid_change (const char *path, uid_t *uid, gboolean descriptor)
+{
+    if (!f.active || scenario->fault != RECORD_UID || !f.protected_path ||
+        g_strcmp0 (path, f.protected_path) != 0)
+        return;
+    /* Exercise observed ownership changes without privileged chown operations. */
+    g_assert_cmpuint (*uid, ==, f.record_uid);
+    *uid ^= 1;
+    if (descriptor)
+        f.record_uid_fd_reads++;
+    else
+        f.record_uid_named_reads++;
+}
+
+int __real_fstat64 (int, struct stat64 *);
+int
+__wrap_fstat64 (int fd, struct stat64 *st)
+{
+    int result = __real_fstat64 (fd, st);
+    if (result == 0 && f.active && scenario->fault == RECORD_UID) {
+        g_autofree char *path = fd_path (fd);
+        report_record_uid_change (path, &st->st_uid, TRUE);
+    }
+    return result;
+}
+
+int __real_fstatat64 (int, const char *, struct stat64 *, int);
+int
+__wrap_fstatat64 (int fd, const char *name, struct stat64 *st, int flags)
+{
+    int result = __real_fstatat64 (fd, name, st, flags);
+    if (result == 0 && f.active && scenario->fault == RECORD_UID) {
+        g_autofree char *path = resolved (fd, name);
+        report_record_uid_change (path, &st->st_uid, FALSE);
+    }
+    return result;
 }
 
 int __real_fstatfs64 (int, struct statfs64 *);
@@ -817,7 +965,8 @@ __wrap_nemo_file_undo_info_ext_add_transfer (NemoFileUndoInfoExt *info, GFile *o
                                            GFile *target, NemoTransferUndo *transfer)
 {
     record_undo_target (target, transfer != NULL);
-    if (named ("recovery-undo-check-no-mutation") && !f.preflight_record) {
+    if ((named ("recovery-undo-check-no-mutation") || named ("native-undo-roundtrip")) &&
+        !f.preflight_record) {
         g_assert_nonnull (transfer);
         f.preflight_record = nemo_transfer_undo_ref (transfer);
     }
@@ -1197,8 +1346,10 @@ rename_boundary (int oldfd, const char *old, int newfd, const char *new, unsigne
     int ret = __real_renameat2 (oldfd, old, newfd, new, flags);
     if (ours && ret == 0) {
         f.mutations++;
-        if (publish && !f.injections && (changed_marker () || retained_recovery_entry ()))
+        if (publish && !f.injections && (changed_marker () || retained_recovery_entry ())) {
+            g_assert_cmpuint (flags, ==, RENAME_NOREPLACE);
             change_recovery_entry (oldfd);
+        }
         if (!f.undoing && f.large_destinations && g_hash_table_contains (f.large_destinations, dst)) {
             LargeFile *file = g_hash_table_lookup (f.large_destinations, dst);
             g_assert_cmpuint (file->published_at, ==, 0);
@@ -1783,6 +1934,8 @@ setup_fixture (void)
     g_signal_connect (f.manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
     g_assert_true (g_settings_set_boolean (nemo_preferences, "safe-cross-fs-copy", FALSE));
     g_assert_true (g_settings_set_boolean (nemo_preferences, "verify-file-copies", TRUE));
+    g_test_message ("Owned fixture: root=%s source-root=%s destination-root=%s",
+                    f.root, f.source_dir, f.dest_dir);
 }
 
 static void
@@ -1842,6 +1995,8 @@ check_namespace_reuse (void)
         }
         g_assert_cmpuint (count_root_recovery_directories (f.dest_dir), ==, 1);
         g_assert_cmpuint (count_root_recovery_directories (f.source_dir), <=, 1);
+        assert_completed_recovery_namespace (f.dest_dir);
+        assert_completed_recovery_namespace (f.source_dir);
     }
 }
 
@@ -1875,9 +2030,26 @@ check_undo_preflight_namespace (void)
     g_assert_true (f.success);
     g_assert_false (exists (f.dest));
     assert_contents (f.source, payload);
+    if (scenario->operation == MOVE) {
+        struct stat restored;
+        g_assert_cmpint (lstat (f.source, &restored), ==, 0);
+        g_assert_cmpuint (restored.st_dev, ==, f.source_identity.st_dev);
+        g_assert_cmpuint (restored.st_ino, ==, f.source_identity.st_ino);
+        assert_completed_recovery_namespace (f.dest_dir);
+        assert_completed_recovery_namespace (f.source_dir);
+    }
     run_manager_apply (info, FALSE);
     g_assert_true (f.success);
     assert_contents (f.dest, payload);
+    if (scenario->operation == MOVE) {
+        struct stat installed;
+        g_assert_false (exists (f.source));
+        g_assert_cmpint (lstat (f.dest, &installed), ==, 0);
+        g_assert_cmpuint (installed.st_dev, ==, f.source_identity.st_dev);
+        g_assert_cmpuint (installed.st_ino, ==, f.source_identity.st_ino);
+        assert_completed_recovery_namespace (f.dest_dir);
+        assert_completed_recovery_namespace (f.source_dir);
+    }
     g_object_unref (info);
 }
 
@@ -1926,6 +2098,10 @@ test_transfer (void)
         assert_failure ();
     if (scenario->fault != FAULT_NONE && !undo)
         g_assert_cmpuint (f.injections, >, 0);
+    if (checked_no_backup_move ()) {
+        assert_completed_recovery_namespace (f.dest_dir);
+        assert_completed_recovery_namespace (f.source_dir);
+    }
     if (large_case ()) {
         if (scenario->fault == LARGE_WRITE_SYNC) {
             g_assert_cmpuint (f.injections, ==, 1);
@@ -1943,6 +2119,10 @@ test_transfer (void)
             if (scenario->operation == MOVE) {
                 g_assert_false (exists (f.source));
                 g_assert_cmpuint (count_root_recovery_directories (f.source_dir), <=, 1);
+            }
+            if (scenario->fault == FAULT_NONE) {
+                assert_completed_recovery_namespace (f.dest_dir);
+                assert_completed_recovery_namespace (f.source_dir);
             }
         }
     }
@@ -2109,6 +2289,10 @@ test_transfer (void)
             g_assert_cmpuint (f.captures, ==, 0);
             g_assert_false (exists (f.dest));
         }
+    }
+    if (scenario->fault == RECORD_UID) {
+        g_assert_cmpuint (f.record_uid_fd_reads, >, 0);
+        g_assert_cmpuint (f.record_uid_named_reads, >, 0);
     }
     if (scenario->fault == LINK_SYNCFS) {
         g_assert_cmpuint (f.publications, ==, 0);
@@ -2535,10 +2719,22 @@ test_transfer (void)
     }
     if (g_str_has_prefix (scenario->name, "namespace-"))
         check_namespace_reuse ();
-    if (named ("recovery-undo-check-no-mutation"))
+    if (named ("recovery-undo-check-no-mutation") || named ("native-undo-roundtrip"))
         check_undo_preflight_namespace ();
     g_clear_pointer (&f.preflight_record, nemo_transfer_undo_unref);
+    gboolean bounded_namespace = (large_case () && scenario->fault == FAULT_NONE) ||
+                                 g_str_has_prefix (scenario->name, "namespace-") ||
+                                 checked_no_backup_move ();
+    guint destination_entries = 0, source_entries = 0;
+    if (bounded_namespace) {
+        destination_entries = assert_completed_recovery_namespace (f.dest_dir);
+        source_entries = assert_completed_recovery_namespace (f.source_dir);
+    }
     nemo_file_undo_manager_set_action (NULL);
+    if (bounded_namespace) {
+        g_assert_cmpuint (assert_completed_recovery_namespace (f.dest_dir), ==, destination_entries);
+        g_assert_cmpuint (assert_completed_recovery_namespace (f.source_dir), ==, source_entries);
+    }
     if (f.trash_root) {
         GString *after = g_string_new (NULL);
         snapshot_namespace (f.trash_root, after);

@@ -39,6 +39,8 @@ typedef struct {
     guint denied;
     guint io_faults;
     guint io_operation;
+    guint cancellations;
+    GCancellable *cancel_initialization;
     struct stat unknown_identity;
     gboolean observing;
     gboolean deny_publication;
@@ -56,6 +58,10 @@ static gboolean invalidate_mount_cache;
 static guint mount_table_parses;
 static guint mount_table_checks;
 static guint mount_table_invalidations;
+static guint mount_statx_checks;
+static gboolean real_mount_cache_changes;
+static gboolean freeze_mount_clock;
+static gint64 mount_clock_now;
 static gboolean sample_transfer_fds;
 static guint sampled_fd_peak;
 static GHashTable *queued_source_roots;
@@ -63,6 +69,7 @@ static const char *queued_source_prefix;
 
 static void interleave_namespace_publication (const char *private_path);
 static guint descriptor_count (void);
+static void change_byte (const char *path, gsize offset);
 
 static void
 sample_descriptor_peak (void)
@@ -94,6 +101,14 @@ __wrap_mkdirat (int fd, const char *path, mode_t mode)
             /* A competing job must never see a freshly published, unmarked dir. */
             g_autofree char *owner = g_build_filename (created, "owner", NULL);
             g_assert_true (g_file_test (owner, G_FILE_TEST_IS_REGULAR));
+        }
+        if (namespace_race->cancel_initialization && !namespace_race->cancellations) {
+            g_autofree char *prefix =
+                g_build_filename (namespace_race->fixture->destination, ".nemo-recovery-init-", NULL);
+            if (created && g_str_has_prefix (created, prefix)) {
+                namespace_race->cancellations++;
+                g_cancellable_cancel (namespace_race->cancel_initialization);
+            }
         }
     }
     errno = saved_errno;
@@ -173,6 +188,14 @@ __wrap_close (int fd)
 
 GList *__real_g_unix_mounts_get (guint64 *time_read);
 gboolean __real_g_unix_mounts_changed_since (guint64 time_read);
+gint64 __real_g_get_monotonic_time (void);
+
+gint64
+__wrap_g_get_monotonic_time (void)
+{
+    return observe_mount_cache && freeze_mount_clock ? mount_clock_now :
+                                                      __real_g_get_monotonic_time ();
+}
 
 GList *
 __wrap_g_unix_mounts_get (guint64 *time_read)
@@ -188,6 +211,8 @@ __wrap_g_unix_mounts_changed_since (guint64 time_read)
     if (!observe_mount_cache)
         return __real_g_unix_mounts_changed_since (time_read);
     mount_table_checks++;
+    if (real_mount_cache_changes)
+        return __real_g_unix_mounts_changed_since (time_read);
     if (invalidate_mount_cache) {
         invalidate_mount_cache = FALSE;
         mount_table_invalidations++;
@@ -204,6 +229,10 @@ observe_stable_mount_table (void)
     mount_table_parses = 0;
     mount_table_checks = 0;
     mount_table_invalidations = 0;
+    mount_statx_checks = 0;
+    real_mount_cache_changes = FALSE;
+    freeze_mount_clock = TRUE;
+    mount_clock_now = __real_g_get_monotonic_time ();
 }
 
 gboolean
@@ -233,6 +262,8 @@ __wrap_statx (int fd, const char *path, int flags, unsigned int mask, struct sta
 {
     int result = __real_statx (fd, path, flags, mask, identity);
     int saved_errno = errno;
+    if (observe_mount_cache)
+        mount_statx_checks++;
     sample_descriptor_peak ();
     if (result == 0 && queued_source_roots && path[0] == '\0' && (flags & AT_EMPTY_PATH)) {
         g_autofree char *resolved = path_at_fd (fd, "");
@@ -690,6 +721,9 @@ batch_copy (gconstpointer data)
 {
     gboolean replace = GPOINTER_TO_INT (data);
     Fixture *fixture = fixture_new ();
+    /* Undo keeps the guard's shared monitor alive after directory pins close. */
+    g_autoptr (GUnixMountMonitor) baseline_monitor = g_unix_mount_monitor_get ();
+    g_assert_nonnull (baseline_monitor);
     /* Warm up GIO before measuring only transfer-owned descriptors. */
     NemoTransferGuard *guard = new_guard (fixture, fixture->destination);
     release_guard (guard);
@@ -1038,6 +1072,70 @@ mount_table_cache_invalidation (void)
     fixture_free (fixture);
 }
 
+static void
+mount_table_cache_real_monitor (void)
+{
+    Fixture *fixture = fixture_new ();
+    selected_bucket = "b0";
+    g_autofree char *source = g_build_filename (fixture->sources, "source", NULL);
+    create_file (source, "real mount monitor cache still validates actual descriptors\n");
+    observe_stable_mount_table ();
+    real_mount_cache_changes = TRUE;
+    freeze_mount_clock = FALSE;
+    gint64 started = __real_g_get_monotonic_time ();
+    NemoTransferGuard *guard = new_guard (fixture, fixture->destination);
+    for (guint i = 0; i < 8; i++) {
+        g_autofree char *name = g_strdup_printf ("copy-%u", i);
+        g_autofree char *destination = g_build_filename (fixture->destination, name, NULL);
+        NemoTransferUndo *undo =
+            finish_copy (publish_copy (guard, source, destination, FALSE, NULL));
+        nemo_transfer_undo_unref (undo);
+    }
+    gint64 elapsed = __real_g_get_monotonic_time () - started;
+    g_assert_cmpuint (mount_table_parses, >=, 1);
+    g_assert_cmpuint (mount_table_parses, <=, 2 + elapsed / G_TIME_SPAN_SECOND);
+    g_assert_cmpuint (mount_table_checks, >, 8);
+    g_assert_cmpuint (mount_statx_checks, >, 8);
+    release_guard (guard);
+    observe_mount_cache = FALSE;
+    real_mount_cache_changes = FALSE;
+    g_test_message ("Unmocked changed_since: %u parses, %u cache checks, %u actual statx calls",
+                    mount_table_parses, mount_table_checks, mount_statx_checks);
+    fixture_free (fixture);
+}
+
+static void
+mount_table_cache_clock_expiry (void)
+{
+    Fixture *fixture = fixture_new ();
+    g_autofree char *before = snapshot_tree (fixture->path);
+    observe_stable_mount_table ();
+    NemoTransferGuard *guard = new_guard (fixture, fixture->destination);
+    g_assert_cmpuint (mount_table_parses, ==, 1);
+    g_autoptr (GError) error = NULL;
+    guint initial_statx = mount_statx_checks;
+    mount_clock_now += G_TIME_SPAN_SECOND - 1;
+    g_assert_true (nemo_transfer_guard_check (guard, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (mount_table_parses, ==, 1);
+    g_assert_cmpuint (mount_statx_checks, >, initial_statx);
+    guint before_expiry = mount_statx_checks;
+    /* changed_since stays FALSE, and no GLib main context is dispatched. */
+    mount_clock_now++;
+    g_assert_true (nemo_transfer_guard_check (guard, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (mount_table_parses, ==, 2);
+    g_assert_cmpuint (mount_statx_checks, >, before_expiry);
+    g_assert_cmpuint (mount_table_invalidations, ==, 0);
+    g_assert_true (nemo_transfer_guard_check (guard, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (mount_table_parses, ==, 2);
+    release_guard (guard);
+    observe_mount_cache = FALSE;
+    assert_tree_unchanged (fixture->path, before);
+    fixture_free (fixture);
+}
+
 static char *
 find_fixture_inode (const char *path, const struct stat *expected)
 {
@@ -1173,6 +1271,140 @@ namespace_refusal_disables_move_fallback (gconstpointer data)
             g_assert_cmpuint (children_left->len, ==, 1);
         }
     }
+    g_free (race.public_path);
+    fixture_free (fixture);
+}
+
+static char *
+only_failed_initializer (Fixture *fixture)
+{
+    g_autoptr (GPtrArray) entries = children (fixture->destination);
+    char *candidate = NULL;
+    for (guint i = 0; i < entries->len; i++) {
+        const char *name = entries->pdata[i];
+        if (!g_str_has_prefix (name, ".nemo-recovery-init-"))
+            continue;
+        g_assert_null (candidate);
+        candidate = g_build_filename (fixture->destination, name, NULL);
+    }
+    g_assert_nonnull (candidate);
+    return candidate;
+}
+
+static void
+initialization_failure_latched (gconstpointer data)
+{
+    gboolean foreign = GPOINTER_TO_INT (data);
+    Fixture *fixture = fixture_new ();
+    selected_bucket = "b1";
+    for (guint i = 0; i < 8; i++) {
+        g_autofree char *name = g_strdup_printf ("item-%u", i);
+        g_autofree char *source = g_build_filename (fixture->sources, name, NULL);
+        g_autofree char *destination = g_build_filename (fixture->destination, name, NULL);
+        create_file (source, "original source survives repeated initialization failure\n");
+        create_file (destination, "original destination survives repeated initialization failure\n");
+    }
+    NemoTransferGuard *guard = new_guard (fixture, fixture->destination);
+    NamespaceRace race = {
+        .fixture = fixture,
+        .public_path = g_strdup (fixture->recovery),
+        .io_operation = 1,
+        .observing = TRUE
+    };
+    namespace_race = &race;
+    g_autoptr (GError) first_error = NULL;
+    g_autofree char *candidate = NULL;
+    g_autofree char *candidate_before = NULL;
+    for (guint i = 0; i < 8; i++) {
+        g_autofree char *name = g_strdup_printf ("item-%u", i);
+        g_autofree char *source_path = g_build_filename (fixture->sources, name, NULL);
+        g_autofree char *destination_path = g_build_filename (fixture->destination, name, NULL);
+        g_autoptr (GFile) source = g_file_new_for_path (source_path);
+        g_autoptr (GFile) destination = g_file_new_for_path (destination_path);
+        g_autoptr (GError) error = NULL;
+        NemoTransferTransaction *transaction =
+            nemo_transfer_transaction_new (guard, source, destination, NULL, &error);
+        g_assert_null (transaction);
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+        g_assert_nonnull (strstr (error->message, g_strerror (EIO)));
+        g_assert_false (nemo_transfer_guard_can_copy_fallback (guard));
+        if (i == 0) {
+            first_error = g_error_copy (error);
+            candidate = only_failed_initializer (fixture);
+            if (foreign) {
+                g_autofree char *owner = g_build_filename (candidate, "owner", NULL);
+                g_autofree char *unknown = g_build_filename (candidate, "foreign-data", NULL);
+                change_byte (owner, 0);
+                create_file (unknown, "foreign changed candidate data must never be deleted\n");
+            }
+            candidate_before = snapshot_tree (candidate);
+        } else {
+            g_assert_cmpuint (error->domain, ==, first_error->domain);
+            g_assert_cmpint (error->code, ==, first_error->code);
+            g_assert_cmpstr (error->message, ==, first_error->message);
+        }
+        g_autofree char *only_candidate = only_failed_initializer (fixture);
+        g_assert_cmpstr (only_candidate, ==, candidate);
+        assert_tree_unchanged (candidate, candidate_before);
+        g_assert_false (g_file_test (fixture->recovery, G_FILE_TEST_EXISTS));
+        assert_contents (source_path, "original source survives repeated initialization failure\n");
+        assert_contents (destination_path, "original destination survives repeated initialization failure\n");
+    }
+    namespace_race = NULL;
+    g_assert_cmpuint (race.io_faults, ==, 1);
+    g_autoptr (GError) error = NULL;
+    g_assert_true (nemo_transfer_guard_release (guard, &error));
+    g_assert_no_error (error);
+    g_autofree char *source_path = g_build_filename (fixture->sources, "item-0", NULL);
+    g_autofree char *destination_path = g_build_filename (fixture->destination, "after-release", NULL);
+    NemoTransferUndo *undo =
+        finish_copy (publish_copy (guard, source_path, destination_path, FALSE, NULL));
+    release_guard (guard);
+    release_undo (undo);
+    assert_tree_unchanged (candidate, candidate_before);
+    g_autofree char *only_candidate = only_failed_initializer (fixture);
+    g_assert_cmpstr (only_candidate, ==, candidate);
+    g_assert_cmpuint (inventory (fixture->recovery).transactions, ==, 0);
+    g_free (race.public_path);
+    fixture_free (fixture);
+}
+
+static void
+initialization_cancellation_not_latched (void)
+{
+    Fixture *fixture = fixture_new ();
+    selected_bucket = "b2";
+    g_autofree char *source_path = g_build_filename (fixture->sources, "item", NULL);
+    g_autofree char *destination_path = g_build_filename (fixture->destination, "item", NULL);
+    create_file (source_path, "cancelled initialization can be retried in the same guard\n");
+    NemoTransferGuard *guard = new_guard (fixture, fixture->destination);
+    g_autoptr (GFile) source = g_file_new_for_path (source_path);
+    g_autoptr (GFile) destination = g_file_new_for_path (destination_path);
+    g_autoptr (GCancellable) cancel = g_cancellable_new ();
+    NamespaceRace race = {
+        .fixture = fixture,
+        .public_path = g_strdup (fixture->recovery),
+        .cancel_initialization = cancel,
+        .observing = TRUE
+    };
+    namespace_race = &race;
+    g_autoptr (GError) error = NULL;
+    NemoTransferTransaction *transaction =
+        nemo_transfer_transaction_new (guard, source, destination, cancel, &error);
+    namespace_race = NULL;
+    g_assert_null (transaction);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    g_assert_cmpuint (race.cancellations, ==, 1);
+    g_assert_false (g_file_test (destination_path, G_FILE_TEST_EXISTS));
+    g_assert_false (g_file_test (fixture->recovery, G_FILE_TEST_EXISTS));
+    g_autofree char *candidate = only_failed_initializer (fixture);
+    g_autofree char *candidate_before = snapshot_tree (candidate);
+    /* No guard_release here: cancellation must not poison this job's namespace. */
+    NemoTransferUndo *undo =
+        finish_copy (publish_copy (guard, source_path, destination_path, FALSE, NULL));
+    release_guard (guard);
+    release_undo (undo);
+    assert_tree_unchanged (candidate, candidate_before);
     g_free (race.public_path);
     fixture_free (fixture);
 }
@@ -1415,6 +1647,10 @@ main (int argc, char **argv)
                           GUINT_TO_POINTER (2), recovery_mount_boundary);
     g_test_add_func ("/transfer-recovery/mount-cache/per-guard-invalidation",
                      mount_table_cache_invalidation);
+    g_test_add_func ("/transfer-recovery/mount-cache/real-monitor",
+                     mount_table_cache_real_monitor);
+    g_test_add_func ("/transfer-recovery/mount-cache/clock-expiry-without-main-loop",
+                     mount_table_cache_clock_expiry);
     g_test_add_data_func ("/transfer-recovery/initialization/concurrent-container",
                           GINT_TO_POINTER (FALSE), concurrent_namespace_initialization);
     g_test_add_data_func ("/transfer-recovery/initialization/concurrent-bucket",
@@ -1429,6 +1665,12 @@ main (int argc, char **argv)
                           GUINT_TO_POINTER (3), namespace_refusal_disables_move_fallback);
     g_test_add_func ("/transfer-recovery/initialization/swapped-losing-candidate",
                      initialization_preserves_swapped_candidate);
+    g_test_add_data_func ("/transfer-recovery/initialization/failure-latched-until-release",
+                          GINT_TO_POINTER (FALSE), initialization_failure_latched);
+    g_test_add_data_func ("/transfer-recovery/initialization/foreign-failed-candidate-retained",
+                          GINT_TO_POINTER (TRUE), initialization_failure_latched);
+    g_test_add_func ("/transfer-recovery/initialization/cancellation-not-latched",
+                     initialization_cancellation_not_latched);
     g_test_add_data_func ("/transfer-recovery/preflight/root-marker-content",
                           GINT_TO_POINTER (ROOT_CONTENT_CHANGED), undo_preflight_changed_namespace);
     g_test_add_data_func ("/transfer-recovery/preflight/root-marker-inode",
