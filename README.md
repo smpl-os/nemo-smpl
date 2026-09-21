@@ -16,7 +16,7 @@ nemo-smpl
 | Timecode display (hh:mm:ss:ff) in F3 preview | ❌ | ✅ |
 | Frame-by-frame stepping (< >) in F3 preview | ❌ | ✅ |
 | Media keyboard shortcuts (play/mute) | ❌ | ✅ |
-| Verify after copy (SHA-256) | ❌ | ✅ |
+| Copy verification by default (SHA-256) | ❌ | ✅ |
 | Preview Pane (Alt+F3) with GPS map | ❌ | ✅ |
 | Disk Usage Overview (Pareto charts) | ❌ | ✅ |
 | Archive browsing (ZIP/7z/TAR as folders) | ❌ | ✅ |
@@ -57,6 +57,30 @@ sudo ninja -C build install
 ```
 
 See [INSTALLATION.md](INSTALLATION.md) for detailed instructions, build dependencies, and MTP setup.
+
+## File Transfer Safety
+
+Hardened builds (`smpl_features=true`, the default) prioritize retaining data over
+completing an unsafe operation. Copy verification is enabled by default across
+copy entry points. Local transfers use checked synchronization and atomic
+publication where supported; copied moves verify the destination before
+reclaiming source space. Same-filesystem moves retain a synchronized rename path
+and are not described as checksum-verified copies.
+
+Unsupported destinations are refused rather than silently receiving weaker
+protection. This includes remote destinations and unqualified network/FUSE
+mounts. Remote sources can be **copied** to supported local storage; destructive
+moves from remote sources are refused. Replacements retain the previous
+destination in recovery storage, which can consume space until explicitly
+removed. Read the operation's result for recovery locations and incomplete work.
+
+**Transfer completion is not permission to unplug a device.** Wait for successful
+completion, eject it, and wait for removal to finish. Keep files unchanged during
+transfers and keep an independent backup of irreplaceable data. Checksums and
+filesystem flushes cannot guarantee honest hardware, eliminate every concurrent
+writer race, or certify that a remote server committed data to physical media.
+
+See [transfer behavior and recovery limits](FEATURES.md#verify-after-copymove).
 
 ## Keyboard Shortcuts
 
