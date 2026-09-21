@@ -1292,6 +1292,7 @@ rename_boundary (int oldfd, const char *old, int newfd, const char *new, unsigne
             write_contents (dst, foreign);
         else if (scenario->fault == NEW_DIRECTORY_RACE) {
             g_assert_cmpint (g_mkdir (dst, 0700), ==, 0);
+            g_assert_cmpint (lstat (dst, &f.merged_root_identity), ==, 0);
             g_autofree char *child = g_build_filename (dst, "new-child", NULL);
             write_contents (child, foreign);
         } else if (scenario->fault == NEW_SYMLINK_RACE)
@@ -2079,7 +2080,8 @@ test_transfer (void)
         g_assert_cmpint (setrlimit (RLIMIT_NOFILE, &original_limit), ==, 0);
     if (large_case ())
         check_large_contents ();
-    gboolean should_succeed = (scenario->fault == FAULT_NONE &&
+    gboolean merge_race = named ("native-directory-race");
+    gboolean should_succeed = merge_race || (scenario->fault == FAULT_NONE &&
                                !named ("real-tmpfs-destination")) || scenario->fault == RENAME_EINTR ||
         (scenario->fault == REMOTE_SOURCE && scenario->operation == COPY) ||
         scenario->fault == UNDO_TARGET_RACE || scenario->fault == UNDO_RESTORE_RACE ||
@@ -2150,7 +2152,8 @@ test_transfer (void)
         }
     }
 
-    if (scenario->operation == MOVE && !scenario->crossfs && should_succeed && !preferences) {
+    if (scenario->operation == MOVE && !scenario->crossfs && should_succeed &&
+        !preferences && !merge_race) {
         struct stat installed;
         g_assert_cmpint (lstat (f.dest, &installed), ==, 0);
         g_assert_cmpuint (installed.st_dev, ==, f.source_identity.st_dev);
@@ -2322,13 +2325,28 @@ test_transfer (void)
         g_autofree char *child = g_build_filename (f.dest, "new-child", NULL);
         assert_contents (child, foreign);
     }
+    if (merge_race) {
+        struct stat installed;
+        g_assert_cmpint (lstat (f.dest, &installed), ==, 0);
+        g_assert_cmpuint (installed.st_dev, ==, f.merged_root_identity.st_dev);
+        g_assert_cmpuint (installed.st_ino, ==, f.merged_root_identity.st_ino);
+        g_assert_false (exists (f.source));
+        g_autofree char *first = g_build_filename (f.dest, "first", NULL);
+        g_autofree char *second = g_build_filename (f.dest, "nested", "second", NULL);
+        assert_contents (first, payload);
+        assert_contents (second, previous);
+        g_assert_cmpuint (f.conflicts, ==, 0);
+        g_assert_cmpuint (f.writes, ==, 0);
+        g_assert_cmpuint (f.result.atomic_moves, ==, 2);
+    }
     if (scenario->fault == NEW_SYMLINK_RACE) {
         g_autofree char *link = g_file_read_link (f.dest, NULL);
         g_assert_cmpstr (link, ==, "foreign-link-text");
         g_autofree char *source_link = g_file_read_link (f.source, NULL);
         g_assert_cmpstr (source_link, ==, "relative-link-target");
     }
-    if (scenario->fault == NEW_FILE_RACE || scenario->fault == NEW_DIRECTORY_RACE) {
+    if (scenario->fault == NEW_FILE_RACE ||
+        (scenario->fault == NEW_DIRECTORY_RACE && !merge_race)) {
         if (scenario->operation == MOVE) {
             const char *retained = exists (f.source) ? f.source : f.capture;
             g_assert_nonnull (retained);
