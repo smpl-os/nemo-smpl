@@ -78,11 +78,14 @@ struct _NemoTransferGuard {
     TransferDirectory *destination_root;
     gboolean roots_checked;
     GList *mounts;
+    GUnixMountMonitor *mount_monitor;
     guint64 mounts_read_at;
+    gint64 mounts_refreshed_at;
     gboolean mounts_loaded;
     GHashTable *expected;
     GHashTable *record_parents;
     GHashTable *published_destinations;
+    GHashTable *namespace_errors;
     GError *error;
     GString *details;
     gboolean move;
@@ -241,10 +244,14 @@ supported_type (const char *type, gboolean destination)
 static gboolean
 supported_mount_path (NemoTransferGuard *guard, const char *path, gboolean destination)
 {
-    if (!guard->mounts_loaded || g_unix_mounts_changed_since (guard->mounts_read_at)) {
+    gint64 now = g_get_monotonic_time ();
+    if (!guard->mounts_loaded ||
+        now - guard->mounts_refreshed_at >= G_TIME_SPAN_SECOND ||
+        g_unix_mounts_changed_since (guard->mounts_read_at)) {
         g_list_free_full (guard->mounts, (GDestroyNotify) g_unix_mount_free);
         guard->mounts = g_unix_mounts_get (&guard->mounts_read_at);
         guard->mounts_loaded = TRUE;
+        guard->mounts_refreshed_at = now;
     }
     const char *best_type = NULL;
     gsize best_length = 0;
@@ -561,6 +568,9 @@ nemo_transfer_guard_new (GList *sources, GFile *destination, gboolean move)
     NemoTransferGuard *guard = g_new0 (NemoTransferGuard, 1);
     guard->refs = 1;
     guard->move = move;
+    /* Acquire on the enqueue thread; workers must not create an undispatched
+     * mount-watch context. Cache age also bounds staleness without a main loop. */
+    guard->mount_monitor = g_unix_mount_monitor_get ();
     guard->directories = g_ptr_array_new_with_free_func (directory_free);
     guard->roots = g_ptr_array_new ();
     guard->directory_index = g_hash_table_new (g_file_hash, (GEqualFunc) g_file_equal);
@@ -574,6 +584,8 @@ nemo_transfer_guard_new (GList *sources, GFile *destination, gboolean move)
                                                  g_object_unref, NULL);
     guard->published_destinations = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
                                                          g_object_unref, NULL);
+    guard->namespace_errors = g_hash_table_new_full (g_file_hash, (GEqualFunc) g_file_equal,
+                                                    g_object_unref, (GDestroyNotify) g_error_free);
     guard->details = g_string_new (NULL);
     if (nemo_mount_operation_is_removing ()) {
         g_set_error_literal (&guard->error, G_IO_ERROR, G_IO_ERROR_BUSY,
@@ -631,7 +643,9 @@ nemo_transfer_guard_unref (NemoTransferGuard *guard)
     g_hash_table_unref (guard->expected);
     g_hash_table_unref (guard->record_parents);
     g_hash_table_unref (guard->published_destinations);
+    g_hash_table_unref (guard->namespace_errors);
     g_list_free_full (guard->mounts, (GDestroyNotify) g_unix_mount_free);
+    g_clear_object (&guard->mount_monitor);
     g_clear_error (&guard->error);
     g_string_free (guard->details, TRUE);
     g_free (guard);
@@ -714,6 +728,7 @@ nemo_transfer_guard_release (NemoTransferGuard *guard, GError **error)
         g_list_free (destinations);
     }
     guard->released = TRUE;
+    g_hash_table_remove_all (guard->namespace_errors);
     return ok;
 }
 
@@ -1296,11 +1311,14 @@ recovery_candidate_cleanup (TransferRecovery *recovery, RecoveryCandidate *candi
                 break;
             if (errno != EEXIST || i == 15) {
                 int saved = errno;
+                g_autofree char *original = g_build_filename (recovery->parent->path,
+                                                             original_name, NULL);
                 g_autofree char *location = g_build_filename (recovery->parent->path,
                                                              recovery->container_name, captured_name, NULL);
                 g_string_append_printf (recovery->parent->guard->details,
-                                        _("\nInitialization capture could not be confirmed. Inspect recovery entry: %s"),
-                                        location);
+                                        _("\nInitialization capture could not be confirmed. "
+                                          "Inspect both possible locations:\n%s\n%s"),
+                                        original, location);
                 errno = saved;
                 return transfer_error (error, _("Could not capture losing recovery initialization storage"));
             }
@@ -1400,15 +1418,35 @@ recovery_candidate_finish (TransferRecovery *recovery, RecoveryCandidate *candid
         recovery_candidate_report (recovery, candidate);
     if (candidate->fd >= 0 && !close_checked (candidate->fd, ok ? error : NULL))
         ok = FALSE;
+    if (!ok) {
+        recovery_namespace_failed (error);
+        if (candidate->created && error && *error &&
+            !g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_autoptr (GFile) namespace = g_file_get_child (recovery->parent->file,
+                                                          recovery->container_name);
+            GHashTable *failures = recovery->parent->guard->namespace_errors;
+            if (!g_hash_table_contains (failures, namespace))
+                g_hash_table_insert (failures, g_object_ref (namespace), g_error_copy (*error));
+        }
+    }
     snapshot_clear (&candidate->marker);
     g_free (candidate->name);
-    return ok || recovery_namespace_failed (error);
+    return ok;
 }
 
 static gboolean
 recovery_container_open (TransferRecovery *recovery, gboolean create,
                          GCancellable *cancel, GError **error)
 {
+    if (create) {
+        g_autoptr (GFile) namespace = g_file_get_child (recovery->parent->file,
+                                                      recovery->container_name);
+        GError *failure = g_hash_table_lookup (recovery->parent->guard->namespace_errors, namespace);
+        if (failure) {
+            g_propagate_error (error, g_error_copy (failure));
+            return FALSE;
+        }
+    }
     if (recovery->container_fd >= 0) {
         int fd = recovery->container_fd;
         recovery->container_fd = -1;
