@@ -945,6 +945,30 @@ recovery_owned_snapshot (const TransferSnapshot *expected, const TransferSnapsho
 }
 
 static gboolean
+recovery_mount_path (TransferRecovery *recovery, const char *bucket, const char *transaction,
+                     GError **error)
+{
+    g_autofree char *path = g_build_filename (recovery->parent->path,
+                                             recovery->container_name, bucket, transaction, NULL);
+    return supported_mount_path (path, recovery->parent->destination) || unsupported (error);
+}
+
+static gboolean
+recovery_same_mount (TransferRecovery *recovery, int fd, GError **error)
+{
+    struct statx identity;
+    if (!directory_identity (fd, &identity, error))
+        return FALSE;
+    if (identity.stx_mnt_id != recovery->parent->identity.stx_mnt_id) {
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                             _("Recovery storage crosses a mount boundary. "
+                               "The operation was stopped without using that storage."));
+        return FALSE;
+    }
+    return supported_fd (fd, recovery->parent->destination, error);
+}
+
+static gboolean
 recovery_marker_unrecognized (TransferRecovery *recovery, GError **error)
 {
     g_autoptr (GFile) file = g_file_get_child (recovery->parent->file, recovery->container_name);
@@ -1026,7 +1050,9 @@ static gboolean
 recovery_container_check (TransferRecovery *recovery, GError **error)
 {
     struct stat current, named;
-    if (!directory_check (recovery->parent, error))
+    if (!directory_check (recovery->parent, error) ||
+        !recovery_mount_path (recovery, NULL, NULL, error) ||
+        !recovery_same_mount (recovery, recovery->container_fd, error))
         return FALSE;
     if (fstat (recovery->container_fd, &current) < 0 ||
         fstatat (recovery->parent->fd, recovery->container_name, &named, AT_SYMLINK_NOFOLLOW) < 0)
@@ -1056,7 +1082,8 @@ recovery_container_open (TransferRecovery *recovery, gboolean create,
         directory_hold (recovery->parent);
         recovery->parent_held = TRUE;
     }
-    if (!directory_check (recovery->parent, error))
+    if (!directory_check (recovery->parent, error) ||
+        !recovery_mount_path (recovery, NULL, NULL, error))
         return FALSE;
     gboolean created = FALSE;
     if (create) {
@@ -1070,6 +1097,8 @@ recovery_container_open (TransferRecovery *recovery, gboolean create,
     if (recovery->container_fd < 0)
         return errno == ENOTDIR || errno == ELOOP ? recovery_marker_unrecognized (recovery, error) :
                transfer_error (error, _("Could not pin private recovery storage"));
+    if (!recovery_same_mount (recovery, recovery->container_fd, error))
+        return FALSE;
     struct stat current;
     if (fstat (recovery->container_fd, &current) < 0)
         return transfer_error (error, _("Could not inspect private recovery storage"));
@@ -1136,7 +1165,9 @@ recovery_bucket_marker_read (TransferRecovery *recovery, TransferSnapshot *marke
 static gboolean
 recovery_bucket_check (TransferRecovery *recovery, GError **error)
 {
-    if (!recovery_container_check (recovery, error))
+    if (!recovery_container_check (recovery, error) ||
+        !recovery_mount_path (recovery, recovery->bucket_name, NULL, error) ||
+        !recovery_same_mount (recovery, recovery->bucket_fd, error))
         return FALSE;
     struct stat current, named;
     if (fstat (recovery->bucket_fd, &current) < 0 ||
@@ -1163,7 +1194,8 @@ recovery_bucket_open (TransferRecovery *recovery, gboolean create,
         if (!close_checked (fd, error))
             return FALSE;
     }
-    if (!recovery_container_check (recovery, error))
+    if (!recovery_container_check (recovery, error) ||
+        !recovery_mount_path (recovery, recovery->bucket_name, NULL, error))
         return FALSE;
     gboolean created = FALSE;
     if (create) {
@@ -1177,6 +1209,8 @@ recovery_bucket_open (TransferRecovery *recovery, gboolean create,
     if (recovery->bucket_fd < 0)
         return errno == ENOTDIR || errno == ELOOP ? recovery_marker_unrecognized (recovery, error) :
                transfer_error (error, _("Could not pin the private recovery bucket"));
+    if (!recovery_same_mount (recovery, recovery->bucket_fd, error))
+        return FALSE;
     struct stat current;
     if (fstat (recovery->bucket_fd, &current) < 0)
         return transfer_error (error, _("Could not inspect the private recovery bucket"));
@@ -1250,10 +1284,14 @@ recovery_new_in_bucket (TransferDirectory *parent, TransferRecovery *recovery,
         if (errno != EEXIST || i == 15)
             return transfer_error (error, _("Could not create private recovery storage"));
     }
+    if (!recovery_mount_path (recovery, recovery->bucket_name, recovery->name, error))
+        return FALSE;
     recovery->fd = openat (recovery->bucket_fd, recovery->name,
                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (recovery->fd < 0)
         return transfer_error (error, _("Could not pin private recovery storage"));
+    if (!recovery_same_mount (recovery, recovery->fd, error))
+        return FALSE;
     if (fstat (recovery->fd, &recovery->identity) < 0)
         return transfer_error (error, _("Could not inspect private recovery storage"));
     if (recovery->identity.st_uid != geteuid () ||
@@ -1413,7 +1451,9 @@ static gboolean
 recovery_identity_check (TransferRecovery *recovery, GError **error)
 {
     struct stat current, named;
-    if (!recovery_bucket_check (recovery, error))
+    if (!recovery_bucket_check (recovery, error) ||
+        !recovery_mount_path (recovery, recovery->bucket_name, recovery->name, error) ||
+        !recovery_same_mount (recovery, recovery->fd, error))
         return FALSE;
     if (fstat (recovery->fd, &current) < 0 ||
         fstatat (recovery->bucket_fd, recovery->name, &named, AT_SYMLINK_NOFOLLOW) < 0)
@@ -1458,10 +1498,16 @@ recovery_reopen (TransferRecovery *recovery, GError **error)
         return FALSE;
     if (recovery->cleaned)
         return TRUE;
+    if (!recovery_mount_path (recovery, recovery->bucket_name, recovery->name, error))
+        return FALSE;
     int fd = openat (recovery->bucket_fd, recovery->name,
                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0)
         return transfer_error (error, _("Could not reopen the retained recovery folder"));
+    if (!recovery_same_mount (recovery, fd, error)) {
+        close (fd);
+        return FALSE;
+    }
     struct stat current;
     if (fstat (fd, &current) < 0 || !same_inode (&recovery->identity, &current) ||
         current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH))) {
