@@ -18,6 +18,13 @@ nemo_smpl_interactive_search_mode (void)
 }
 
 gboolean
+nemo_smpl_verify_file_copies (void)
+{
+	return g_settings_get_boolean (nemo_preferences,
+				       NEMO_PREFERENCES_VERIFY_FILE_COPIES);
+}
+
+gboolean
 nemo_smpl_safe_cross_fs_copy (void)
 {
 	return g_settings_get_boolean (nemo_preferences,

@@ -120,8 +120,13 @@
     <!-- smplOS: safe cross-filesystem copy (removable / slow media) -->
     <key name="safe-cross-fs-copy" type="b">
       <default>true</default>
-      <summary>Protect files copied to removable / slow media from cache-loss corruption</summary>
-      <description>When on, cross-filesystem copies are written to an exclusively created, visible "copy.nemo-partial-UUID" file. Local file data is flushed through the writer before the final name is published, then the destination directory is flushed. Requested checksum verification happens before publication. Failures retain the source; failures before publication also retain any existing destination. Skip All skips failed items, never their safety checks. Turning this off opts ordinary, unverified copies out of staging. Copy-and-delete moves always use staging and verification before removing the source; same-filesystem renames remain fast. Remote destinations depend on their backend's close and rename guarantees; fsync and advisory cache eviction cannot guarantee device hardware behavior.</description>
+      <summary>Legacy copy safety preference (deprecated)</summary>
+      <description>Retained for compatibility. In nemo-smpl this setting no longer disables staging or durability checks. Copy-and-delete moves always require verification before removing the source. Same-filesystem renames are not checksum verified. Filesystem flushes and checksum comparisons cannot guarantee device hardware behavior; use Eject or Safely Remove before unplugging a device.</description>
+    </key>
+    <key name="verify-file-copies" type="b">
+      <default>true</default>
+      <summary>Verify copied and existing files</summary>
+      <description>Compare regular-file contents with SHA-256 before completing a copy. This global default applies to the copy dialog, clipboard, drag-and-drop and other copy entry points. Disabling it does not disable safe staging, durability checks, or mandatory verification for copy-and-delete moves. Same-filesystem renames are not checksum verified. Verification reads data through the filesystem, not necessarily from physical media.</description>
     </key>
     <key name="expand-row-on-dnd-dwell" type="b">
       <default>true</default>

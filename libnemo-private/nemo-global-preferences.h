@@ -97,6 +97,7 @@ typedef enum
 
 /* smplOS: safe cross-filesystem copy (staging + fsync). See gschema. */
 #define NEMO_PREFERENCES_SAFE_CROSS_FS_COPY "safe-cross-fs-copy"
+#define NEMO_PREFERENCES_VERIFY_FILE_COPIES "verify-file-copies"
 #endif /* NEMO_SMPL */
 
 /* Activating executable text files */
