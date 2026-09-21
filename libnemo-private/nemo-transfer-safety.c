@@ -72,8 +72,14 @@ struct _NemoTransferGuard {
     GPtrArray *directories;
     GPtrArray *roots;
     GHashTable *directory_index;
+    GHashTable *active_directories;
     GQueue directory_cache;
     guint cache_limit;
+    TransferDirectory *destination_root;
+    gboolean roots_checked;
+    GList *mounts;
+    guint64 mounts_read_at;
+    gboolean mounts_loaded;
     GHashTable *expected;
     GHashTable *record_parents;
     GHashTable *published_destinations;
@@ -82,7 +88,7 @@ struct _NemoTransferGuard {
     gboolean move;
     gboolean released;
     gboolean privacy_reported;
-    gboolean replacement_unsupported;
+    gboolean copy_fallback_blocked;
 };
 
 struct _NemoTransferTransaction {
@@ -233,12 +239,16 @@ supported_type (const char *type, gboolean destination)
 /* Consult the kernel mount table before opening paths on potentially blocked
  * network/FUSE mounts. Never infer a local backend from GFile's native flag. */
 static gboolean
-supported_mount_path (const char *path, gboolean destination)
+supported_mount_path (NemoTransferGuard *guard, const char *path, gboolean destination)
 {
-    GList *mounts = g_unix_mounts_get (NULL);
+    if (!guard->mounts_loaded || g_unix_mounts_changed_since (guard->mounts_read_at)) {
+        g_list_free_full (guard->mounts, (GDestroyNotify) g_unix_mount_free);
+        guard->mounts = g_unix_mounts_get (&guard->mounts_read_at);
+        guard->mounts_loaded = TRUE;
+    }
     const char *best_type = NULL;
     gsize best_length = 0;
-    for (GList *l = mounts; l; l = l->next) {
+    for (GList *l = guard->mounts; l; l = l->next) {
         GUnixMountEntry *mount = l->data;
         const char *root = g_unix_mount_get_mount_path (mount);
         gsize length = strlen (root);
@@ -249,7 +259,6 @@ supported_mount_path (const char *path, gboolean destination)
         }
     }
     gboolean ok = supported_type (best_type, destination);
-    g_list_free_full (mounts, (GDestroyNotify) g_unix_mount_free);
     return ok;
 }
 
@@ -340,8 +349,8 @@ directory_free (gpointer data)
 static TransferDirectory *
 directory_hold (TransferDirectory *directory)
 {
-    if (directory)
-        directory->pins++;
+    if (directory && directory->pins++ == 0)
+        g_hash_table_add (directory->guard->active_directories, directory);
     return directory;
 }
 
@@ -350,7 +359,8 @@ directory_unpin (TransferDirectory *directory)
 {
     if (directory) {
         g_assert (directory->pins > 0);
-        directory->pins--;
+        if (--directory->pins == 0)
+            g_hash_table_remove (directory->guard->active_directories, directory);
     }
 }
 
@@ -369,7 +379,7 @@ static void
 directory_cache_touch (TransferDirectory *directory)
 {
     directory_cache_remove (directory);
-    if (!directory->root && directory->fd >= 0) {
+    if (directory->fd >= 0) {
         directory->cache_link.data = directory;
         g_queue_push_tail_link (&directory->guard->directory_cache, &directory->cache_link);
     }
@@ -387,8 +397,8 @@ directory_cache_room (NemoTransferGuard *guard, TransferDirectory *keep, GError 
                 break;
             }
         }
-        /* Active aliases must keep their descriptor numbers. The cache bound
-         * excludes the live recursive call stack and permanent queue roots. */
+        /* Active aliases must keep their descriptor numbers. Queue roots keep
+         * their identity records, but idle root descriptors are evictable too. */
         if (!candidate)
             break;
         directory_cache_remove (candidate);
@@ -409,7 +419,7 @@ static gboolean
 directory_check (TransferDirectory *directory, GError **error)
 {
     struct statx current;
-    if (!supported_mount_path (directory->path, directory->destination))
+    if (!supported_mount_path (directory->guard, directory->path, directory->destination))
         return changed (error);
     if (!directory_cache_room (directory->guard, directory, error))
         return FALSE;
@@ -437,13 +447,16 @@ guard_directory (NemoTransferGuard *guard, GFile *file, gboolean destination,
 {
     if (!initial && destination) {
         gboolean within_destination = FALSE;
-        for (guint i = 0; i < guard->roots->len; i++) {
-            TransferDirectory *root = g_ptr_array_index (guard->roots, i);
-            if (root->root && root->destination &&
-                (g_file_equal (file, root->file) || g_file_has_prefix (file, root->file))) {
+        g_autoptr (GFile) scope = g_object_ref (file);
+        while (scope) {
+            TransferDirectory *root = g_hash_table_lookup (guard->directory_index, scope);
+            if (root && root->root && root->destination) {
                 within_destination = TRUE;
                 break;
             }
+            GFile *next = g_file_get_parent (scope);
+            g_object_unref (scope);
+            scope = next;
         }
         if (!within_destination) {
             changed (error);
@@ -461,14 +474,13 @@ guard_directory (NemoTransferGuard *guard, GFile *file, gboolean destination,
             return NULL;
         existing->destination |= destination;
         if (initial && !existing->root) {
-            directory_cache_remove (existing);
             existing->root = TRUE;
             g_ptr_array_add (guard->roots, existing);
         }
         return existing;
     }
     g_autofree char *path = g_file_get_path (file);
-    if (!path || !g_file_is_native (file) || !supported_mount_path (path, destination)) {
+    if (!path || !g_file_is_native (file) || !supported_mount_path (guard, path, destination)) {
         unsupported (error);
         return NULL;
     }
@@ -552,6 +564,7 @@ nemo_transfer_guard_new (GList *sources, GFile *destination, gboolean move)
     guard->directories = g_ptr_array_new_with_free_func (directory_free);
     guard->roots = g_ptr_array_new ();
     guard->directory_index = g_hash_table_new (g_file_hash, (GEqualFunc) g_file_equal);
+    guard->active_directories = g_hash_table_new (g_direct_hash, g_direct_equal);
     struct rlimit limit;
     guard->cache_limit = getrlimit (RLIMIT_NOFILE, &limit) == 0 ?
                          CLAMP (limit.rlim_cur / 8, 4, 32) : 16;
@@ -568,14 +581,17 @@ nemo_transfer_guard_new (GList *sources, GFile *destination, gboolean move)
                                "all source files were retained."));
         return guard;
     }
-    if (destination && !guard_directory (guard, destination, TRUE, TRUE, &guard->error))
-        return guard;
+    if (destination) {
+        guard->destination_root = guard_directory (guard, destination, TRUE, TRUE, &guard->error);
+        if (!guard->destination_root)
+            return guard;
+    }
     for (GList *l = sources; l && !guard->error; l = l->next) {
         GFile *source = l->data;
         g_autoptr (GFile) parent = g_file_get_parent (source);
         g_autofree char *path = g_file_get_path (source);
         gboolean supported = path && g_file_is_native (source) &&
-                             supported_mount_path (path, FALSE);
+                             supported_mount_path (guard, path, FALSE);
         if (move && !supported) {
             if (g_file_has_uri_scheme (source, "trash"))
                 g_set_error_literal (&guard->error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
@@ -609,11 +625,13 @@ nemo_transfer_guard_unref (NemoTransferGuard *guard)
     if (!guard || !g_atomic_int_dec_and_test (&guard->refs))
         return;
     g_hash_table_unref (guard->directory_index);
+    g_hash_table_unref (guard->active_directories);
     g_ptr_array_unref (guard->roots);
     g_ptr_array_unref (guard->directories);
     g_hash_table_unref (guard->expected);
     g_hash_table_unref (guard->record_parents);
     g_hash_table_unref (guard->published_destinations);
+    g_list_free_full (guard->mounts, (GDestroyNotify) g_unix_mount_free);
     g_clear_error (&guard->error);
     g_string_free (guard->details, TRUE);
     g_free (guard);
@@ -632,10 +650,40 @@ nemo_transfer_guard_check (NemoTransferGuard *guard, GError **error)
                              _("A device removal is in progress. Remaining source files were retained."));
         return FALSE;
     }
-    for (guint i = 0; i < guard->roots->len; i++) {
-        TransferDirectory *directory = g_ptr_array_index (guard->roots, i);
-        if (directory->root && !directory_check (directory, error))
+    if (!guard->roots_checked) {
+        for (guint i = 0; i < guard->roots->len; i++)
+            if (!directory_check (g_ptr_array_index (guard->roots, i), error))
+                return FALSE;
+        guard->roots_checked = TRUE;
+    }
+    g_autoptr (GHashTable) checked = g_hash_table_new (g_direct_hash, g_direct_equal);
+    if (guard->destination_root) {
+        if (!directory_check (guard->destination_root, error))
             return FALSE;
+        g_hash_table_add (checked, guard->destination_root);
+    }
+    GHashTableIter active;
+    gpointer value;
+    g_hash_table_iter_init (&active, guard->active_directories);
+    while (g_hash_table_iter_next (&active, &value, NULL)) {
+        TransferDirectory *directory = value;
+        if (!g_hash_table_contains (checked, directory)) {
+            if (!directory_check (directory, error))
+                return FALSE;
+            g_hash_table_add (checked, directory);
+        }
+        g_autoptr (GFile) ancestor = g_file_get_parent (directory->file);
+        while (ancestor) {
+            TransferDirectory *root = g_hash_table_lookup (guard->directory_index, ancestor);
+            if (root && root->root && !g_hash_table_contains (checked, root)) {
+                if (!directory_check (root, error))
+                    return FALSE;
+                g_hash_table_add (checked, root);
+            }
+            GFile *next = g_file_get_parent (ancestor);
+            g_object_unref (ancestor);
+            ancestor = next;
+        }
     }
     return TRUE;
 }
@@ -711,7 +759,7 @@ nemo_transfer_guard_file (NemoTransferGuard *guard, GFile *file, gboolean destin
     g_autoptr (GFile) parent = g_file_get_parent (file);
     g_autofree char *path = g_file_get_path (file);
     if (!destination && !guard->move &&
-        (!path || !g_file_is_native (file) || !supported_mount_path (path, FALSE)))
+        (!path || !g_file_is_native (file) || !supported_mount_path (guard, path, FALSE)))
         return g_object_ref (file);
     TransferDirectory *directory = parent ? guard_directory (guard, parent, destination, FALSE, error) : NULL;
     if (!directory) {
@@ -731,7 +779,7 @@ nemo_transfer_guard_directory (NemoTransferGuard *guard, GFile *file, gboolean d
         return NULL;
     g_autofree char *path = g_file_get_path (file);
     if (!destination && !guard->move &&
-        (!path || !g_file_is_native (file) || !supported_mount_path (path, FALSE)))
+        (!path || !g_file_is_native (file) || !supported_mount_path (guard, path, FALSE)))
         return g_object_ref (file);
     TransferDirectory *directory = guard_directory (guard, file, destination, FALSE, error);
     return directory ? directory_file (directory, ".") : NULL;
@@ -741,13 +789,15 @@ static TransferDirectory *
 recovery_parent (NemoTransferGuard *guard, TransferDirectory *parent, gboolean destination)
 {
     TransferDirectory *root = parent;
-    for (guint i = 0; i < guard->roots->len; i++) {
-        TransferDirectory *candidate = g_ptr_array_index (guard->roots, i);
-        if (candidate->root && (!destination || candidate->destination) &&
-            candidate->identity.stx_mnt_id == parent->identity.stx_mnt_id &&
-            g_file_has_prefix (parent->file, candidate->file) &&
-            strlen (candidate->path) < strlen (root->path))
+    g_autoptr (GFile) ancestor = g_file_get_parent (parent->file);
+    while (ancestor) {
+        TransferDirectory *candidate = g_hash_table_lookup (guard->directory_index, ancestor);
+        if (candidate && candidate->root && (!destination || candidate->destination) &&
+            candidate->identity.stx_mnt_id == parent->identity.stx_mnt_id)
             root = candidate;
+        GFile *next = g_file_get_parent (ancestor);
+        g_object_unref (ancestor);
+        ancestor = next;
     }
     return root;
 }
@@ -945,12 +995,23 @@ recovery_owned_snapshot (const TransferSnapshot *expected, const TransferSnapsho
 }
 
 static gboolean
+recovery_namespace_failed (GError **error)
+{
+    if (error && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
+        (*error)->code = G_IO_ERROR_FAILED;
+    return FALSE;
+}
+
+static gboolean
 recovery_mount_path (TransferRecovery *recovery, const char *bucket, const char *transaction,
                      GError **error)
 {
     g_autofree char *path = g_build_filename (recovery->parent->path,
                                              recovery->container_name, bucket, transaction, NULL);
-    return supported_mount_path (path, recovery->parent->destination) || unsupported (error);
+    if (supported_mount_path (recovery->parent->guard, path, recovery->parent->destination))
+        return TRUE;
+    unsupported (error);
+    return recovery_namespace_failed (error);
 }
 
 static gboolean
@@ -958,14 +1019,15 @@ recovery_same_mount (TransferRecovery *recovery, int fd, GError **error)
 {
     struct statx identity;
     if (!directory_identity (fd, &identity, error))
-        return FALSE;
+        return recovery_namespace_failed (error);
     if (identity.stx_mnt_id != recovery->parent->identity.stx_mnt_id) {
         g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                              _("Recovery storage crosses a mount boundary. "
                                "The operation was stopped without using that storage."));
         return FALSE;
     }
-    return supported_fd (fd, recovery->parent->destination, error);
+    return supported_fd (fd, recovery->parent->destination, error) ||
+           recovery_namespace_failed (error);
 }
 
 static gboolean
@@ -973,7 +1035,7 @@ recovery_marker_unrecognized (TransferRecovery *recovery, GError **error)
 {
     g_autoptr (GFile) file = g_file_get_child (recovery->parent->file, recovery->container_name);
     g_autofree char *path = g_file_get_parse_name (file);
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                  _("Recovery storage at \"%s\" has no recognized owner record or is not owner-controlled. "
                    "It was left unchanged. Wait for any other transfer to finish, "
                    "then inspect this folder or choose another location."), path);
@@ -1069,6 +1131,281 @@ recovery_container_check (TransferRecovery *recovery, GError **error)
 }
 
 static gboolean
+recovery_candidate_owned (int parent, const char *name, int fd,
+                          const struct stat *identity, GError **error)
+{
+    struct stat current, named;
+    if (fstat (fd, &current) < 0 ||
+        fstatat (parent, name, &named, AT_SYMLINK_NOFOLLOW) < 0)
+        return transfer_error (error, _("Could not confirm the recovery initialization folder"));
+    if (!same_inode (identity, &current) || !same_inode (&current, &named) ||
+        current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH)))
+        return changed (error);
+    return TRUE;
+}
+
+typedef struct {
+    char *name;
+    int fd;
+    struct stat identity;
+    TransferSnapshot marker;
+    gboolean created;
+    gboolean published;
+    gboolean private_parent;
+} RecoveryCandidate;
+
+static void
+recovery_candidate_report (TransferRecovery *recovery, RecoveryCandidate *candidate)
+{
+    char proc[64], path[4096];
+    int fd = candidate->fd;
+    if (fd < 0 && candidate->published)
+        fd = candidate->private_parent ? recovery->bucket_fd : recovery->container_fd;
+    g_snprintf (proc, sizeof proc, "/proc/self/fd/%d", fd);
+    ssize_t count = readlink (proc, path, sizeof path - 1);
+    g_autofree char *location = NULL;
+    if (count >= 0) {
+        path[count] = '\0';
+        location = g_strdup (path);
+    } else if (candidate->published) {
+        location = g_build_filename (recovery->parent->path, recovery->container_name,
+                                     candidate->private_parent ? recovery->bucket_name : NULL, NULL);
+    } else if (candidate->private_parent) {
+        location = g_build_filename (recovery->parent->path, recovery->container_name,
+                                     candidate->name, NULL);
+    } else {
+        location = g_build_filename (recovery->parent->path, candidate->name, NULL);
+    }
+    g_autoptr (GFile) file = g_file_new_for_path (location);
+    g_autofree char *display = g_file_get_parse_name (file);
+    g_string_append_printf (recovery->parent->guard->details,
+                            _("\nRecovery initialization was not completed. Inspect retained storage: %s"),
+                            display);
+}
+
+static int
+recovery_namespace_open (TransferRecovery *recovery, int parent, const char *name,
+                         const char *contents, gboolean create, gboolean private_parent,
+                         RecoveryCandidate *candidate, GCancellable *cancel, GError **error)
+{
+    int fd = openat (parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd >= 0)
+        return fd;
+    if (errno != ENOENT || !create) {
+        if (errno == ENOTDIR || errno == ELOOP)
+            recovery_marker_unrecognized (recovery, error);
+        else
+            transfer_error (error, _("Could not pin private recovery storage"));
+        return -1;
+    }
+    candidate->private_parent = private_parent;
+    for (guint i = 0; i < 16; i++) {
+        g_autofree char *uuid = g_uuid_string_random ();
+        g_free (candidate->name);
+        candidate->name = g_strconcat (private_parent ? "bucket-init-" : ".nemo-recovery-init-", uuid, NULL);
+        if (mkdirat (parent, candidate->name, 0700) == 0) {
+            candidate->created = TRUE;
+            break;
+        }
+        if (errno != EEXIST || i == 15) {
+            transfer_error (error, _("Could not create recovery initialization storage"));
+            return -1;
+        }
+    }
+    g_autofree char *candidate_path = private_parent ?
+        g_build_filename (recovery->parent->path, recovery->container_name, candidate->name, NULL) :
+        g_build_filename (recovery->parent->path, candidate->name, NULL);
+    if (!supported_mount_path (recovery->parent->guard, candidate_path, recovery->parent->destination)) {
+        changed (error);
+        return -1;
+    }
+    candidate->fd = openat (parent, candidate->name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (candidate->fd < 0) {
+        transfer_error (error, _("Could not pin recovery initialization storage"));
+        return -1;
+    }
+    if (!recovery_same_mount (recovery, candidate->fd, error))
+        return -1;
+    if (fstat (candidate->fd, &candidate->identity) < 0) {
+        transfer_error (error, _("Could not identify recovery initialization storage"));
+        return -1;
+    }
+    if (!recovery_candidate_owned (parent, candidate->name, candidate->fd, &candidate->identity, error))
+        return -1;
+    int marker = openat (candidate->fd, "owner", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (marker < 0) {
+        transfer_error (error, _("Could not create the recovery storage owner record"));
+        return -1;
+    }
+    gboolean ok = write_all (marker, contents, strlen (contents), error) &&
+                  sync_fd (marker, cancel, error);
+    if (ok && fstat (marker, &candidate->marker.stat) < 0)
+        ok = transfer_error (error, _("Could not identify the recovery storage owner record"));
+    if (ok)
+        candidate->marker.checksum = g_compute_checksum_for_string (G_CHECKSUM_SHA256, contents, -1);
+    if (!close_checked (marker, ok ? error : NULL))
+        ok = FALSE;
+    TransferSnapshot current = { 0 };
+    if (ok)
+        ok = recovery_namespace_marker_read (recovery, candidate->fd, contents, FALSE, &current, cancel, error);
+    if (ok && !recovery_owned_snapshot (&candidate->marker, &current))
+        ok = changed (error);
+    snapshot_clear (&current);
+    if (!ok || !sync_fd (candidate->fd, cancel, error) ||
+        !check_directory_close (candidate->fd, error) ||
+        !recovery_candidate_owned (parent, candidate->name, candidate->fd, &candidate->identity, error))
+        return -1;
+    if (renameat2 (parent, candidate->name, parent, name, RENAME_NOREPLACE) == 0) {
+        candidate->published = TRUE;
+        if (!recovery_candidate_owned (parent, name, candidate->fd, &candidate->identity, error) ||
+            !sync_fd (parent, cancel, error))
+            return -1;
+        fd = candidate->fd;
+        candidate->fd = -1;
+        return fd;
+    }
+    if (errno != EEXIST) {
+        transfer_error (error, _("Could not atomically initialize private recovery storage"));
+        return -1;
+    }
+    fd = openat (parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0)
+        transfer_error (error, _("Could not open the concurrently initialized recovery storage"));
+    return fd;
+}
+
+static gboolean
+recovery_candidate_cleanup (TransferRecovery *recovery, RecoveryCandidate *candidate, GError **error)
+{
+    if (!candidate->created || candidate->published)
+        return TRUE;
+    if (!recovery_container_check (recovery, error))
+        return FALSE;
+    if (!candidate->private_parent) {
+        /* Capture before cleanup: a replaced public name must never be
+         * removed by a stat-then-rmdir sequence. Unknown captures are restored
+         * without replacement, or retained intact and reported. */
+        g_autofree char *original_name = g_strdup (candidate->name);
+        g_autofree char *captured_name = NULL;
+        for (guint i = 0; i < 16; i++) {
+            g_autofree char *uuid = g_uuid_string_random ();
+            g_free (captured_name);
+            captured_name = g_strconcat ("initialization-", uuid, NULL);
+            if (renameat2 (recovery->parent->fd, original_name,
+                           recovery->container_fd, captured_name, RENAME_NOREPLACE) == 0)
+                break;
+            if (errno != EEXIST || i == 15) {
+                int saved = errno;
+                g_autofree char *location = g_build_filename (recovery->parent->path,
+                                                             recovery->container_name, captured_name, NULL);
+                g_string_append_printf (recovery->parent->guard->details,
+                                        _("\nInitialization capture could not be confirmed. Inspect recovery entry: %s"),
+                                        location);
+                errno = saved;
+                return transfer_error (error, _("Could not capture losing recovery initialization storage"));
+            }
+        }
+        if (!recovery_candidate_owned (recovery->container_fd, captured_name, candidate->fd,
+                                       &candidate->identity, error)) {
+            if (renameat2 (recovery->container_fd, captured_name, recovery->parent->fd,
+                           original_name, RENAME_NOREPLACE) < 0) {
+                g_autofree char *retained = g_build_filename (recovery->parent->path, recovery->container_name,
+                                                             captured_name, NULL);
+                g_autofree char *original = g_build_filename (recovery->parent->path, original_name, NULL);
+                g_string_append_printf (recovery->parent->guard->details,
+                                        _("\nA changed initialization entry was not deleted, but its restoration "
+                                          "could not be confirmed. Inspect both locations:\n%s\n%s"),
+                                        original, retained);
+            }
+            sync_fd (recovery->container_fd, NULL, NULL);
+            sync_fd (recovery->parent->fd, NULL, NULL);
+            return FALSE;
+        }
+        g_free (candidate->name);
+        candidate->name = g_steal_pointer (&captured_name);
+        candidate->private_parent = TRUE;
+        if (!sync_fd (recovery->parent->fd, NULL, error) ||
+            !sync_fd (recovery->container_fd, NULL, error))
+            return FALSE;
+    }
+    if (!recovery_candidate_owned (recovery->container_fd, candidate->name, candidate->fd,
+                                   &candidate->identity, error))
+        return FALSE;
+    int scan = openat (candidate->fd, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    DIR *entries = scan < 0 ? NULL : fdopendir (scan);
+    if (!entries) {
+        if (scan >= 0)
+            close (scan);
+        return transfer_error (error, _("Could not inspect losing recovery initialization storage"));
+    }
+    gboolean ok = TRUE;
+    guint count = 0;
+    while (ok) {
+        errno = 0;
+        struct dirent *entry = readdir (entries);
+        if (!entry) {
+            if (errno)
+                ok = transfer_error (error, _("Could not read losing recovery initialization storage"));
+            break;
+        }
+        if (!strcmp (entry->d_name, ".") || !strcmp (entry->d_name, ".."))
+            continue;
+        if (strcmp (entry->d_name, "owner"))
+            ok = changed (error);
+        count++;
+    }
+    if (closedir (entries) < 0) {
+        if (ok)
+            transfer_error (error, _("Could not close recovery initialization enumeration"));
+        ok = FALSE;
+    }
+    if (ok && count != 1)
+        ok = changed (error);
+    struct stat named;
+    if (ok && (fstatat (candidate->fd, "owner", &named, AT_SYMLINK_NOFOLLOW) < 0 ||
+               !same_contents_metadata (&candidate->marker.stat, &named) ||
+               candidate->marker.stat.st_ctim.tv_sec != named.st_ctim.tv_sec ||
+               candidate->marker.stat.st_ctim.tv_nsec != named.st_ctim.tv_nsec ||
+               candidate->marker.stat.st_nlink != named.st_nlink))
+        ok = changed (error);
+    TransferSnapshot marker = { 0 };
+    if (ok)
+        ok = snapshot_at (candidate->fd, "owner", &marker, TRUE, FALSE, NULL, error);
+    if (ok && !recovery_owned_snapshot (&candidate->marker, &marker))
+        ok = changed (error);
+    snapshot_clear (&marker);
+    if (!ok || !recovery_container_check (recovery, error) ||
+        !check_directory_close (candidate->fd, error) ||
+        !check_directory_close (recovery->container_fd, error))
+        return FALSE;
+    if (unlinkat (candidate->fd, "owner", 0) < 0)
+        return transfer_error (error, _("Could not remove the losing initialization owner record"));
+    if (!sync_fd (candidate->fd, NULL, error))
+        return FALSE;
+    int fd = candidate->fd;
+    candidate->fd = -1;
+    if (!close_checked (fd, error))
+        return FALSE;
+    if (unlinkat (recovery->container_fd, candidate->name, AT_REMOVEDIR) < 0)
+        return transfer_error (error, _("Could not remove losing initialization storage"));
+    candidate->created = FALSE;
+    return sync_fd (recovery->container_fd, NULL, error);
+}
+
+static gboolean
+recovery_candidate_finish (TransferRecovery *recovery, RecoveryCandidate *candidate,
+                           gboolean ok, GError **error)
+{
+    if (!ok && candidate->created)
+        recovery_candidate_report (recovery, candidate);
+    if (candidate->fd >= 0 && !close_checked (candidate->fd, ok ? error : NULL))
+        ok = FALSE;
+    snapshot_clear (&candidate->marker);
+    g_free (candidate->name);
+    return ok || recovery_namespace_failed (error);
+}
+
+static gboolean
 recovery_container_open (TransferRecovery *recovery, gboolean create,
                          GCancellable *cancel, GError **error)
 {
@@ -1085,54 +1422,36 @@ recovery_container_open (TransferRecovery *recovery, gboolean create,
     if (!directory_check (recovery->parent, error) ||
         !recovery_mount_path (recovery, NULL, NULL, error))
         return FALSE;
-    gboolean created = FALSE;
-    if (create) {
-        if (mkdirat (recovery->parent->fd, recovery->container_name, 0700) == 0)
-            created = TRUE;
-        else if (errno != EEXIST)
-            return transfer_error (error, _("Could not create private recovery storage"));
-    }
-    recovery->container_fd = openat (recovery->parent->fd, recovery->container_name,
-                                     O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (recovery->container_fd < 0)
-        return errno == ENOTDIR || errno == ELOOP ? recovery_marker_unrecognized (recovery, error) :
-               transfer_error (error, _("Could not pin private recovery storage"));
-    if (!recovery_same_mount (recovery, recovery->container_fd, error))
-        return FALSE;
-    struct stat current;
-    if (fstat (recovery->container_fd, &current) < 0)
-        return transfer_error (error, _("Could not inspect private recovery storage"));
-    if (current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH)))
-        return recovery_marker_unrecognized (recovery, error);
-    if (!create && !same_inode (&recovery->container_identity, &current))
-        return changed (error);
-    g_autofree char *checksum = NULL;
-    struct stat created_marker = { 0 };
-    if (created) {
-        g_autofree char *token = g_uuid_string_random ();
-        g_autofree char *contents = g_strdup_printf ("Nemo recovery storage\nversion=1\nowner=%"
-                                                   G_GUINT64_FORMAT "\ntoken=%s\n",
-                                                   (guint64) geteuid (), token);
-        checksum = g_compute_checksum_for_string (G_CHECKSUM_SHA256, contents, -1);
-        int fd = openat (recovery->container_fd, "owner",
-                         O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (fd < 0)
-            return transfer_error (error, _("Could not create the recovery storage owner record"));
-        gboolean ok = write_all (fd, contents, strlen (contents), error) &&
-                      sync_fd (fd, cancel, error);
-        if (ok && fstat (fd, &created_marker) < 0)
-            ok = transfer_error (error, _("Could not identify the recovery storage owner record"));
-        if (!close_checked (fd, ok ? error : NULL))
-            ok = FALSE;
-        if (!ok)
-            return FALSE;
-    }
+    RecoveryCandidate candidate = { .fd = -1 };
     TransferSnapshot marker = { 0 };
-    gboolean ok = recovery_marker_read (recovery, &marker, cancel, error);
-    if (ok && ((created && (g_strcmp0 (marker.checksum, checksum) != 0 ||
-                            !same_contents_metadata (&created_marker, &marker.stat) ||
-                            created_marker.st_ctim.tv_sec != marker.stat.st_ctim.tv_sec ||
-                            created_marker.st_ctim.tv_nsec != marker.stat.st_ctim.tv_nsec)) ||
+    g_autofree char *token = g_uuid_string_random ();
+    g_autofree char *contents = g_strdup_printf ("Nemo recovery storage\nversion=1\nowner=%"
+                                              G_GUINT64_FORMAT "\ntoken=%s\n",
+                                              (guint64) geteuid (), token);
+    recovery->container_fd = recovery_namespace_open (recovery, recovery->parent->fd,
+                                                      recovery->container_name, contents, create, FALSE,
+                                                      &candidate, cancel, error);
+    gboolean ok = recovery->container_fd >= 0;
+    if (!ok || !recovery_same_mount (recovery, recovery->container_fd, error)) {
+        ok = FALSE;
+        goto out;
+    }
+    struct stat current;
+    if (fstat (recovery->container_fd, &current) < 0) {
+        ok = transfer_error (error, _("Could not inspect private recovery storage"));
+        goto out;
+    }
+    if (current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH))) {
+        ok = recovery_marker_unrecognized (recovery, error);
+        goto out;
+    }
+    if ((!create && !same_inode (&recovery->container_identity, &current)) ||
+        (candidate.published && !same_inode (&candidate.identity, &current))) {
+        ok = changed (error);
+        goto out;
+    }
+    ok = recovery_marker_read (recovery, &marker, cancel, error);
+    if (ok && ((candidate.published && !recovery_owned_snapshot (&candidate.marker, &marker)) ||
                (!create && !recovery_owned_snapshot (&recovery->marker, &marker))))
         ok = changed (error);
     if (ok && create) {
@@ -1140,11 +1459,12 @@ recovery_container_open (TransferRecovery *recovery, gboolean create,
         recovery->marker = marker;
         memset (&marker, 0, sizeof marker);
     }
+    if (ok)
+        ok = recovery_container_check (recovery, error) &&
+             recovery_candidate_cleanup (recovery, &candidate, error);
+out:
     snapshot_clear (&marker);
-    if (!ok || !recovery_container_check (recovery, error))
-        return FALSE;
-    return !created || (sync_fd (recovery->container_fd, cancel, error) &&
-                        sync_fd (recovery->parent->fd, cancel, error));
+    return recovery_candidate_finish (recovery, &candidate, ok, error);
 }
 
 static gboolean
@@ -1197,50 +1517,36 @@ recovery_bucket_open (TransferRecovery *recovery, gboolean create,
     if (!recovery_container_check (recovery, error) ||
         !recovery_mount_path (recovery, recovery->bucket_name, NULL, error))
         return FALSE;
-    gboolean created = FALSE;
-    if (create) {
-        if (mkdirat (recovery->container_fd, recovery->bucket_name, 0700) == 0)
-            created = TRUE;
-        else if (errno != EEXIST)
-            return transfer_error (error, _("Could not create a private recovery bucket"));
-    }
-    recovery->bucket_fd = openat (recovery->container_fd, recovery->bucket_name,
-                                  O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (recovery->bucket_fd < 0)
-        return errno == ENOTDIR || errno == ELOOP ? recovery_marker_unrecognized (recovery, error) :
-               transfer_error (error, _("Could not pin the private recovery bucket"));
-    if (!recovery_same_mount (recovery, recovery->bucket_fd, error))
-        return FALSE;
-    struct stat current;
-    if (fstat (recovery->bucket_fd, &current) < 0)
-        return transfer_error (error, _("Could not inspect the private recovery bucket"));
-    if (current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH)))
-        return recovery_marker_unrecognized (recovery, error);
-    if (!create && !same_inode (&recovery->bucket_identity, &current))
-        return changed (error);
-    struct stat created_marker = { 0 };
-    if (created) {
-        g_autofree char *contents = g_strdup_printf ("Nemo recovery bucket\nversion=1\nowner=%"
-                                                   G_GUINT64_FORMAT "\ncontainer-sha256=%s\nbucket=%s\n",
-                                                   (guint64) geteuid (), recovery->marker.checksum,
-                                                   recovery->bucket_name);
-        int fd = openat (recovery->bucket_fd, "owner",
-                         O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (fd < 0)
-            return transfer_error (error, _("Could not create the recovery bucket owner record"));
-        gboolean ok = write_all (fd, contents, strlen (contents), error) && sync_fd (fd, cancel, error);
-        if (ok && fstat (fd, &created_marker) < 0)
-            ok = transfer_error (error, _("Could not identify the recovery bucket owner record"));
-        if (!close_checked (fd, ok ? error : NULL))
-            ok = FALSE;
-        if (!ok)
-            return FALSE;
-    }
+    RecoveryCandidate candidate = { .fd = -1 };
     TransferSnapshot marker = { 0 };
-    gboolean ok = recovery_bucket_marker_read (recovery, &marker, cancel, error);
-    if (ok && ((created && (!same_contents_metadata (&created_marker, &marker.stat) ||
-                            created_marker.st_ctim.tv_sec != marker.stat.st_ctim.tv_sec ||
-                            created_marker.st_ctim.tv_nsec != marker.stat.st_ctim.tv_nsec)) ||
+    g_autofree char *contents = g_strdup_printf ("Nemo recovery bucket\nversion=1\nowner=%"
+                                               G_GUINT64_FORMAT "\ncontainer-sha256=%s\nbucket=%s\n",
+                                               (guint64) geteuid (), recovery->marker.checksum,
+                                               recovery->bucket_name);
+    recovery->bucket_fd = recovery_namespace_open (recovery, recovery->container_fd,
+                                                    recovery->bucket_name, contents, create, TRUE,
+                                                    &candidate, cancel, error);
+    gboolean ok = recovery->bucket_fd >= 0;
+    if (!ok || !recovery_same_mount (recovery, recovery->bucket_fd, error)) {
+        ok = FALSE;
+        goto out;
+    }
+    struct stat current;
+    if (fstat (recovery->bucket_fd, &current) < 0) {
+        ok = transfer_error (error, _("Could not inspect the private recovery bucket"));
+        goto out;
+    }
+    if (current.st_uid != geteuid () || (current.st_mode & (S_IWGRP | S_IWOTH))) {
+        ok = recovery_marker_unrecognized (recovery, error);
+        goto out;
+    }
+    if ((!create && !same_inode (&recovery->bucket_identity, &current)) ||
+        (candidate.published && !same_inode (&candidate.identity, &current))) {
+        ok = changed (error);
+        goto out;
+    }
+    ok = recovery_bucket_marker_read (recovery, &marker, cancel, error);
+    if (ok && ((candidate.published && !recovery_owned_snapshot (&candidate.marker, &marker)) ||
                (!create && !recovery_owned_snapshot (&recovery->bucket_marker, &marker))))
         ok = changed (error);
     if (ok && create) {
@@ -1248,11 +1554,12 @@ recovery_bucket_open (TransferRecovery *recovery, gboolean create,
         recovery->bucket_marker = marker;
         memset (&marker, 0, sizeof marker);
     }
+    if (ok)
+        ok = recovery_bucket_check (recovery, error) &&
+             recovery_candidate_cleanup (recovery, &candidate, error);
+out:
     snapshot_clear (&marker);
-    if (!ok || !recovery_bucket_check (recovery, error))
-        return FALSE;
-    return !created || (sync_fd (recovery->bucket_fd, cancel, error) &&
-                        sync_fd (recovery->container_fd, cancel, error));
+    return recovery_candidate_finish (recovery, &candidate, ok, error);
 }
 
 static gboolean
@@ -1296,7 +1603,7 @@ recovery_new_in_bucket (TransferDirectory *parent, TransferRecovery *recovery,
         return transfer_error (error, _("Could not inspect private recovery storage"));
     if (recovery->identity.st_uid != geteuid () ||
         (recovery->identity.st_mode & (S_IWGRP | S_IWOTH))) {
-        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+        g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                              _("This filesystem cannot isolate recovery entries from other writers."));
         return FALSE;
     }
@@ -1312,7 +1619,8 @@ static gboolean
 recovery_new (TransferDirectory *parent, TransferRecovery *recovery,
               GCancellable *cancel, GError **error)
 {
-    return recovery_new_in_bucket (parent, recovery, NULL, cancel, error);
+    return recovery_new_in_bucket (parent, recovery, NULL, cancel, error) ||
+           recovery_namespace_failed (error);
 }
 
 static gboolean
@@ -1642,7 +1950,7 @@ unsupported_replacement (GError **error)
 static void
 report_replacement_error (NemoTransferTransaction *transaction, GError *error)
 {
-    transaction->guard->replacement_unsupported = TRUE;
+    transaction->guard->copy_fallback_blocked = TRUE;
     g_autofree char *destination = g_file_get_parse_name (transaction->destination);
     g_string_append_printf (transaction->guard->details, "\n%s\n%s",
                             destination, error->message);
@@ -1709,7 +2017,7 @@ recovery_has_slot (TransferRecovery *recovery, const char *slot)
 gboolean
 nemo_transfer_guard_can_copy_fallback (NemoTransferGuard *guard)
 {
-    return !guard->replacement_unsupported;
+    return !guard->copy_fallback_blocked;
 }
 
 static gboolean
@@ -1782,7 +2090,7 @@ nemo_transfer_transaction_new (NemoTransferGuard *guard, GFile *source, GFile *d
     if (!transaction->destination_parent)
         goto failed;
     source_path = g_file_get_path (source);
-    if (source_path && g_file_is_native (source) && supported_mount_path (source_path, FALSE)) {
+    if (source_path && g_file_is_native (source) && supported_mount_path (guard, source_path, FALSE)) {
         transaction->source_parent = guard_directory (guard, source_parent, FALSE, FALSE, error);
         if (!transaction->source_parent ||
             !snapshot_at (transaction->source_parent->fd, transaction->source_name,
@@ -1805,6 +2113,7 @@ nemo_transfer_transaction_new (NemoTransferGuard *guard, GFile *source, GFile *d
         goto failed;
     return transaction;
 failed:
+    guard->copy_fallback_blocked = TRUE;
     nemo_transfer_transaction_free (transaction);
     return NULL;
 }
@@ -2251,7 +2560,7 @@ nemo_transfer_native_move (NemoTransferGuard *guard, GFile *source, GFile *desti
                            gboolean overwrite, gboolean *published, NemoTransferUndo **undo,
                            GCancellable *cancel, GError **error)
 {
-    guard->replacement_unsupported = FALSE;
+    guard->copy_fallback_blocked = FALSE;
     if (!nemo_transfer_guard_check (guard, error))
         return FALSE;
     g_autoptr (GFile) source_parent_file = g_file_get_parent (source);
