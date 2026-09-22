@@ -13,9 +13,11 @@ typedef struct {
     gboolean trash;
     gboolean cancel;
     gboolean close_parent;
+    gboolean progress_parent;
 } TestCase;
 
 static GtkWidget *parent;
+static GtkWidget *progress_parent;
 static gboolean presented;
 static gboolean responded;
 static gboolean completed;
@@ -36,8 +38,9 @@ __wrap_gtk_window_present (GtkWindow *window)
         g_assert_false (presented);
         g_assert_true (gtk_window_get_modal (window));
         g_assert_true (gtk_widget_get_mapped (GTK_WIDGET (window)));
+        GtkWidget *transient_parent = progress_parent != NULL ? progress_parent : parent;
         g_assert_true (gtk_window_get_transient_for (window) ==
-                       (parent != NULL ? GTK_WINDOW (parent) : NULL));
+                       (transient_parent != NULL ? GTK_WINDOW (transient_parent) : NULL));
         if (parent != NULL) {
             g_assert_true (gtk_window_get_group (window) ==
                            gtk_window_get_group (GTK_WINDOW (parent)));
@@ -52,6 +55,19 @@ int
 __wrap_nemo_inhibit_power_manager (const char *message)
 {
     return -1;
+}
+
+static void
+attach_to_progress (NemoProgressInfo *info, GtkWindow *dialog, gpointer data)
+{
+    /* Match the progress UI's separate transient parent/window group. */
+    gtk_window_set_transient_for (dialog, GTK_WINDOW (progress_parent));
+}
+
+static void
+progress_created (NemoProgressInfoManager *manager, NemoProgressInfo *info, gpointer data)
+{
+    g_signal_connect (info, "show-dialog", G_CALLBACK (attach_to_progress), NULL);
 }
 
 static gboolean
@@ -147,6 +163,10 @@ test_confirmation (gconstpointer data)
     gtk_window_group_add_window (group, GTK_WINDOW (parent));
     g_signal_connect (parent, "key-press-event", G_CALLBACK (parent_key_pressed), NULL);
     gtk_window_present (GTK_WINDOW (parent));
+    if (test->progress_parent) {
+        progress_parent = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+        g_signal_connect (manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
+    }
 
     guint timeout = g_timeout_add_seconds (10, deadline, NULL);
 
@@ -178,6 +198,10 @@ test_confirmation (gconstpointer data)
         gtk_widget_destroy (parent);
         parent = NULL;
     }
+    if (progress_parent != NULL) {
+        gtk_widget_destroy (progress_parent);
+        progress_parent = NULL;
+    }
     g_object_unref (group);
     g_object_unref (manager);
     g_object_unref (file);
@@ -202,16 +226,20 @@ main (int argc, char **argv)
     g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_CONFIRM_MOVE_TO_TRASH, TRUE);
 
     static const TestCase cases[] = {
-        { FALSE, FALSE, FALSE },
-        { FALSE, TRUE, FALSE },
-        { TRUE, FALSE, FALSE },
-        { TRUE, TRUE, FALSE },
-        { FALSE, TRUE, TRUE },
+        { FALSE, FALSE, FALSE, FALSE },
+        { FALSE, TRUE, FALSE, FALSE },
+        { TRUE, FALSE, FALSE, FALSE },
+        { TRUE, TRUE, FALSE, FALSE },
+        { FALSE, TRUE, TRUE, FALSE },
+        { FALSE, FALSE, FALSE, TRUE },
+        { TRUE, TRUE, FALSE, TRUE },
     };
     g_test_add_data_func ("/delete-dialog/delete-enter", &cases[0], test_confirmation);
     g_test_add_data_func ("/delete-dialog/delete-escape", &cases[1], test_confirmation);
     g_test_add_data_func ("/delete-dialog/trash-enter", &cases[2], test_confirmation);
     g_test_add_data_func ("/delete-dialog/trash-escape", &cases[3], test_confirmation);
     g_test_add_data_func ("/delete-dialog/closed-parent", &cases[4], test_confirmation);
+    g_test_add_data_func ("/delete-dialog/progress-delete-enter", &cases[5], test_confirmation);
+    g_test_add_data_func ("/delete-dialog/progress-trash-escape", &cases[6], test_confirmation);
     return g_test_run ();
 }

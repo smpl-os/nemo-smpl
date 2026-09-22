@@ -24,6 +24,7 @@
 */
 
 #include <config.h>
+#include "nemo-mount-operation.h"
 #include "nemo-vfs-file.h"
 
 #include "nemo-directory-notify.h"
@@ -444,22 +445,12 @@ vfs_file_unmount_callback (GObject *source_object,
 			 gpointer callback_data)
 {
 	NemoFileOperation *op;
-	gboolean unmounted;
 	GError *error;
 
 	op = callback_data;
 
 	error = NULL;
-	unmounted = g_file_unmount_mountable_with_operation_finish (G_FILE (source_object),
-								    res, &error);
-
-    if (!unmounted &&
-	error->domain == G_IO_ERROR &&
-	(error->code == G_IO_ERROR_FAILED_HANDLED ||
-	 error->code == G_IO_ERROR_CANCELLED)) {
-	    g_error_free (error);
-	    error = NULL;
-    }
+	nemo_mount_operation_remove_finish (source_object, res, &error);
 
     nemo_file_operation_complete (op, G_FILE (source_object), error);
 	if (error) {
@@ -484,8 +475,8 @@ vfs_file_unmount (NemoFile                   *file,
 	}
 
 	location = nemo_file_get_location (file);
-	g_file_unmount_mountable_with_operation (location,
-						 G_MOUNT_UNMOUNT_NONE,
+	nemo_mount_operation_remove (G_OBJECT (location),
+						 NEMO_MOUNT_REMOVE_UNMOUNT,
 						 mount_op,
 						 op->cancellable,
 						 vfs_file_unmount_callback,
@@ -499,22 +490,12 @@ vfs_file_eject_callback (GObject *source_object,
 			 gpointer callback_data)
 {
 	NemoFileOperation *op;
-	gboolean ejected;
 	GError *error;
 
 	op = callback_data;
 
 	error = NULL;
-	ejected = g_file_eject_mountable_with_operation_finish (G_FILE (source_object),
-								res, &error);
-
-	if (!ejected &&
-	    error->domain == G_IO_ERROR &&
-	    (error->code == G_IO_ERROR_FAILED_HANDLED ||
-	     error->code == G_IO_ERROR_CANCELLED)) {
-		g_error_free (error);
-		error = NULL;
-	}
+	nemo_mount_operation_remove_finish (source_object, res, &error);
 
 	nemo_file_operation_complete (op, G_FILE (source_object), error);
 	if (error) {
@@ -539,8 +520,8 @@ vfs_file_eject (NemoFile                   *file,
 	}
 
 	location = nemo_file_get_location (file);
-	g_file_eject_mountable_with_operation (location,
-					       G_MOUNT_UNMOUNT_NONE,
+	nemo_mount_operation_remove (G_OBJECT (location),
+					       NEMO_MOUNT_REMOVE_EJECT,
 					       mount_op,
 					       op->cancellable,
 					       vfs_file_eject_callback,
@@ -622,22 +603,12 @@ vfs_file_stop_callback (GObject *source_object,
 			gpointer callback_data)
 {
 	NemoFileOperation *op;
-	gboolean stopped;
 	GError *error;
 
 	op = callback_data;
 
 	error = NULL;
-	stopped = g_file_stop_mountable_finish (G_FILE (source_object),
-						res, &error);
-
-	if (!stopped &&
-	    error->domain == G_IO_ERROR &&
-	    (error->code == G_IO_ERROR_FAILED_HANDLED ||
-	     error->code == G_IO_ERROR_CANCELLED)) {
-		g_error_free (error);
-		error = NULL;
-	}
+	nemo_mount_operation_remove_finish (source_object, res, &error);
 
 	nemo_file_operation_complete (op, G_FILE (source_object), error);
 	if (error) {
@@ -662,8 +633,8 @@ vfs_file_stop (NemoFile                   *file,
 	}
 
 	location = nemo_file_get_location (file);
-	g_file_stop_mountable (location,
-			       G_MOUNT_UNMOUNT_NONE,
+	nemo_mount_operation_remove (G_OBJECT (location),
+			       NEMO_MOUNT_REMOVE_STOP,
 			       mount_op,
 			       op->cancellable,
 			       vfs_file_stop_callback,

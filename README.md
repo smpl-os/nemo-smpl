@@ -1,8 +1,7 @@
 nemo-smpl
 =========
 
-[![Build](https://github.com/KonTy/nemo/actions/workflows/build-arch.yml/badge.svg)](https://github.com/KonTy/nemo/actions/workflows/build-arch.yml)
-[![Debian](https://github.com/KonTy/nemo/actions/workflows/build-debian.yml/badge.svg)](https://github.com/KonTy/nemo/actions/workflows/build-debian.yml)
+[![Packages](https://github.com/smpl-os/nemo-smpl/actions/workflows/build-arch.yml/badge.svg?branch=main)](https://github.com/smpl-os/nemo-smpl/actions/workflows/build-arch.yml)
 
 **nemo-smpl** is an enhanced fork of [Nemo](https://github.com/linuxmint/nemo), the file manager for the Cinnamon desktop environment. This fork is maintained for **smplOS** and ships features that upstream considers out-of-scope.
 
@@ -16,7 +15,7 @@ nemo-smpl
 | Timecode display (hh:mm:ss:ff) in F3 preview | ❌ | ✅ |
 | Frame-by-frame stepping (< >) in F3 preview | ❌ | ✅ |
 | Media keyboard shortcuts (play/mute) | ❌ | ✅ |
-| Verify after copy (SHA-256) | ❌ | ✅ |
+| Copy verification by default (SHA-256) | ❌ | ✅ |
 | Preview Pane (Alt+F3) with GPS map | ❌ | ✅ |
 | Disk Usage Overview (Pareto charts) | ❌ | ✅ |
 | Archive browsing (ZIP/7z/TAR as folders) | ❌ | ✅ |
@@ -58,6 +57,35 @@ sudo ninja -C build install
 
 See [INSTALLATION.md](INSTALLATION.md) for detailed instructions, build dependencies, and MTP setup.
 
+## File Transfer Safety
+
+Hardened builds (`smpl_features=true`, the default) prioritize retaining data over
+completing an unsafe operation. Copy verification is enabled by default across
+copy entry points. Local transfers use checked synchronization and atomic
+publication where supported; copied moves verify the destination before
+reclaiming source space. Same-filesystem moves retain a synchronized rename path
+and are not described as checksum-verified copies.
+
+Unsupported destinations are refused rather than silently receiving weaker
+protection. This includes remote destinations and unqualified network/FUSE
+mounts. Remote sources can be **copied** to supported local storage; destructive
+moves from remote sources are refused. Replacements retain the previous
+destination in recovery storage, which can consume space until explicitly
+removed. Read the operation's result for recovery locations and incomplete work.
+
+**Transfer completion is not permission to unplug a device.** Wait for successful
+completion, eject it, and wait for removal to finish. Keep files unchanged during
+transfers and keep an independent backup of irreplaceable data. Checksums and
+filesystem flushes cannot guarantee honest hardware, eliminate every concurrent
+writer race, or certify that a remote server committed data to physical media.
+
+See [transfer behavior and recovery limits](FEATURES.md#verify-after-copymove).
+
+The File Operations window shows the transfer result and SHA-256 verification
+summary. Technical notes and recovery locations are under **Details**, expanded
+automatically for incomplete operations. **Enter**, **Escape**, or **Close**
+dismisses the window without cancelling active transfers.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
@@ -96,7 +124,15 @@ Open PRs to upstream:
 
 - **Bug reports / feature requests:** [GitHub Issues](https://github.com/KonTy/nemo/issues)
 - **Development:** See [INSTALLATION.md](INSTALLATION.md) for build instructions
-- **PRs:** Target the `release` branch
+- **PRs:** Target the `main` branch
+
+`main` is the development and release branch. Pushes to `main` run **Build and
+Release Packages**, which bumps the version once and builds both Arch and Debian
+packages from that same commit. Both package builds run the transfer-safety
+regressions before uploading packages. The old `release` branch is retained for
+history; it is no longer the publishing source. To publish manually, run **Build
+and Release Packages** on `main`; dispatching **Build Debian Package** alone only
+builds an artifact.
 
 ## License
 

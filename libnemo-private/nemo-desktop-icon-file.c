@@ -34,6 +34,7 @@
 #include "nemo-file-private.h"
 #include "nemo-file-utilities.h"
 #include "nemo-file-operations.h"
+#include "nemo-mount-operation.h"
 #include <eel/eel-glib-extensions.h>
 #include "nemo-desktop-directory.h"
 #include <glib/gi18n.h>
@@ -310,23 +311,48 @@ nemo_desktop_icon_file_get_link (NemoDesktopIconFile *icon_file)
 }
 
 static void
+nemo_desktop_icon_file_remove_done (GObject *target, GAsyncResult *result, gpointer user_data)
+{
+    NemoFileOperation *op = user_data;
+    GError *error = NULL;
+    nemo_mount_operation_remove_finish (target, result, &error);
+    nemo_file_operation_complete (op, NULL, error);
+    g_clear_error (&error);
+}
+
+static void
+nemo_desktop_icon_file_remove_device (NemoFile *file, GMountOperation *mount_op,
+                               GCancellable *cancellable, NemoFileOperationCallback callback,
+                               gpointer callback_data, NemoMountRemoval removal)
+{
+    NemoDesktopIconFile *desktop_file = NEMO_DESKTOP_ICON_FILE (file);
+    NemoFileOperation *op = nemo_file_operation_new (file, callback, callback_data);
+    GMount *mount = desktop_file->details->link != NULL ?
+                   nemo_desktop_link_get_mount (desktop_file->details->link) : NULL;
+
+    if (mount == NULL) {
+        GError *error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_NOT_MOUNTED,
+                                             _("The device is no longer mounted."));
+        nemo_file_operation_complete (op, NULL, error);
+        g_error_free (error);
+        return;
+    }
+    if (cancellable != NULL)
+        g_set_object (&op->cancellable, cancellable);
+    nemo_mount_operation_remove (G_OBJECT (mount), removal, mount_op, op->cancellable,
+                                 nemo_desktop_icon_file_remove_done, op);
+    g_object_unref (mount);
+}
+
+static void
 nemo_desktop_icon_file_unmount (NemoFile                   *file,
 				    GMountOperation                *mount_op,
 				    GCancellable                   *cancellable,
 				    NemoFileOperationCallback   callback,
 				    gpointer                        callback_data)
 {
-	NemoDesktopIconFile *desktop_file;
-	GMount *mount;
-	
-	desktop_file = NEMO_DESKTOP_ICON_FILE (file);
-	if (desktop_file) {
-		mount = nemo_desktop_link_get_mount (desktop_file->details->link);
-		if (mount != NULL) {
-			nemo_file_operations_unmount_mount (NULL, mount, FALSE, TRUE);
-		}
-	}
-	
+	nemo_desktop_icon_file_remove_device (file, mount_op, cancellable, callback, callback_data,
+	                               NEMO_MOUNT_REMOVE_UNMOUNT);
 }
 
 static void
@@ -336,16 +362,8 @@ nemo_desktop_icon_file_eject (NemoFile                   *file,
 				  NemoFileOperationCallback   callback,
 				  gpointer                        callback_data)
 {
-	NemoDesktopIconFile *desktop_file;
-	GMount *mount;
-	
-	desktop_file = NEMO_DESKTOP_ICON_FILE (file);
-	if (desktop_file) {
-		mount = nemo_desktop_link_get_mount (desktop_file->details->link);
-		if (mount != NULL) {
-			nemo_file_operations_unmount_mount (NULL, mount, TRUE, TRUE);
-		}
-	}
+	nemo_desktop_icon_file_remove_device (file, mount_op, cancellable, callback, callback_data,
+	                               NEMO_MOUNT_REMOVE_EJECT);
 }
 
 static void

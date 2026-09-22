@@ -23,6 +23,7 @@
  */
 
 #include <config.h>
+#include <libnemo-private/nemo-mount-operation.h>
 
 #include <gdk/gdkkeysyms.h>
 #include <gtk/gtk.h>
@@ -3705,42 +3706,10 @@ unmount_done (gpointer data)
 	g_object_unref (window);
 }
 
-static void
-show_unmount_progress_cb (GMountOperation *op,
-                              const gchar *message,
-                                    gint64 time_left,
-                                    gint64 bytes_left,
-                                  gpointer user_data)
-{
-    NemoApplication *app = NEMO_APPLICATION (g_application_get_default ());
-
-    if (bytes_left == 0) {
-        nemo_application_notify_unmount_done (app, message);
-    } else {
-        nemo_application_notify_unmount_show (app, message);
-    }
-}
-
-static void
-show_unmount_progress_aborted_cb (GMountOperation *op,
-                                  gpointer user_data)
-{
-    NemoApplication *app = NEMO_APPLICATION (g_application_get_default ());
-    nemo_application_notify_unmount_done (app, NULL);
-}
-
 static GMountOperation *
 get_unmount_operation (NemoPlacesSidebar *sidebar)
 {
-    GMountOperation *mount_op;
-
-    mount_op = gtk_mount_operation_new (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (sidebar))));
-    g_signal_connect (mount_op, "show-unmount-progress",
-                      G_CALLBACK (show_unmount_progress_cb), sidebar);
-    g_signal_connect (mount_op, "aborted",
-                      G_CALLBACK (show_unmount_progress_aborted_cb), sidebar);
-
-    return mount_op;
+    return gtk_mount_operation_new (GTK_WINDOW (gtk_widget_get_toplevel (GTK_WIDGET (sidebar))));
 }
 
 static void
@@ -3791,7 +3760,8 @@ handle_mount_unmount_failure (const gchar *primary,
 {
     const gchar *message = NULL;
 
-    if (error && error->code == G_IO_ERROR_FAILED_HANDLED) {
+    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_FAILED_HANDLED) ||
+        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
         return;
     }
 
@@ -3816,7 +3786,7 @@ drive_eject_cb (GObject *source_object,
 	g_object_unref (window);
 
 	error = NULL;
-	if (!g_drive_eject_with_operation_finish (G_DRIVE (source_object), res, &error)) {
+	if (!nemo_mount_operation_remove_finish (source_object, res, &error)) {
         char *name, *primary;
 
         name = g_drive_get_name (G_DRIVE (source_object));
@@ -3842,7 +3812,7 @@ volume_eject_cb (GObject *source_object,
 	g_object_unref (window);
 
 	error = NULL;
-	if (!g_volume_eject_with_operation_finish (G_VOLUME (source_object), res, &error)) {
+	if (!nemo_mount_operation_remove_finish (source_object, res, &error)) {
         char *name, *primary;
 
         name = g_volume_get_name (G_VOLUME (source_object));
@@ -3868,7 +3838,7 @@ mount_eject_cb (GObject *source_object,
 	g_object_unref (window);
 
 	error = NULL;
-	if (!g_mount_eject_with_operation_finish (G_MOUNT (source_object), res, &error)) {
+	if (!nemo_mount_operation_remove_finish (source_object, res, &error)) {
         char *name, *primary;
 
         name = g_mount_get_name (G_MOUNT (source_object));
@@ -3891,13 +3861,13 @@ do_eject (GMount *mount,
     GMountOperation *mount_op = get_unmount_operation (sidebar);
 
 	if (mount != NULL) {
-		g_mount_eject_with_operation (mount, 0, mount_op, NULL, mount_eject_cb,
+		nemo_mount_operation_remove (G_OBJECT (mount), NEMO_MOUNT_REMOVE_EJECT, mount_op, NULL, mount_eject_cb,
 					      g_object_ref (sidebar->window));
 	} else if (volume != NULL) {
-		g_volume_eject_with_operation (volume, 0, mount_op, NULL, volume_eject_cb,
+		nemo_mount_operation_remove (G_OBJECT (volume), NEMO_MOUNT_REMOVE_EJECT, mount_op, NULL, volume_eject_cb,
 					      g_object_ref (sidebar->window));
 	} else if (drive != NULL) {
-		g_drive_eject_with_operation (drive, 0, mount_op, NULL, drive_eject_cb,
+		nemo_mount_operation_remove (G_OBJECT (drive), NEMO_MOUNT_REMOVE_EJECT, mount_op, NULL, drive_eject_cb,
 					      g_object_ref (sidebar->window));
 	}
 	g_object_unref (mount_op);
@@ -4104,7 +4074,7 @@ drive_stop_cb (GObject *source_object,
 
 	error = NULL;
 
-    if (!g_drive_stop_finish (G_DRIVE (source_object), res, &error)) {
+    if (!nemo_mount_operation_remove_finish (source_object, res, &error)) {
         char *name, *primary;
 
         name = g_drive_get_name (G_DRIVE (source_object));
@@ -4135,7 +4105,7 @@ stop_shortcut_cb (GtkAction           *item,
 
 	if (drive != NULL) {
         GMountOperation *mount_op = get_unmount_operation (sidebar);
-		g_drive_stop (drive, G_MOUNT_UNMOUNT_NONE, mount_op, NULL, drive_stop_cb,
+		nemo_mount_operation_remove (G_OBJECT (drive), NEMO_MOUNT_REMOVE_STOP, mount_op, NULL, drive_stop_cb,
 			      g_object_ref (sidebar->window));
 		g_object_unref (mount_op);
         g_object_unref (drive);

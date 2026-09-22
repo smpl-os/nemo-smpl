@@ -7226,16 +7226,16 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 	                                 "%s", primary);
 	gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
 
-	/* Verify checkbox — remembers state across invocations */
-	static gboolean copy_verify_checked = FALSE;
 #ifdef NEMO_SMPL
+    gboolean copy_verify_checked = nemo_smpl_verify_file_copies ();
     GtkWidget *verify_check = gtk_check_button_new_with_label (_("Verify copied and existing files"));
 #else
+	static gboolean copy_verify_checked = FALSE;
 	GtkWidget *verify_check = gtk_check_button_new_with_label (_("Verify after copy"));
 #endif
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (verify_check), copy_verify_checked);
 #ifdef NEMO_SMPL
-    gtk_widget_set_tooltip_text (verify_check, _("Compare files using SHA-256. Keep matching existing files; ask before replacing different contents. Verify newly copied data before publication. Existing files that cannot be read or safely checked for changes are kept and reported incomplete."));
+    gtk_widget_set_tooltip_text (verify_check, _("Default for all copies, including clipboard and drag-and-drop. Compare files using SHA-256 through the filesystem, not necessarily physical media. Keep matching existing files; ask before replacing different contents. Unsafe replacements are blocked. Use Eject or Safely Remove before unplugging a device."));
 #else
 	gtk_widget_set_tooltip_text (verify_check, _("Re-read files from disk and compare SHA-256 checksums to confirm a successful copy"));
 #endif
@@ -7249,6 +7249,11 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 #endif
 	response = gtk_dialog_run (GTK_DIALOG (dialog));
 	copy_verify_checked = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (verify_check));
+#ifdef NEMO_SMPL
+    if (response == GTK_RESPONSE_OK)
+        g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_VERIFY_FILE_COPIES,
+                                copy_verify_checked);
+#endif
 	gtk_widget_destroy (dialog);
 #ifdef NEMO_SMPL
     g_object_unref (verify_check);
@@ -7258,7 +7263,6 @@ action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 	if (response == GTK_RESPONSE_OK) {
 #ifdef NEMO_SMPL
         if (!view->details->selection_disposed) {
-            nemo_file_operations_set_verify_copies (copy_verify_checked);
             move_copy_files_to_location (view, selection, GDK_ACTION_COPY,
                                         dest_location, source_selection);
         }
@@ -7306,6 +7310,9 @@ action_move_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 		g_free (dest_location);
 		return;
 	}
+#ifdef NEMO_SMPL
+	g_object_ref (view);
+#endif
 
 	count = g_list_length (selection);
 	dest_file = g_file_new_for_uri (dest_location);
@@ -7328,7 +7335,15 @@ action_move_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 	                                 "%s", primary);
 	gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
 
-	/* Verify checkbox — remembers state across invocations */
+#ifdef NEMO_SMPL
+    GtkWidget *move_explanation = gtk_label_new (_("Copy-and-delete moves require verification before removing originals."
+                                                  "\nSame-filesystem renames are not checksum verified."
+                                                  "\nUse Eject or Safely Remove before unplugging a device."));
+    gtk_label_set_line_wrap (GTK_LABEL (move_explanation), TRUE);
+    gtk_box_pack_start (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))),
+                        move_explanation, FALSE, FALSE, 6);
+    gtk_widget_show (move_explanation);
+#else
 	static gboolean move_verify_checked = FALSE;
 	GtkWidget *move_verify_check = gtk_check_button_new_with_label (_("Verify after move"));
 	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (move_verify_check), move_verify_checked);
@@ -7336,16 +7351,34 @@ action_move_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 	gtk_box_pack_start (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))),
 	                    move_verify_check, FALSE, FALSE, 6);
 	gtk_widget_show (move_verify_check);
+#endif
 
+#ifdef NEMO_SMPL
+	g_object_ref (dialog);
+#endif
 	response = gtk_dialog_run (GTK_DIALOG (dialog));
+#ifndef NEMO_SMPL
 	move_verify_checked = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (move_verify_check));
+#endif
 	gtk_widget_destroy (dialog);
+#ifdef NEMO_SMPL
+	g_object_unref (dialog);
+#endif
 
 	if (response == GTK_RESPONSE_OK) {
+#ifdef NEMO_SMPL
+		if (!view->details->selection_disposed)
+			move_copy_files_to_location (view, selection, GDK_ACTION_MOVE,
+			                             dest_location, NULL);
+#else
 		nemo_file_operations_set_verify_copies (move_verify_checked);
 		move_copy_selection_to_location (view, GDK_ACTION_MOVE, dest_location);
+#endif
 	}
 
+#ifdef NEMO_SMPL
+	g_object_unref (view);
+#endif
 	g_free (primary);
 	g_free (dest_basename);
 	g_object_unref (dest_file);

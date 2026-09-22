@@ -9,6 +9,7 @@
 #include <glib/gstdio.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -23,15 +24,15 @@
 typedef enum {
     NONE, CORRUPT, UNKNOWN_METADATA, READBACK, SYNC_EIO, SYNC_ENOSPC,
     SYNC_EINTR, RANGE_EIO, RANGE_EINVAL, RANGE_ENOSYS, RANGE_EOPNOTSUPP,
-    DIR_SYNC, DIR_OPEN, CANCEL_CREATE, CANCEL_WRITE, CANCEL_PUBLISH,
+    DIR_SYNC, RECOVERY_SYNC, DIR_OPEN, CANCEL_CREATE, CANCEL_WRITE, CANCEL_PUBLISH,
     CANCEL_DELETE, COLLISION, CLEANUP, DEFAULT_PERMS, SYNCFS_EIO, SYNCFS_EINTR,
     ATTR_UNSUPPORTED, ATTR_DENIED, ATTR_FAILED, ATTR_NO_SPACE, PULL_FAILED, PULL_CANCEL,
-    PUBLISH_RACE, FOLDER_RACE, OPTIONAL_METADATA, MISSING_TYPE,
+    PUBLISH_RACE, FOLDER_RACE, FOLDER_DIRECTORY_RACE, OPTIONAL_METADATA, MISSING_TYPE,
     SOURCE_EOF, VERIFY_EOF, PULL_EOF, NO_VERSION, SOURCE_CHANGED, CANCEL_VERIFY,
     SCAN_FILE, SCAN_OPEN, SCAN_READ, EXIST_READ_SOURCE, EXIST_READ_TARGET,
     EXIST_CANCEL, EXIST_EOF, EXIST_SOURCE_CHANGE, EXIST_TARGET_CHANGE,
     PROMPT_SOURCE, PROMPT_TARGET, REPAIR_TARGET, EXIST_SOURCE_REWRITE, EXIST_TARGET_REWRITE,
-    EXIST_TARGET_NO_VERSION
+    EXIST_TARGET_NO_VERSION, PULL_ALIAS_FAILED
 } Fault;
 
 typedef struct {
@@ -58,6 +59,9 @@ static const TestCase cases[] = {
     { "default-permissions", DEFAULT_PERMS, FALSE, TRUE, FALSE, FALSE },
     { "default-permissions-move", DEFAULT_PERMS, TRUE, FALSE, TRUE, FALSE },
     { "pull-copy", NONE, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-copy", NONE, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-unavailable", PULL_ALIAS_FAILED, FALSE, FALSE, FALSE, TRUE },
+    { "pull-subprocess-move-unavailable", PULL_ALIAS_FAILED, TRUE, FALSE, TRUE, TRUE },
     { "pull-chunked-copy", NONE, FALSE, FALSE, FALSE, TRUE },
     { "pull-read-unsupported", NONE, FALSE, FALSE, FALSE, TRUE },
     { "pull-syncfs-eio", SYNCFS_EIO, FALSE, FALSE, FALSE, TRUE },
@@ -88,6 +92,7 @@ static const TestCase cases[] = {
     { "range-enosys", RANGE_ENOSYS, TRUE, FALSE, TRUE, FALSE },
     { "range-eopnotsupp", RANGE_EOPNOTSUPP, TRUE, FALSE, TRUE, FALSE },
     { "directory-fsync", DIR_SYNC, TRUE, FALSE, TRUE, TRUE },
+    { "recovery-fsync", RECOVERY_SYNC, TRUE, FALSE, TRUE, TRUE },
     { "directory-open", DIR_OPEN, TRUE, FALSE, TRUE, TRUE },
     { "cancel-before-write", CANCEL_CREATE, TRUE, FALSE, TRUE, TRUE },
     { "cancel-during-write", CANCEL_WRITE, TRUE, FALSE, TRUE, TRUE },
@@ -97,10 +102,13 @@ static const TestCase cases[] = {
     { "broken-symlink", NONE, TRUE, FALSE, TRUE, FALSE },
     { "fifo-symlink", NONE, TRUE, FALSE, TRUE, FALSE },
     { "folder-copy", NONE, FALSE, TRUE, FALSE, FALSE },
+    { "folder-unverified-copy", NONE, FALSE, FALSE, FALSE, FALSE },
     { "folder-move", NONE, TRUE, FALSE, TRUE, FALSE },
+    { "folder-native-merge", NONE, TRUE, FALSE, FALSE, FALSE },
+    { "folder-existing-race", FOLDER_DIRECTORY_RACE, FALSE, TRUE, FALSE, FALSE },
     { "folder-new-copy", NONE, FALSE, TRUE, FALSE, FALSE },
     { "folder-new-move", NONE, TRUE, FALSE, TRUE, FALSE },
-    { "folder-parent-fsync", DIR_SYNC, TRUE, FALSE, TRUE, FALSE },
+    { "folder-parent-fsync", RECOVERY_SYNC, TRUE, FALSE, TRUE, FALSE },
     { "folder-partial-move", CORRUPT, TRUE, FALSE, TRUE, TRUE },
     { "merge-all", NONE, TRUE, FALSE, TRUE, FALSE },
     { "replace-all", NONE, TRUE, FALSE, TRUE, TRUE },
@@ -155,7 +163,7 @@ static const TestCase cases[] = {
     { "existing-fifo", NONE, FALSE, TRUE, FALSE, FALSE },
     { "existing-unverified", NONE, FALSE, FALSE, FALSE, FALSE },
     { "existing-unverified-size-skip", NONE, FALSE, FALSE, FALSE, FALSE },
-    { "existing-directory-skip", NONE, FALSE, FALSE, FALSE, FALSE },
+    { "existing-merged-file-skip", NONE, FALSE, FALSE, FALSE, FALSE },
     { "existing-move-skip", NONE, TRUE, TRUE, FALSE, FALSE },
     { "existing-duplicate", NONE, FALSE, TRUE, FALSE, FALSE },
     { "existing-rename", NONE, FALSE, TRUE, FALSE, TRUE },
@@ -170,16 +178,19 @@ static const TestCase cases[] = {
 };
 
 typedef struct {
-    char *source, *dest;
+    char *source, *dest, *capture;
     gboolean symlink;
     mode_t source_mode;
+    struct stat original_source;
     struct timespec source_mtime;
     int writer, writes, attributes, closed, periodic, syncs, range;
     int input_streams, input_closes, output_closes;
     int checksum, stage_checksum, publish, dirsync, deleted;
+    int native_sync, target_sync;
     int parent_fd, parent_open, backend_copy, syncfs_calls, filesystem_sync;
     int payload_fd, payload_open, adopted;
     gboolean parent_closed;
+    gboolean displaced;
     guint source_hash_reads, target_hash_reads;
     struct stat original_dest;
 } Item;
@@ -198,7 +209,8 @@ static struct {
     gboolean running, done, success, timed_out;
     int sequence, injections, conflicts, warnings, cleanup_warnings, attempts, ancestor_syncs;
     int power_warnings, mismatch_warnings, readback_warnings, cleanup_logs;
-    int raced_mkdir_attempts, source_move_attempts;
+    int raced_mkdir_attempts, source_move_attempts, backend_children;
+    guint source_eof_reads, readback_refusals, recovery_collisions;
 } fixture;
 
 static const char payload[] = "Original source bytes: SHA-256 must match before deletion.\n";
@@ -206,6 +218,7 @@ static const char previous[] = "The previous destination must survive failed rep
 static const char foreign_data[] = "An unrelated process owns this staging name.\n";
 
 char *__real_g_file_get_path (GFile *);
+static char *test_file_path (GFile *file);
 
 static gboolean
 named (const char *name)
@@ -228,7 +241,9 @@ existing_case (void)
 static void
 assert_source_readback (Item *item)
 {
-    if (!fixture.test->move && fixture.test->verify && item->source_hash_reads > 0)
+    if (item->capture && fixture.test->move)
+        g_assert_cmpint (item->checksum, >, item->publish);
+    else if (!fixture.test->move && fixture.test->verify && item->source_hash_reads > 0)
         g_assert_cmpint (item->checksum, >, 0);
     else if (fixture.test->fault == NO_VERSION)
         g_assert_cmpint (item->checksum, >, item->syncs);
@@ -290,7 +305,8 @@ source_item (const char *path)
 {
     for (guint i = 0; fixture.items && i < fixture.items->len; i++) {
         Item *item = g_ptr_array_index (fixture.items, i);
-        if (g_strcmp0 (path, item->source) == 0)
+        if (g_strcmp0 (path, item->source) == 0 ||
+            (item->capture && g_strcmp0 (path, item->capture) == 0))
             return item;
     }
     return NULL;
@@ -311,8 +327,14 @@ char *
 __wrap_g_file_get_path (GFile *file)
 {
     char *path = __real_g_file_get_path (file);
-    if (fixture.running && (pull_case () || fixture.test->fault == SOURCE_EOF) &&
-        source_item (path))
+    g_autofree char *actual = test_file_path (file);
+    Item *item = fixture.running ? source_item (actual) : NULL;
+    gboolean anchored = path && g_str_has_prefix (path, "/proc/");
+    /* Keep move preflight native. Force the opaque adapter only after binding
+     * the source, and force its source-readback failure only after the pull. */
+    if (item && ((pull_case () && ((anchored && item->output_closes == 0) ||
+                                  item->backend_copy > 0)) ||
+                 (fixture.test->fault == SOURCE_EOF && !fixture.test->move)))
         g_clear_pointer (&path, g_free);
     return path;
 }
@@ -321,8 +343,9 @@ gboolean __real_g_file_is_native (GFile *);
 gboolean
 __wrap_g_file_is_native (GFile *file)
 {
-    char *path = __real_g_file_get_path (file);
-    gboolean remote = fixture.running && fixture.test->fault == SOURCE_EOF && source_item (path);
+    char *path = test_file_path (file);
+    gboolean remote = fixture.running && fixture.test->fault == SOURCE_EOF &&
+                      !fixture.test->move && source_item (path);
     g_free (path);
     return remote ? FALSE : __real_g_file_is_native (file);
 }
@@ -337,6 +360,49 @@ fd_path (int fd)
         return NULL;
     path[size] = '\0';
     return g_strdup (path);
+}
+
+static char *
+normalize_path (const char *path)
+{
+    if (path && g_str_has_prefix (path, "/proc/")) {
+        const char *process = path + strlen ("/proc/");
+        char *end;
+        if (g_str_has_prefix (process, "self/"))
+            end = (char *) process + strlen ("self");
+        else {
+            g_ascii_strtoull (process, &end, 10);
+            if (!g_ascii_isdigit (*process) || end == process)
+                return g_strdup (path);
+        }
+        if (g_str_has_prefix (end, "/fd/")) {
+            const char *descriptor = end + strlen ("/fd/");
+            guint64 fd = g_ascii_strtoull (descriptor, &end, 10);
+            if (g_ascii_isdigit (*descriptor) && fd <= G_MAXINT && (!*end || *end == '/')) {
+                g_autofree char *anchor = g_strndup (path, end - path);
+                g_autofree char *parent = g_file_read_link (anchor, NULL);
+                if (parent)
+                    return g_build_filename (parent, *end ? end + 1 : "", NULL);
+            }
+        }
+    }
+    return g_strdup (path);
+}
+
+static char *
+test_file_path (GFile *file)
+{
+    g_autofree char *path = __real_g_file_get_path (file);
+    return normalize_path (path);
+}
+
+static char *
+path_at (int fd, const char *path)
+{
+    if (g_path_is_absolute (path))
+        return normalize_path (path);
+    g_autofree char *parent = fd == AT_FDCWD ? g_get_current_dir () : fd_path (fd);
+    return parent ? g_build_filename (parent, path, NULL) : g_strdup (path);
 }
 
 static gboolean
@@ -356,8 +422,9 @@ inject_io (GError **error, GIOErrorEnum code)
 int __real_open (const char *, int, ...);
 int __real_open64 (const char *, int, ...);
 static int
-open_with_fault (const char *path, int flags, mode_t mode, gboolean large_file)
+open_with_fault (const char *original, int flags, mode_t mode, gboolean large_file)
 {
+    g_autofree char *path = normalize_path (original);
     if (fixture.running) {
         Item *item = source_item (path);
         Item *stage = g_hash_table_lookup (fixture.stages, path);
@@ -380,7 +447,7 @@ open_with_fault (const char *path, int flags, mode_t mode, gboolean large_file)
             g_assert_true ((flags & O_NONBLOCK) != 0);
         }
     }
-    int fd = large_file ? __real_open64 (path, flags, mode) : __real_open (path, flags, mode);
+    int fd = large_file ? __real_open64 (original, flags, mode) : __real_open (original, flags, mode);
     if (fixture.running && fd >= 0 && pull_case ()) {
         Item *item = source_item (fixture.current_source);
         if (item && g_strcmp0 (path, fixture.dest_dir) == 0 && (flags & O_DIRECTORY)) {
@@ -434,6 +501,95 @@ __wrap_open64 (const char *path, int flags, ...)
     return open_with_fault (path, flags, mode, TRUE);
 }
 
+int __real_openat (int, const char *, int, ...);
+int
+__wrap_openat (int dirfd, const char *name, int flags, ...)
+{
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start (args, flags);
+        mode = va_arg (args, int);
+        va_end (args);
+    }
+    g_autofree char *path = path_at (dirfd, name);
+    if (fixture.running &&
+        ((source_item (path) && fixture.test->fault == EXIST_READ_SOURCE) ||
+         (destination_item (path) && fixture.test->fault == EXIST_READ_TARGET &&
+          (!named ("existing-partial-error") || g_str_has_suffix (path, "payload-1"))) ||
+         (fixture.test->fault == DIR_OPEN && (flags & O_DIRECTORY) &&
+          under (path, fixture.dest_dir)))) {
+        fixture.injections++;
+        errno = EACCES;
+        return -1;
+    }
+    return __real_openat (dirfd, name, flags, mode);
+}
+
+int
+__wrap_openat64 (int dirfd, const char *name, int flags, ...)
+{
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start (args, flags);
+        mode = va_arg (args, int);
+        va_end (args);
+    }
+    return __wrap_openat (dirfd, name, flags, mode);
+}
+
+static void
+create_raced_destination (const char *path)
+{
+    if (fixture.test->fault == FOLDER_DIRECTORY_RACE) {
+        g_assert_cmpint (g_mkdir (path, 0750), ==, 0);
+        fixture.foreign = g_build_filename (path, "existing", NULL);
+    } else {
+        fixture.foreign = g_strdup (path);
+    }
+    g_assert_true (g_file_set_contents (fixture.foreign, foreign_data, -1, NULL));
+    fixture.injections++;
+}
+
+int __real_mkdirat (int, const char *, mode_t);
+int
+__wrap_mkdirat (int dirfd, const char *name, mode_t mode)
+{
+    g_autofree char *path = path_at (dirfd, name);
+    gboolean raced = fixture.running &&
+                     (fixture.test->fault == FOLDER_RACE ||
+                      fixture.test->fault == FOLDER_DIRECTORY_RACE) &&
+                     g_strcmp0 (path, fixture.raced_destination) == 0;
+    if (raced && !fixture.injections)
+        create_raced_destination (path);
+    gboolean collided = FALSE;
+    if (fixture.running && fixture.test->fault == COLLISION &&
+        under (path, fixture.dest_dir) && strstr (path, "/.nemo-recovery-") &&
+        g_str_has_prefix (name, "transaction-")) {
+        fixture.attempts++;
+        if (!fixture.foreign) {
+            g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+            fixture.foreign = g_build_filename (path, "foreign-child", NULL);
+            g_assert_true (g_file_set_contents (fixture.foreign, foreign_data, -1, NULL));
+            fixture.injections++;
+            collided = TRUE;
+        }
+    }
+    int result = __real_mkdirat (dirfd, name, mode);
+    if (collided) {
+        g_assert_cmpint (result, ==, -1);
+        g_assert_cmpint (errno, ==, EEXIST);
+        fixture.recovery_collisions++;
+    }
+    if (raced) {
+        fixture.raced_mkdir_attempts++;
+        g_assert_cmpint (result, ==, -1);
+        g_assert_cmpint (errno, ==, EEXIST);
+    }
+    return result;
+}
+
 int __real_close (int);
 int
 __wrap_close (int fd)
@@ -466,14 +622,14 @@ __wrap_read (int fd, void *buffer, size_t count)
         Item *stage = path ? g_hash_table_lookup (fixture.stages, path) : NULL;
         if (item) {
             g_assert_false (item->symlink);
-            if (fixture.test->move || !fixture.test->verify || item->writes) {
+            if (item->writes || item->backend_copy) {
                 g_assert_cmpint (item->syncs, >, item->range);
                 g_assert_cmpint (item->closed, >, item->syncs);
             } else {
                 item->source_hash_reads++;
             }
             item->checksum = ++fixture.sequence;
-        } else if (stage) {
+        } else if (stage && !stage->publish) {
             g_assert_false (stage->symlink);
             g_assert_cmpint (stage->syncs, >, stage->range);
             g_assert_cmpint (stage->closed, >, stage->syncs);
@@ -530,7 +686,7 @@ GFileInfo *
 __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFlags flags,
                          GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     if (fixture.running && fixture.test->fault == SCAN_FILE &&
         source_item (path) &&
         strcmp (attributes, G_FILE_ATTRIBUTE_STANDARD_TYPE ","
@@ -554,19 +710,6 @@ __wrap_g_file_query_info (GFile *file, const char *attributes, GFileQueryInfoFla
         g_set_object (&fixture.cancel, cancel);
     }
     GFileInfo *info = __real_g_file_query_info (file, attributes, flags, cancel, error);
-    if (fixture.running && fixture.test->fault == FOLDER_RACE &&
-        g_strcmp0 (path, fixture.raced_destination) == 0 &&
-        strstr (attributes, G_FILE_ATTRIBUTE_ID_FILE) &&
-        strstr (attributes, G_FILE_ATTRIBUTE_ETAG_VALUE) &&
-        fixture.source_move_attempts >= 2 &&
-        !info && error && g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) &&
-        fixture.injections == 0) {
-        /* Keep the "not found" snapshot, but introduce a foreign file before
-         * the directory transaction reports WOULD_RECURSE to its caller. */
-        fixture.foreign = g_strdup (path);
-        g_assert_true (g_file_set_contents (path, foreign_data, -1, NULL));
-        fixture.injections++;
-    }
     Item *item = source_item (path);
     if (fixture.running &&
         (pull_case () || fixture.test->fault == SOURCE_EOF || named ("crossfs-copy") ||
@@ -615,9 +758,13 @@ gboolean __real_g_file_make_directory (GFile *, GCancellable *, GError **);
 gboolean
 __wrap_g_file_make_directory (GFile *file, GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
-    gboolean raced = fixture.running && fixture.test->fault == FOLDER_RACE &&
+    char *path = test_file_path (file);
+    gboolean raced = fixture.running &&
+                     (fixture.test->fault == FOLDER_RACE ||
+                      fixture.test->fault == FOLDER_DIRECTORY_RACE) &&
                      g_strcmp0 (path, fixture.raced_destination) == 0;
+    if (raced && !fixture.injections)
+        create_raced_destination (path);
     gboolean ok = __real_g_file_make_directory (file, cancel, error);
     if (raced) {
         fixture.raced_mkdir_attempts++;
@@ -632,7 +779,7 @@ GFileInputStream *__real_g_file_read (GFile *, GCancellable *, GError **);
 GFileInputStream *
 __wrap_g_file_read (GFile *file, GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     Item *item = source_item (path);
     g_free (path);
     if (fixture.running && fixture.test->fault == SOURCE_EOF && item) {
@@ -651,6 +798,8 @@ __wrap_g_file_read (GFile *file, GCancellable *cancel, GError **error)
             g_object_add_weak_pointer (G_OBJECT (stream), (gpointer *) &fixture.pull_input);
             return stream;
         }
+        if (fixture.test->fault == READBACK && item->backend_copy > 0)
+            fixture.readback_refusals++;
         inject_io (error, G_IO_ERROR_NOT_SUPPORTED);
         return NULL;
     }
@@ -673,6 +822,7 @@ __wrap_g_input_stream_read (GInputStream *stream, void *buffer, gsize count,
         if (item) {
             if (item->closed > 0)
                 item->checksum = ++fixture.sequence;
+            fixture.source_eof_reads++;
             fixture.injections++;
             return 0;
         }
@@ -689,11 +839,12 @@ GFileOutputStream *__real_g_file_create (GFile *, GFileCreateFlags, GCancellable
 GFileOutputStream *
 __wrap_g_file_create (GFile *file, GFileCreateFlags flags, GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     gboolean stage = fixture.running &&
                      (under (path, fixture.dest_dir) ||
                       (named ("existing-duplicate") && under (path, fixture.source_dir))) &&
-                     strstr (path, "/copy.nemo-partial-");
+                     (strstr (path, "/copy.nemo-partial-") ||
+                      (strstr (path, "/.nemo-recovery-") && g_str_has_suffix (path, "/payload")));
     if (stage)
         g_assert_true ((flags & G_FILE_CREATE_PRIVATE) != 0);
     if (stage && fixture.test->fault == COLLISION && !fixture.foreign) {
@@ -734,7 +885,7 @@ __wrap_g_file_make_symbolic_link (GFile *file, const char *target,
                                  GCancellable *cancel, GError **error)
 {
     gboolean ok = __real_g_file_make_symbolic_link (file, target, cancel, error);
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     if (fixture.running && ok && under (path, fixture.dest_dir)) {
         Item *item = source_item (fixture.current_source);
         g_assert_nonnull (item);
@@ -817,7 +968,7 @@ gboolean
 __wrap_g_file_copy_attributes (GFile *source, GFile *dest, GFileCopyFlags flags,
                                GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (dest);
+    char *path = test_file_path (dest);
     Item *item = fixture.running && path ? g_hash_table_lookup (fixture.stages, path) : NULL;
     if (item) {
         g_assert_cmpint (item->syncs, ==, 0);
@@ -885,6 +1036,13 @@ __wrap_fsync (int fd)
 {
     char *path = fixture.running ? fd_path (fd) : NULL;
     Item *item = path ? g_hash_table_lookup (fixture.stages, path) : NULL;
+    if (item && item->publish)
+        item = NULL;
+    if (item && (fcntl (fd, F_GETFL) & O_ACCMODE) == O_RDONLY) {
+        g_assert_cmpint (item->syncs, >, item->range);
+        g_assert_cmpint (item->closed, >, item->syncs);
+        item = NULL;
+    }
     if (item) {
         struct stat st;
         g_assert_cmpint (fstat (fd, &st), ==, 0);
@@ -925,14 +1083,26 @@ __wrap_fsync (int fd)
             return -1;
         }
     }
-    gboolean directory = path && under (path, fixture.dest_dir) && !item && !backend;
-    if (directory && fixture.test->fault == DIR_SYNC) {
+    struct stat directory_stat;
+    gboolean directory = path && under (path, fixture.dest_dir) &&
+                         fstat (fd, &directory_stat) == 0 && S_ISDIR (directory_stat.st_mode);
+    gboolean published = FALSE;
+    for (guint i = 0; fixture.running && fixture.items && i < fixture.items->len; i++)
+        published |= ((Item *) g_ptr_array_index (fixture.items, i))->publish != 0;
+    if (directory && ((fixture.test->fault == DIR_SYNC && published) ||
+                      (fixture.test->fault == RECOVERY_SYNC && !published))) {
         fixture.injections++;
         g_free (path);
         errno = EIO;
         return -1;
     }
     int result = __real_fsync (fd);
+    Item *source = fixture.running ? source_item (path) : NULL;
+    if (result == 0 && source)
+        source->native_sync = ++fixture.sequence;
+    Item *target = fixture.running ? destination_item (path) : NULL;
+    if (result == 0 && target)
+        target->target_sync = ++fixture.sequence;
     if (result == 0 && item)
         item->syncs = ++fixture.sequence;
     if (result == 0 && backend)
@@ -944,7 +1114,8 @@ __wrap_fsync (int fd)
             if (published->publish && !published->dirsync)
                 published->dirsync = ++fixture.sequence;
         }
-        if (fixture.test->fault == CANCEL_DELETE) {
+        if (fixture.test->fault == CANCEL_DELETE &&
+            ((Item *) g_ptr_array_index (fixture.items, 0))->publish) {
             fixture.injections++;
             g_cancellable_cancel (fixture.cancel);
         }
@@ -982,12 +1153,66 @@ __wrap_syncfs (int fd)
 
 gboolean __real_g_file_copy (GFile *, GFile *, GFileCopyFlags, GCancellable *,
                              GFileProgressCallback, gpointer, GError **);
+
+/* Executed before GTK initialization, with the parent's descriptors closed.
+ * Only synthetic fixture bytes may be written, and never with replacement. */
+static int
+subprocess_pull (int argc, char **argv)
+{
+    g_assert_cmpint (argc, ==, 7);
+    const char *root = argv[2], *source_root = argv[3];
+    const char *source = argv[4], *destination = argv[5];
+    gboolean unavailable = g_str_equal (argv[6], "unavailable");
+    const char *paths[] = { source, destination };
+    for (guint i = 0; i < G_N_ELEMENTS (paths); i++) {
+        g_assert_true (g_str_has_prefix (paths[i], "/proc/"));
+        char *end;
+        guint64 pid = g_ascii_strtoull (paths[i] + strlen ("/proc/"), &end, 10);
+        g_assert_cmpuint (pid, ==, i == 1 && unavailable ? 0 : getppid ());
+        g_assert_true (g_str_has_prefix (end, "/fd/"));
+        int fd = g_ascii_strtoull (end + strlen ("/fd/"), &end, 10);
+        g_assert_cmpint (fd, >, 2);
+        g_assert_cmpint (*end, ==, '/');
+        g_assert_cmpint (fcntl (fd, F_GETFD), ==, -1);
+        g_assert_cmpint (errno, ==, EBADF);
+        g_autofree char *self = g_strdup_printf ("/proc/self/fd/%d%s", fd, end);
+        struct stat st;
+        g_assert_cmpint (lstat (self, &st), ==, -1);
+        g_assert_cmpint (errno, ==, ENOENT);
+    }
+    g_autofree char *resolved_source = normalize_path (source);
+    g_assert_true (under (resolved_source, source_root));
+    g_autofree char *contents = NULL;
+    g_assert_true (g_file_get_contents (source, &contents, NULL, NULL));
+    g_assert_cmpstr (contents, ==, payload);
+    if (!unavailable) {
+        g_autofree char *resolved_destination = normalize_path (destination);
+        g_assert_true (under (resolved_destination, root));
+        g_autofree char *parent = g_path_get_dirname (destination);
+        struct stat st;
+        g_assert_cmpint (stat (parent, &st), ==, 0);
+        g_assert_true (S_ISDIR (st.st_mode));
+        g_assert_cmpuint (st.st_uid, ==, getuid ());
+        g_assert_cmpuint (st.st_mode & 0777, ==, 0700);
+    }
+    int writer = open (destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (unavailable) {
+        g_assert_cmpint (writer, ==, -1);
+        g_assert_cmpint (errno, ==, ENOENT);
+        return 42;
+    }
+    g_assert_cmpint (writer, >=, 0);
+    g_assert_cmpint (write (writer, contents, strlen (contents)), ==, strlen (contents));
+    g_assert_cmpint (close (writer), ==, 0);
+    return 0;
+}
+
 gboolean
 __wrap_g_file_copy (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellable *cancel,
                     GFileProgressCallback progress, gpointer data, GError **error)
 {
-    char *src = __real_g_file_get_path (source);
-    char *dst = __real_g_file_get_path (dest);
+    char *src = test_file_path (source);
+    char *dst = test_file_path (dest);
     Item *item = fixture.running && pull_case () ? source_item (src) : NULL;
     if (item) {
         g_assert_nonnull (dst);
@@ -1010,7 +1235,46 @@ __wrap_g_file_copy (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
         g_free (basename);
         g_free (parent);
     }
-    gboolean ok = __real_g_file_copy (source, dest, flags, cancel, progress, data, error);
+    gboolean ok;
+    if (item && g_str_has_prefix (fixture.test->name, "pull-subprocess-")) {
+        g_autofree char *backend_source = __real_g_file_get_path (source);
+        g_autofree char *backend_destination = __real_g_file_get_path (dest);
+        g_autofree char *expected_prefix = g_strdup_printf ("/proc/%ld/fd/", (long) getpid ());
+        g_assert_true (g_str_has_prefix (backend_source, expected_prefix));
+        g_assert_true (g_str_has_prefix (backend_destination, expected_prefix));
+        const char *paths[] = { backend_source, backend_destination };
+        for (guint i = 0; i < G_N_ELEMENTS (paths); i++) {
+            int fd = g_ascii_strtoull (paths[i] + strlen (expected_prefix), NULL, 10);
+            int descriptor_flags = fcntl (fd, F_GETFD);
+            g_assert_cmpint (descriptor_flags, >=, 0);
+            g_assert_true ((descriptor_flags & FD_CLOEXEC) != 0);
+        }
+        if (fixture.test->fault == PULL_ALIAS_FAILED) {
+            char *inaccessible = g_strconcat ("/proc/0/fd/",
+                backend_destination + strlen (expected_prefix), NULL);
+            g_free (backend_destination);
+            backend_destination = inaccessible;
+            fixture.injections++;
+        }
+        char *argv[] = { "/proc/self/exe", "--pull-helper", fixture.root, fixture.source_dir,
+                         backend_source, backend_destination,
+                         fixture.test->fault == PULL_ALIAS_FAILED ? "unavailable" : "copy", NULL };
+        int status;
+        /* No LEAVE_DESCRIPTORS_OPEN: exec must not inherit any pinned fds. */
+        g_assert_true (g_spawn_sync (NULL, argv, NULL, G_SPAWN_DEFAULT,
+                                    NULL, NULL, NULL, NULL, &status, NULL));
+        fixture.backend_children++;
+        ok = g_spawn_check_wait_status (status, error);
+        if (fixture.test->fault == PULL_ALIAS_FAILED) {
+            g_assert_false (ok);
+            g_assert_error (*error, G_SPAWN_EXIT_ERROR, 42);
+            g_clear_error (error);
+            g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                                 "The backend cannot resolve the parent's process alias");
+        }
+    } else {
+        ok = __real_g_file_copy (source, dest, flags, cancel, progress, data, error);
+    }
     if (item && ok) {
         item->backend_copy = ++fixture.sequence;
         if (fixture.test->fault == PULL_EOF) {
@@ -1069,8 +1333,8 @@ gboolean
 __wrap_g_file_move (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellable *cancel,
                     GFileProgressCallback progress, gpointer data, GError **error)
 {
-    char *src = __real_g_file_get_path (source);
-    char *dst = __real_g_file_get_path (dest);
+    char *src = test_file_path (source);
+    char *dst = test_file_path (dest);
     gboolean ours = fixture.running && under (src, fixture.source_dir);
     if (ours)
         fixture.source_move_attempts++;
@@ -1133,6 +1397,56 @@ __wrap_g_file_move (GFile *source, GFile *dest, GFileCopyFlags flags, GCancellab
     return ok;
 }
 
+int __real_renameat2 (int, const char *, int, const char *, unsigned int);
+int
+__wrap_renameat2 (int oldfd, const char *oldname, int newfd, const char *newname,
+                  unsigned int flags)
+{
+    g_autofree char *src = path_at (oldfd, oldname);
+    g_autofree char *dst = path_at (newfd, newname);
+    Item *item = fixture.running ? g_hash_table_lookup (fixture.stages, src) : NULL;
+    Item *captured = fixture.running ? source_item (src) : NULL;
+    gboolean publication = item &&
+        (under (dst, fixture.dest_dir) ||
+         (named ("existing-duplicate") && under (dst, fixture.source_dir))) &&
+        !strstr (dst, "/.nemo-recovery-") && !strstr (dst, "/copy.nemo-partial-");
+    if (fixture.running && under (src, fixture.source_dir))
+        fixture.source_move_attempts++;
+    if (publication) {
+        g_assert_true (flags == RENAME_NOREPLACE || flags == RENAME_EXCHANGE);
+        g_assert_cmpint (oldfd, !=, AT_FDCWD);
+        g_assert_cmpint (newfd, !=, AT_FDCWD);
+        g_assert_true (exists (item->source));
+        if (!item->symlink) {
+            g_assert_cmpint (item->syncs, >, 0);
+            g_assert_cmpint (item->closed, >, item->syncs);
+            if (fixture.test->move || fixture.test->verify)
+                g_assert_cmpint (item->stage_checksum, >, item->syncs);
+        }
+        if (fixture.test->fault == PUBLISH_RACE && !fixture.injections) {
+            g_assert_false (exists (dst));
+            g_assert_cmpint (g_mkdir (dst, 0700), ==, 0);
+            fixture.foreign = g_build_filename (dst, "foreign-child", NULL);
+            g_assert_true (g_file_set_contents (fixture.foreign, foreign_data, -1, NULL));
+            fixture.injections++;
+        }
+    }
+    int result = __real_renameat2 (oldfd, oldname, newfd, newname, flags);
+    if (result == 0 && publication) {
+        item->publish = ++fixture.sequence;
+        item->displaced = flags == RENAME_EXCHANGE;
+        if (fixture.test->fault == CANCEL_PUBLISH) {
+            fixture.injections++;
+            g_cancellable_cancel (fixture.cancel);
+        }
+    }
+    if (result == 0 && captured && !destination_item (dst)) {
+        g_free (captured->capture);
+        captured->capture = g_strdup (dst);
+    }
+    return result;
+}
+
 gboolean __real_g_file_delete (GFile *, GCancellable *, GError **);
 static void
 record_source_delete (const char *path)
@@ -1150,6 +1464,27 @@ record_source_delete (const char *path)
     item->deleted = ++fixture.sequence;
 }
 
+int __real_unlinkat (int, const char *, int);
+int
+__wrap_unlinkat (int dirfd, const char *name, int flags)
+{
+    g_autofree char *path = path_at (dirfd, name);
+    if (fixture.running) {
+        g_assert_cmpstr (path, !=, fixture.foreign);
+        Item *stage = g_hash_table_lookup (fixture.stages, path);
+        if (stage) {
+            g_assert_false (stage->displaced);
+            if (fixture.test->fault == CLEANUP) {
+                fixture.injections++;
+                errno = EACCES;
+                return -1;
+            }
+        }
+        record_source_delete (path);
+    }
+    return __real_unlinkat (dirfd, name, flags);
+}
+
 int __real_remove (const char *);
 int
 __wrap_remove (const char *path)
@@ -1164,7 +1499,7 @@ __wrap_remove (const char *path)
 gboolean
 __wrap_g_file_delete (GFile *file, GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     if (fixture.running) {
         g_assert_cmpstr (path, !=, fixture.foreign);
         record_source_delete (path);
@@ -1185,7 +1520,7 @@ GFileEnumerator *
 __wrap_g_file_enumerate_children (GFile *file, const char *attributes,
                                   GFileQueryInfoFlags flags, GCancellable *cancel, GError **error)
 {
-    char *path = __real_g_file_get_path (file);
+    char *path = test_file_path (file);
     gboolean scan = fixture.running && under (path, fixture.source_dir) &&
                     strstr (attributes, G_FILE_ATTRIBUTE_STANDARD_SIZE);
     g_free (path);
@@ -1248,7 +1583,7 @@ respond (gpointer unused)
             gtk_dialog_response (l->data,
                                  (named ("conflict-skip") || named ("partial-conflict-copy") ||
                                   named ("existing-skip") || named ("existing-unverified") ||
-                                  (named ("existing-unverified-tree") && fixture.conflicts > 2) ||
+                                  named ("existing-unverified-tree") ||
                                   g_str_has_suffix (fixture.test->name, "-skip")) ?
                                  CONFLICT_RESPONSE_SKIP :
                                  (named ("rename-conflict") || named ("existing-rename")) ?
@@ -1360,6 +1695,7 @@ add_item (const char *source, const char *dest, gboolean symlink)
     struct stat st;
     g_assert_cmpint (lstat (source, &st), ==, 0);
     item->source_mode = st.st_mode & 0777;
+    item->original_source = st;
     item->source_mtime = st.st_mtim;
     item->writer = -1;
     item->parent_fd = -1;
@@ -1374,6 +1710,7 @@ free_item (gpointer data)
     Item *item = data;
     g_free (item->source);
     g_free (item->dest);
+    g_free (item->capture);
     g_free (item);
 }
 
@@ -1385,7 +1722,7 @@ successful_case (void)
             fault == RANGE_ENOSYS || fault == RANGE_EOPNOTSUPP || fault == COLLISION ||
             fault == DEFAULT_PERMS || fault == SYNCFS_EINTR ||
             fault == ATTR_UNSUPPORTED || fault == ATTR_DENIED || fault == OPTIONAL_METADATA ||
-            fault == NO_VERSION) &&
+            fault == NO_VERSION || fault == FOLDER_DIRECTORY_RACE) &&
            !file_over_folder () && !folder_over_file () && !nested_type_conflict () &&
            !named ("conflict-skip") && !named ("partial-conflict-copy");
 }
@@ -1411,13 +1748,32 @@ assert_staging (const char *root)
 }
 
 static void
+assert_no_recovery_payloads (const char *root)
+{
+    GDir *dir = g_dir_open (root, 0, NULL);
+    g_assert_nonnull (dir);
+    const char *name;
+    while ((name = g_dir_read_name (dir))) {
+        g_assert_cmpstr (name, !=, "payload");
+        g_assert_cmpstr (name, !=, "captured-source");
+        g_autofree char *path = g_build_filename (root, name, NULL);
+        struct stat st;
+        g_assert_cmpint (lstat (path, &st), ==, 0);
+        if (S_ISDIR (st.st_mode))
+            assert_no_recovery_payloads (path);
+    }
+    g_dir_close (dir);
+}
+
+static void
 test_existing_integrity (void)
 {
-    gboolean tree = named ("existing-tree") || named ("existing-directory-skip") ||
+    gboolean tree = named ("existing-tree") || named ("existing-merged-file-skip") ||
                     named ("existing-unverified-tree");
     gboolean links = named ("existing-symlink") || named ("existing-symlink-different") ||
                      named ("existing-link-over-unversioned");
     gboolean size_difference = named ("existing-unverified-size-skip") ||
+                               named ("existing-merged-file-skip") ||
                                g_str_has_suffix (fixture.test->name, "-version-size");
     gboolean fifo = named ("existing-fifo");
     gboolean duplicate = named ("existing-duplicate");
@@ -1531,8 +1887,8 @@ test_existing_integrity (void)
         g_assert_cmpint (fixture.injections, >, 0);
     if (fixture.test->fault == NO_VERSION || fixture.test->fault == EXIST_TARGET_NO_VERSION)
         g_assert_cmpint (fixture.conflicts, ==, 0);
-    else if (named ("existing-unverified-tree"))
-        g_assert_cmpint (fixture.conflicts, ==, 5);
+    else if (named ("existing-unverified-tree") || named ("existing-merged-file-skip"))
+        g_assert_cmpint (fixture.conflicts, ==, 3);
     else if (named ("existing-replace-all"))
         g_assert_cmpint (fixture.conflicts, ==, 1);
     else if (fixture.test->replace || skipped || fifo)
@@ -1595,10 +1951,12 @@ test_existing_integrity (void)
         }
         if (!failed && !skipped && !missing && !links && !duplicate &&
             !named ("existing-regular-over-symlink")) {
-            /* One source hash and one destination hash, each including EOF;
-             * accepting a conflict must not repeat the phone comparison. */
+            /* The remote source comparison remains single-pass. The local
+             * target also needs fingerprints for durability and guarded undo. */
             g_assert_cmpuint (item->source_hash_reads, ==, named ("existing-empty") ? 1 : 2);
-            g_assert_cmpuint (item->target_hash_reads, ==, named ("existing-empty") ? 1 : 2);
+            g_assert_cmpuint (item->target_hash_reads, >=, named ("existing-empty") ? 1 : 2);
+            if (!rename)
+                g_assert_cmpint (item->target_sync, >, 0);
         }
         g_assert_cmpint (item->deleted, ==, 0);
     }
@@ -1612,6 +1970,15 @@ test_existing_integrity (void)
         guint children = 0;
         while ((name = g_dir_read_name (dir))) {
             g_autofree char *path = g_build_filename (fixture.source_dir, name, NULL);
+            if (g_str_has_prefix (name, ".nemo-recovery-")) {
+                struct stat st;
+                g_assert_cmpint (lstat (path, &st), ==, 0);
+                g_assert_true (S_ISDIR (st.st_mode));
+                g_assert_cmpuint (st.st_mode & 0700, ==, 0700);
+                g_assert_cmpuint (st.st_mode & 0022, ==, 0);
+                assert_no_recovery_payloads (path);
+                continue;
+            }
             assert_contents (path, fixture.contents);
             children++;
         }
@@ -1649,9 +2016,11 @@ test_copy_integrity (void)
     gboolean empty_folder = named ("empty-folder-copy") || named ("empty-folder-move");
     gboolean new_folder = named ("folder-new-copy") || named ("folder-new-move") ||
                           named ("folder-parent-fsync") || fixture.test->fault == FOLDER_RACE ||
+                          fixture.test->fault == FOLDER_DIRECTORY_RACE ||
                           empty_folder || fixture.test->fault == SCAN_OPEN ||
                           fixture.test->fault == SCAN_READ;
     gboolean folder = new_folder || named ("folder-copy") || named ("folder-move") ||
+                      named ("folder-unverified-copy") || named ("folder-native-merge") ||
                       named ("merge-all") || named ("folder-partial-move") ||
                       nested_type_conflict ();
     gboolean is_link = named ("broken-symlink") || named ("fifo-symlink") ||
@@ -1664,29 +2033,20 @@ test_copy_integrity (void)
                        g_strdup (named ("zero-byte-copy") ? "" : payload);
     fixture.source_dir = g_build_filename (fixture.root, "source", NULL);
     fixture.dest_dir = g_build_filename (fixture.root, "destination", NULL);
-    g_assert_cmpint (g_mkdir (fixture.source_dir, 0700), ==, 0);
-    if (named ("real-crossfs-move")) {
-        /* Opt in to a disposable second filesystem without using global /tmp. */
+    g_assert_cmpint (g_mkdir (fixture.dest_dir, 0700), ==, 0);
+    if (named ("real-crossfs-move") || fixture.test->fallback) {
         const char *root = g_getenv ("NEMO_TEST_CROSS_FS_ROOT");
-        if (!root) {
-            g_test_skip ("Set NEMO_TEST_CROSS_FS_ROOT to a writable second filesystem");
-            remove_fixture (fixture.root);
-            goto out;
-        }
-        g_free (fixture.dest_dir);
-        fixture.dest_dir = g_build_filename (root, "nemo-copy-integrity-XXXXXX", NULL);
-        g_assert_nonnull (g_mkdtemp (fixture.dest_dir));
+        if (root == NULL)
+            root = "/dev/shm";
+        g_free (fixture.source_dir);
+        fixture.source_dir = g_build_filename (root, "nemo-copy-integrity-XXXXXX", NULL);
+        g_assert_nonnull (g_mkdtemp (fixture.source_dir));
         struct stat src_stat, dst_stat;
         g_assert_cmpint (stat (fixture.source_dir, &src_stat), ==, 0);
         g_assert_cmpint (stat (fixture.dest_dir, &dst_stat), ==, 0);
-        if (src_stat.st_dev == dst_stat.st_dev) {
-            g_test_skip ("Source and destination are on the same filesystem");
-            remove_fixture (fixture.dest_dir);
-            remove_fixture (fixture.root);
-            goto out;
-        }
+        g_assert_cmpuint (src_stat.st_dev, !=, dst_stat.st_dev);
     } else {
-        g_assert_cmpint (g_mkdir (fixture.dest_dir, 0700), ==, 0);
+        g_assert_cmpint (g_mkdir (fixture.source_dir, 0700), ==, 0);
     }
     fixture.items = g_ptr_array_new_with_free_func (free_item);
     fixture.stages = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
@@ -1695,7 +2055,7 @@ test_copy_integrity (void)
         char *name = named ("long-name") ? g_strnfill (240, 'a') : g_strdup_printf ("payload-%u", i);
         char *src = g_build_filename (fixture.source_dir, name, NULL);
         char *dst = g_build_filename (fixture.dest_dir, name, NULL);
-        if (fixture.test->fault == FOLDER_RACE)
+        if (fixture.test->fault == FOLDER_RACE || fixture.test->fault == FOLDER_DIRECTORY_RACE)
             fixture.raced_destination = g_strdup (dst);
         if (folder) {
             g_assert_cmpint (g_mkdir (src, 0700), ==, 0);
@@ -1835,11 +2195,17 @@ test_copy_integrity (void)
         g_assert_cmpuint (fixture.result.skipped_items, ==, 0);
         g_assert_cmpuint (fixture.result.failed_items, ==, 0);
     }
-    if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move") || empty_folder)
+    if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move") ||
+        named ("folder-native-merge") || empty_folder)
         g_assert_cmpuint (fixture.result.checksum_verified_files, ==, 0);
     if (named ("samefs-move") || named ("samefs-verified-move")) {
         g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
         g_assert_cmpuint (fixture.result.completed_items, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
+    }
+    if (named ("folder-native-merge")) {
+        g_assert_cmpuint (fixture.result.atomic_moves, ==, 1);
+        g_assert_cmpuint (fixture.result.completed_directories, ==, 1);
         g_assert_cmpuint (fixture.result.completed_regular_files, ==, 0);
     }
     if (named ("verified-copy") || named ("fallback-move") || named ("folder-partial-move") ||
@@ -1878,7 +2244,8 @@ test_copy_integrity (void)
     g_free (source_name);
     g_free (destination_name);
     if (!successful_case ())
-        g_assert_null (strstr (completion, " completed."));
+        g_assert_false (g_str_has_prefix (completion,
+                                         fixture.test->move ? "Move completed." : "Copy completed."));
     if (!successful_case () || fixture.result.atomic_moves > 0)
         g_assert_null (strstr (completion, "All copied regular files"));
     if (fixture.result.checksum_verified_files == 0) {
@@ -1894,9 +2261,37 @@ test_copy_integrity (void)
     g_free (completion);
     if (fixture.test->fault != NONE)
         g_assert_cmpint (fixture.injections, >, 0);
+    if (fixture.test->fault == SOURCE_EOF) {
+        g_assert_cmpuint (fixture.source_eof_reads, >, 0);
+        Item *item = g_ptr_array_index (fixture.items, 0);
+        g_assert_cmpuint (item->input_streams, >, 0);
+        g_assert_cmpuint (item->publish, ==, 0);
+        g_assert_cmpuint (item->deleted, ==, 0);
+    }
+    if (pull_case () && fixture.test->fault == READBACK)
+        g_assert_cmpuint (fixture.readback_refusals, >, 0);
+    if (fixture.test->fault == DIR_SYNC) {
+        Item *item = g_ptr_array_index (fixture.items, 0);
+        g_assert_cmpint (item->publish, >, 0);
+        g_assert_cmpint (item->stage_checksum, >, item->syncs);
+        g_assert_cmpint (item->deleted, ==, 0);
+    }
+    if (fixture.test->fault == RECOVERY_SYNC) {
+        Item *item = g_ptr_array_index (fixture.items, 0);
+        g_assert_cmpint (item->writes, ==, 0);
+        g_assert_cmpint (item->publish, ==, 0);
+        g_assert_cmpint (item->deleted, ==, 0);
+    }
     if (fixture.test->fault == CLEANUP) {
-        g_assert_cmpint (fixture.cleanup_warnings, ==, 1);
-        g_assert_cmpint (fixture.cleanup_logs, ==, 1);
+        g_autofree char *details = nemo_progress_info_get_completion_text (fixture.progress);
+        GHashTableIter retained;
+        gpointer retained_path;
+        g_hash_table_iter_init (&retained, fixture.stages);
+        while (g_hash_table_iter_next (&retained, &retained_path, NULL)) {
+            g_autofree char *directory = g_path_get_dirname (retained_path);
+            g_assert_true (exists (retained_path));
+            g_assert_nonnull (strstr (details, directory));
+        }
     }
     if (fixture.test->fault == CORRUPT || fixture.test->fault == CLEANUP)
         g_assert_cmpint (fixture.mismatch_warnings, ==, count);
@@ -1904,10 +2299,23 @@ test_copy_integrity (void)
         g_assert_cmpint (fixture.readback_warnings, ==, 1);
     if (named ("skip-all"))
         g_assert_cmpint (fixture.warnings, ==, 1);
-    if (named ("replace-all") || named ("merge-all") || named ("rename-conflict"))
+    if (named ("replace-all") || named ("rename-conflict") || named ("folder-partial-move"))
         g_assert_cmpint (fixture.conflicts, ==, 1);
+    if (named ("folder-copy") || named ("folder-unverified-copy") || named ("folder-move") ||
+        named ("folder-native-merge") || named ("merge-all") || named ("folder-existing-race")) {
+        g_assert_cmpint (fixture.conflicts, ==, 0);
+        g_assert_cmpint (fixture.warnings, ==, 0);
+    }
+    if (fixture.test->fault == FOLDER_DIRECTORY_RACE) {
+        struct stat existing_directory;
+        g_assert_cmpint (fixture.raced_mkdir_attempts, ==, 1);
+        g_assert_cmpint (lstat (fixture.raced_destination, &existing_directory), ==, 0);
+        g_assert_cmpuint (existing_directory.st_mode & 0777, ==, 0750);
+        assert_contents (fixture.foreign, foreign_data);
+    }
     if (fixture.test->fault == COLLISION) {
         g_assert_cmpint (fixture.attempts, >=, 2);
+        g_assert_cmpuint (fixture.recovery_collisions, ==, 1);
         assert_contents (fixture.foreign, foreign_data);
     }
     if (fixture.test->fault == FOLDER_RACE) {
@@ -1916,7 +2324,7 @@ test_copy_integrity (void)
     }
     if (nested_type_conflict ()) {
         g_assert_false (fixture.test->fallback);
-        g_assert_cmpint (fixture.source_move_attempts, >=, 2);
+        g_assert_cmpint (fixture.source_move_attempts, ==, 0);
         g_assert_cmpint (fixture.injections, ==, 0);
         assert_contents (fixture.foreign, previous);
     }
@@ -1942,8 +2350,14 @@ test_copy_integrity (void)
         }
         if (pull_case ()) {
             g_assert_cmpint (fixture.injections, >, 0);
-            g_assert_cmpint (item->backend_copy, >, item->parent_open);
-            if (fixture.test->fault == PULL_FAILED || fixture.test->fault == PULL_CANCEL)
+            if (g_str_has_prefix (fixture.test->name, "pull-subprocess-"))
+                g_assert_cmpint (fixture.backend_children, ==, 1);
+            if (fixture.test->fault == PULL_ALIAS_FAILED)
+                g_assert_cmpint (item->backend_copy, ==, 0);
+            else
+                g_assert_cmpint (item->backend_copy, >, item->parent_open);
+            if (fixture.test->fault == PULL_FAILED || fixture.test->fault == PULL_CANCEL ||
+                fixture.test->fault == PULL_ALIAS_FAILED)
                 g_assert_cmpint (item->syncfs_calls, ==, 0);
             else
                 g_assert_cmpint (item->syncfs_calls, >, 0);
@@ -1956,7 +2370,8 @@ test_copy_integrity (void)
                 g_assert_cmpint (item->syncs, >, item->filesystem_sync);
                 g_assert_cmpint (item->adopted, >, item->syncs);
                 g_assert_cmpint (item->publish, >, item->adopted);
-                g_assert_cmpint (item->stage_checksum, ==, 0);
+                g_assert_cmpint (item->stage_checksum, >, item->syncs);
+                g_assert_cmpint (item->publish, >, item->stage_checksum);
             } else {
                 g_assert_cmpint (item->publish, ==, 0);
                 g_assert_cmpint (item->deleted, ==, 0);
@@ -2010,7 +2425,7 @@ test_copy_integrity (void)
             else
                 g_assert_false (exists (item->dest));
             if (completed && !named ("copy") && !named ("samefs-move") &&
-                !named ("samefs-verified-move") && !pull_case () &&
+                !named ("samefs-verified-move") && !named ("folder-native-merge") && !pull_case () &&
                 (fixture.test->move || fixture.test->verify)) {
                 g_assert_cmpint (item->writes, >, 0);
                 assert_source_readback (item);
@@ -2019,9 +2434,20 @@ test_copy_integrity (void)
                 if (fixture.test->move)
                     g_assert_cmpint (item->deleted, >, item->dirsync);
             }
-            if (named ("copy") || named ("samefs-move") || named ("samefs-verified-move")) {
+            if (named ("copy")) {
+                g_assert_cmpint (item->writes, >, 0);
+                g_assert_cmpint (item->syncs, >, 0);
+                g_assert_cmpint (item->closed, >, item->syncs);
+                g_assert_cmpint (item->publish, >, item->closed);
+            }
+            if (named ("samefs-move") || named ("samefs-verified-move") ||
+                named ("folder-native-merge")) {
+                struct stat installed;
+                g_assert_cmpint (lstat (item->dest, &installed), ==, 0);
+                g_assert_cmpuint (installed.st_dev, ==, item->original_source.st_dev);
+                g_assert_cmpuint (installed.st_ino, ==, item->original_source.st_ino);
                 g_assert_cmpint (item->writes, ==, 0);
-                g_assert_cmpint (item->checksum, ==, 0);
+                g_assert_cmpint (item->native_sync, >, 0);
             }
             if (named ("chunked-copy") || named ("pull-chunked-copy"))
                 g_assert_cmpint (item->periodic, >, 0);
@@ -2097,8 +2523,10 @@ test_copy_integrity (void)
     GHashTableIter iter;
     gpointer path;
     g_hash_table_iter_init (&iter, fixture.stages);
-    while (g_hash_table_iter_next (&iter, &path, NULL))
-        g_assert_cmpint (exists (path), ==, fixture.test->fault == CLEANUP);
+    gpointer stage_item;
+    while (g_hash_table_iter_next (&iter, &path, &stage_item))
+        g_assert_cmpint (exists (path), ==,
+                        fixture.test->fault == CLEANUP || ((Item *) stage_item)->displaced);
     g_hash_table_iter_init (&iter, fixture.backend_payloads);
     while (g_hash_table_iter_next (&iter, &path, NULL)) {
         g_assert_false (exists (path));
@@ -2114,10 +2542,9 @@ test_copy_integrity (void)
     g_hash_table_unref (fixture.stages);
     g_hash_table_unref (fixture.backend_payloads);
     g_ptr_array_unref (fixture.items);
-    if (named ("real-crossfs-move"))
-        remove_fixture (fixture.dest_dir);
+    if (named ("real-crossfs-move") || fixture.test->fallback)
+        remove_fixture (fixture.source_dir);
     remove_fixture (fixture.root);
-out:
     g_free (fixture.root);
     g_free (fixture.source_dir);
     g_free (fixture.dest_dir);
@@ -2136,6 +2563,8 @@ main (int argc, char **argv)
                     "(NEMO_TEST_ISOLATED=1 is required).\n");
         return 77;
     }
+    if (argc > 1 && g_str_equal (argv[1], "--pull-helper"))
+        return subprocess_pull (argc, argv);
     g_assert_cmpint (argc, >=, 2);
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
         if (strcmp (argv[1], cases[i].name) == 0) {

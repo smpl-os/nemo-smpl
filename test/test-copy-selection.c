@@ -381,18 +381,23 @@ confirm_copy (GtkDialog *dialog)
 }
 
 static void
-test_f5 (gconstpointer close)
+test_pane_confirmation (gconstpointer mode)
 {
-    close_confirmation = GPOINTER_TO_INT (close);
-    confirmation_source = new_view ("f5-source");
+    gboolean move = GPOINTER_TO_INT (mode) >= 2;
+    close_confirmation = GPOINTER_TO_INT (mode) % 2;
+    confirmation_source = new_view (move ? "f6-source" : "f5-source");
     confirmation_slot = g_object_ref_sink (g_object_new (NEMO_TYPE_WINDOW_SLOT, NULL));
     GList *original = copy_selection_uris (confirmation_source->selected);
-    action_copy_to_next_pane_callback (NULL, confirmation_source);
+    if (move)
+        action_move_to_next_pane_callback (NULL, confirmation_source);
+    else
+        action_copy_to_next_pane_callback (NULL, confirmation_source);
     PendingCopy *copy = g_queue_peek_head (&copies);
     if (close_confirmation) {
         g_assert_null (copy);
     } else {
         g_assert_nonnull (copy);
+        g_assert_cmpint (copy->action, ==, move ? GDK_ACTION_MOVE : GDK_ACTION_COPY);
         g_assert_true (copy_selection_same_uris (copy->uris, original));
         finish_copy (TRUE, NULL);
     }
@@ -745,8 +750,10 @@ main (int argc, char **argv)
     g_test_add_func ("/copy-selection/overlapping", test_overlapping);
     g_test_add_func ("/copy-selection/generation-saturation", test_saturation);
     g_test_add_func ("/copy-selection/approved-inputs", test_frozen_inputs);
-    g_test_add_data_func ("/copy-selection/f5-modal-selection-change", GINT_TO_POINTER (0), test_f5);
-    g_test_add_data_func ("/copy-selection/f5-modal-source-close", GINT_TO_POINTER (1), test_f5);
+    g_test_add_data_func ("/copy-selection/f5-modal-selection-change", GINT_TO_POINTER (0), test_pane_confirmation);
+    g_test_add_data_func ("/copy-selection/f5-modal-source-close", GINT_TO_POINTER (1), test_pane_confirmation);
+    g_test_add_data_func ("/copy-selection/f6-modal-selection-change", GINT_TO_POINTER (2), test_pane_confirmation);
+    g_test_add_data_func ("/copy-selection/f6-modal-source-close", GINT_TO_POINTER (3), test_pane_confirmation);
     g_test_add_func ("/copy-selection/copy-to", test_copy_to);
     g_test_add_data_func ("/copy-selection/copy-to-verified-target", GINT_TO_POINTER (0), test_copy_to_verified);
     g_test_add_data_func ("/copy-selection/changed-copy-to-verified-target", GINT_TO_POINTER (1), test_copy_to_verified);

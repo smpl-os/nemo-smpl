@@ -36,6 +36,9 @@ enum {
   PROGRESS_CHANGED,
   STARTED,
   FINISHED,
+#ifdef NEMO_SMPL
+  SHOW_DIALOG,
+#endif
   LAST_SIGNAL
 };
 
@@ -66,6 +69,7 @@ struct _NemoProgressInfo
 	gboolean result_set;
 	gboolean finished_cancelled;
 	char *completion_details;
+	char *completion_context;
 #endif
 	
 	GSource *idle_source;
@@ -99,6 +103,7 @@ nemo_progress_info_finalize (GObject *object)
     g_timer_destroy (info->time);
 #ifdef NEMO_SMPL
 	g_free (info->completion_details);
+	g_free (info->completion_context);
 	g_cond_free (info->cond);
 	g_mutex_clear (&info->info_lock);
 #endif
@@ -180,7 +185,11 @@ nemo_progress_info_class_init (NemoProgressInfoClass *klass)
 			      NULL, NULL,
 			      g_cclosure_marshal_VOID__VOID,
 			      G_TYPE_NONE, 0);
-	
+#ifdef NEMO_SMPL
+	signals[SHOW_DIALOG] =
+		g_signal_new ("show-dialog", NEMO_TYPE_PROGRESS_INFO, G_SIGNAL_RUN_LAST,
+		              0, NULL, NULL, NULL, G_TYPE_NONE, 1, GTK_TYPE_WINDOW);
+#endif
 }
 
 static void
@@ -209,6 +218,27 @@ nemo_progress_info_new (void)
 }
 
 #ifdef NEMO_SMPL
+void
+nemo_progress_info_attach_dialog (NemoProgressInfo *info, GtkWindow *dialog)
+{
+	g_return_if_fail (NEMO_IS_PROGRESS_INFO (info));
+	g_return_if_fail (GTK_IS_WINDOW (dialog));
+	g_signal_emit (info, signals[SHOW_DIALOG], 0, dialog);
+}
+
+void
+nemo_progress_info_take_completion_context (NemoProgressInfo *info, char *context)
+{
+	g_mutex_lock (&info->info_lock);
+	if (!info->finished) {
+		g_free (info->completion_context);
+		info->completion_context = context;
+	} else {
+		g_free (context);
+	}
+	g_mutex_unlock (&info->info_lock);
+}
+
 void
 nemo_progress_info_take_completion_details (NemoProgressInfo *info, char *details)
 {
@@ -251,8 +281,8 @@ nemo_progress_info_get_result (NemoProgressInfo *info, NemoProgressResult *resul
 	return available;
 }
 
-char *
-nemo_progress_info_get_completion_text (NemoProgressInfo *info)
+static char *
+completion_text (NemoProgressInfo *info, gboolean detailed)
 {
 	NemoProgressResult result = { 0 };
 	gboolean cancelled;
@@ -267,7 +297,8 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	}
 	cancelled = info->finished ? info->finished_cancelled :
 	                            g_cancellable_is_cancelled (info->cancellable);
-	context = g_strdup (info->completion_details);
+	context = g_strdup (detailed && info->completion_details != NULL ?
+	                    info->completion_details : info->completion_context);
 	g_mutex_unlock (&info->info_lock);
 
 	if (cancelled) {
@@ -276,7 +307,7 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	if (result.operation == NEMO_PROGRESS_OPERATION_UNKNOWN) {
 		return g_strdup (result.outcome == NEMO_PROGRESS_OUTCOME_CANCELLED ?
 		                 _("Operation cancelled.") :
-		                 _("Operation finished. Success was not reported."));
+		                 _("Operation finished."));
 	}
 
 	operation = result.operation == NEMO_PROGRESS_OPERATION_MOVE ? _("Move") : _("Copy");
@@ -305,15 +336,15 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 		g_string_append_printf (text, "\n%s", context);
 	}
 	g_string_append_printf (text, _("\nCompleted items: %" G_GUINT64_FORMAT), result.completed_items);
-	if (result.completed_regular_files > 0) {
+	if (detailed && result.completed_regular_files > 0) {
 		g_string_append_printf (text, _("\nRegular files copied: %" G_GUINT64_FORMAT),
 		                        result.completed_regular_files);
 	}
-	if (result.completed_directories > 0) {
+	if (detailed && result.completed_directories > 0) {
 		g_string_append_printf (text, _("\nDirectories completed: %" G_GUINT64_FORMAT),
 		                        result.completed_directories);
 	}
-	if (result.completed_symlinks > 0) {
+	if (detailed && result.completed_symlinks > 0) {
 		g_string_append_printf (text, _("\nSymbolic links copied: %" G_GUINT64_FORMAT),
 		                        result.completed_symlinks);
 	}
@@ -364,7 +395,7 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 	} else {
 		g_string_append (text, _("\nNo completed files were checksum verified."));
 	}
-	if (result.verified_symlinks > 0) {
+	if (detailed && result.verified_symlinks > 0) {
 		g_string_append_printf (text, _("\nLink-text verified symbolic links (completed): %" G_GUINT64_FORMAT),
 		                        result.verified_symlinks);
 	}
@@ -372,7 +403,23 @@ nemo_progress_info_get_completion_text (NemoProgressInfo *info)
 		g_string_append_printf (text, _("\nAtomic moves (not checksum verified): %" G_GUINT64_FORMAT),
 		                        result.atomic_moves);
 	}
+	if (detailed) {
+		g_string_append (text, _("\nVerification compares data returned by the filesystem; it does not prove a physical-media read."
+		                         "\nBefore unplugging a device, use Eject or Safely Remove and wait for that operation to finish."));
+	}
 	return g_string_free (text, FALSE);
+}
+
+char *
+nemo_progress_info_get_completion_text (NemoProgressInfo *info)
+{
+	return completion_text (info, TRUE);
+}
+
+char *
+nemo_progress_info_get_completion_summary (NemoProgressInfo *info)
+{
+	return completion_text (info, FALSE);
 }
 #endif
 
@@ -437,11 +484,25 @@ nemo_progress_info_get_progress (NemoProgressInfo *info)
 	
 	g_mutex_lock (&info->info_lock);
 
+#ifdef NEMO_SMPL
+	if (info->finished && info->result_set &&
+	    info->result.outcome == NEMO_PROGRESS_OUTCOME_SUCCESS &&
+	    !info->finished_cancelled) {
+		res = 1.0;
+	} else if (info->activity_mode) {
+		res = -1.0;
+	} else {
+		/* Byte progress is not completion: close, verification and publication
+		 * may still fail after the last byte has been written. */
+		res = MIN (info->progress, 0.99);
+	}
+#else
 	if (info->activity_mode) {
 		res = -1.0;
 	} else {
 		res = info->progress;
 	}
+#endif
 	
 	g_mutex_unlock (&info->info_lock);
 	
@@ -704,6 +765,7 @@ nemo_progress_info_finish (NemoProgressInfo *info)
 		if (info->result_set && info->finished_cancelled) {
 			info->result.outcome = NEMO_PROGRESS_OUTCOME_CANCELLED;
 		}
+		info->progress_at_idle = TRUE;
 #endif
 		info->finished = TRUE;
 		

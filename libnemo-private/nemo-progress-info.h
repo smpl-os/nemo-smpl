@@ -27,6 +27,9 @@
 
 #include <glib-object.h>
 #include <gio/gio.h>
+#ifdef NEMO_SMPL
+#include <gtk/gtk.h>
+#endif
 
 #define NEMO_TYPE_PROGRESS_INFO         (nemo_progress_info_get_type ())
 #define NEMO_PROGRESS_INFO(o)           (G_TYPE_CHECK_INSTANCE_CAST ((o), NEMO_TYPE_PROGRESS_INFO, NemoProgressInfo))
@@ -85,8 +88,14 @@ void          nemo_progress_info_set_result (NemoProgressInfo *info,
 gboolean      nemo_progress_info_get_result (NemoProgressInfo *info,
                                             NemoProgressResult *result);
 char *        nemo_progress_info_get_completion_text (NemoProgressInfo *info);
+char *        nemo_progress_info_get_completion_summary (NemoProgressInfo *info);
+void          nemo_progress_info_take_completion_context (NemoProgressInfo *info,
+                                                         char *context);
 void          nemo_progress_info_take_completion_details (NemoProgressInfo *info,
                                                          char *details);
+/* Main thread only, before displaying a job's question or error dialog. */
+void          nemo_progress_info_attach_dialog (NemoProgressInfo *info,
+                                               GtkWindow *dialog);
 #endif
 
 GType nemo_progress_info_get_type (void) G_GNUC_CONST;
@@ -97,8 +106,8 @@ GType nemo_progress_info_get_type (void) G_GNUC_CONST;
    "started" - emited on job start
    "finished" - emitted when job is done
    
-   All signals are emitted from idles in main loop.
-   All methods are threadsafe.
+   Except for the main-thread-only attach_dialog / show-dialog hook,
+   signals are emitted from idles in the main loop and methods are threadsafe.
  */
 
 NemoProgressInfo *nemo_progress_info_new (void);
