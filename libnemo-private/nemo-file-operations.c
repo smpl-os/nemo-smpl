@@ -1189,10 +1189,10 @@ generate_initial_job_details (NemoProgressInfo *info,
         };
         nemo_progress_info_set_result (info, &initial_result);
         if (src_name != NULL && dest_name != NULL) {
-            nemo_progress_info_take_completion_details (
+            nemo_progress_info_take_completion_context (
                 info, f (_("From: %1$s\nTo: %2$s"), src_name, dest_name));
         } else if (dest_name != NULL) {
-            nemo_progress_info_take_completion_details (info, f (_("To: %s"), dest_name));
+            nemo_progress_info_take_completion_context (info, f (_("To: %s"), dest_name));
         }
     }
 #endif
@@ -1345,6 +1345,9 @@ typedef struct {
 	const char *details_text;
 	const char **button_titles;
 	gboolean show_all;
+#ifdef NEMO_SMPL
+	NemoProgressInfo *progress;
+#endif
 
 	int result;
 } RunSimpleDialogData;
@@ -1394,6 +1397,9 @@ do_run_simple_dialog (gpointer _data)
 	}
 
 	/* Run it. */
+#ifdef NEMO_SMPL
+        nemo_progress_info_attach_dialog (data->progress, GTK_WINDOW (dialog));
+#endif
         result = gtk_dialog_run (GTK_DIALOG (dialog));
 
 	while ((result == GTK_RESPONSE_NONE || result == GTK_RESPONSE_DELETE_EVENT) && data->ignore_close_box) {
@@ -1435,6 +1441,9 @@ run_simple_dialog_va (CommonJob *job,
 	data->secondary_text = secondary_text;
 	data->details_text = details_text;
 	data->show_all = show_all;
+#ifdef NEMO_SMPL
+	data->progress = job->progress;
+#endif
 
 	ptr_array = g_ptr_array_new ();
 	while ((button_title = va_arg (varargs, const char *)) != NULL) {
@@ -5190,6 +5199,9 @@ typedef struct {
 	GFile *dest_dir;
 	GtkWindow *parent;
 	ConflictResponseData *resp_data;
+#ifdef NEMO_SMPL
+	NemoProgressInfo *progress;
+#endif
 } ConflictDialogData;
 
 static gboolean
@@ -5203,6 +5215,9 @@ do_run_conflict_dialog (gpointer _data)
 						    data->src,
 						    data->dest,
 						    data->dest_dir);
+#ifdef NEMO_SMPL
+	nemo_progress_info_attach_dialog (data->progress, GTK_WINDOW (dialog));
+#endif
 	response = gtk_dialog_run (GTK_DIALOG (dialog));
 
 	if (response == CONFLICT_RESPONSE_RENAME) {
@@ -5238,6 +5253,9 @@ run_conflict_dialog (CommonJob *job,
 	data->src = src;
 	data->dest = dest;
 	data->dest_dir = dest_dir;
+#ifdef NEMO_SMPL
+	data->progress = job->progress;
+#endif
 
 	resp_data = g_new0 (ConflictResponseData, 1);
 	resp_data->new_name = NULL;

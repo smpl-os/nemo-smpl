@@ -461,7 +461,7 @@ new_operation_kind (NemoProgressOperation operation)
     NemoProgressResult result = { .operation = operation };
     nemo_progress_info_set_result (info, &result);
     nemo_progress_info_take_initial_details (info, g_strdup ("Waiting to copy test data"));
-    nemo_progress_info_take_completion_details (info, g_strdup ("From: source\nTo: destination"));
+    nemo_progress_info_take_completion_context (info, g_strdup ("From: source\nTo: destination"));
     nemo_progress_info_queue (info);
     nemo_progress_info_start (info);
     return info;
@@ -497,13 +497,26 @@ show_operation (NemoProgressUIHandler *handler, NemoProgressInfo *info)
     g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
 }
 
+static GtkWidget *
+last_result (NemoProgressUIHandler *handler)
+{
+    GList *children = gtk_container_get_children (GTK_CONTAINER (handler->priv->completed_list));
+    GtkWidget *row = g_list_last (children)->data;
+    g_list_free (children);
+    return row;
+}
+
 static const char *
 last_summary (NemoProgressUIHandler *handler)
 {
-    GList *children = gtk_container_get_children (GTK_CONTAINER (handler->priv->completed_list));
-    const char *text = gtk_label_get_text (GTK_LABEL (g_list_last (children)->data));
-    g_list_free (children);
-    return text;
+    return gtk_label_get_text (GTK_LABEL (g_object_get_data (
+        G_OBJECT (last_result (handler)), "summary-label")));
+}
+
+static const char *
+last_details (NemoProgressUIHandler *handler)
+{
+    return g_object_get_data (G_OBJECT (last_result (handler)), "result-text");
 }
 
 static void
@@ -674,7 +687,9 @@ test_hidden_completion (void)
     g_assert_cmpuint (notifications, ==, 1);
     g_assert_nonnull (last_notification);
     g_assert_cmpstr (notification_body, ==, last_summary (handler));
-    g_assert_cmpstr (notification_target, ==, notification_body);
+    g_assert_cmpstr (notification_target, ==, last_details (handler));
+    g_assert_nonnull (strstr (notification_target, "physical-media read"));
+    g_assert_null (strstr (notification_body, "physical-media read"));
     g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
     g_assert_cmpuint (holds, ==, 0);
     assert_empty_manager (handler);
@@ -690,9 +705,9 @@ test_quick_generic_hidden (void)
     NemoProgressInfo *info = new_operation_kind (NEMO_PROGRESS_OPERATION_UNKNOWN);
     nemo_progress_info_finish (info);
     drain ();
-    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
-    g_assert_cmpuint (notifications, ==, 1);
-    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_assert_cmpuint (notifications, ==, 0);
+    g_assert_null (handler->priv->progress_window);
     g_assert_cmpuint (holds, ==, 0);
     assert_empty_manager (handler);
     g_object_unref (info);
@@ -749,6 +764,180 @@ test_visible_and_close (void)
     g_assert_cmpuint (holds, ==, 0);
     g_assert_cmpuint (handler->priv->completed_count, ==, 0);
     g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_keyboard_close (void)
+{
+    const guint keys[] = { GDK_KEY_Return, GDK_KEY_KP_Enter, GDK_KEY_Escape };
+
+    for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
+        NemoProgressUIHandler *handler = new_handler ();
+        NemoProgressInfo *info = new_operation ();
+        drain ();
+        GtkWidget *window = handler->priv->progress_window;
+        GtkWidget *button = gtk_window_get_default_widget (GTK_WINDOW (window));
+        g_assert_true (GTK_IS_BUTTON (button));
+        g_assert_cmpstr (gtk_button_get_label (GTK_BUTTON (button)), ==, "_Close");
+        g_assert_true (gtk_widget_has_default (button));
+        GList *widgets = gtk_container_get_children (GTK_CONTAINER (handler->priv->list));
+        NemoProgressInfoWidget *progress = widgets->data;
+        GtkWidget *pause = progress->priv->running_start_pause_button;
+        GList *buttons = gtk_container_get_children (GTK_CONTAINER (gtk_widget_get_parent (pause)));
+        GtkWidget *cancel_button = g_list_last (buttons)->data;
+        gtk_widget_grab_focus (cancel_button);
+        g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == cancel_button);
+        g_list_free (buttons);
+        g_list_free (widgets);
+        GdkEventKey event = { .type = GDK_KEY_PRESS, .keyval = keys[i] };
+        gboolean handled = FALSE;
+        g_signal_emit_by_name (window, "key-press-event", &event, &handled);
+        g_assert_true (handled);
+        g_assert_false (gtk_widget_get_visible (window));
+        g_assert_cmpuint (handler->priv->active_infos, ==, 1);
+        g_assert_cmpuint (holds, ==, 1);
+        g_assert_false (nemo_progress_info_get_is_paused (info));
+        GCancellable *cancel = nemo_progress_info_get_cancellable (info);
+        g_assert_false (g_cancellable_is_cancelled (cancel));
+        g_object_unref (cancel);
+
+        finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+        status_icon_activate_cb (handler->priv->status_icon, 1, 0, handler);
+        handled = FALSE;
+        g_signal_emit_by_name (window, "key-press-event", &event, &handled);
+        g_assert_true (handled);
+        g_assert_false (gtk_widget_get_visible (window));
+        g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+        g_assert_cmpuint (holds, ==, 0);
+        g_object_unref (info);
+        g_object_unref (handler);
+        drain ();
+    }
+}
+
+static void
+test_dialog_parent (void)
+{
+    for (guint before_queue = 0; before_queue < 2; before_queue++) {
+        NemoProgressUIHandler *handler = new_handler ();
+        NemoProgressInfo *info = new_operation ();
+        if (!before_queue)
+            drain ();
+        GtkWidget *dialog = gtk_dialog_new ();
+        gtk_window_set_modal (GTK_WINDOW (dialog), TRUE);
+        nemo_progress_info_attach_dialog (info, GTK_WINDOW (dialog));
+        gtk_widget_show (dialog);
+        /* Deliver queued presentation while the conflict is already visible. */
+        drain ();
+        g_assert_true (gtk_window_get_transient_for (GTK_WINDOW (dialog)) ==
+                       GTK_WINDOW (handler->priv->progress_window));
+        g_assert_true (gtk_widget_get_visible (dialog));
+        g_assert_true (gtk_window_get_modal (GTK_WINDOW (dialog)));
+        g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+        gtk_widget_destroy (dialog);
+        finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+        g_object_unref (info);
+        g_object_unref (handler);
+        drain ();
+    }
+}
+
+static void
+test_completion_details (void)
+{
+    for (guint failed = 0; failed < 2; failed++) {
+        NemoProgressUIHandler *handler = new_handler ();
+        NemoProgressInfo *info = new_operation ();
+        NemoProgressResult result = {
+            .operation = NEMO_PROGRESS_OPERATION_COPY,
+            .outcome = failed ? NEMO_PROGRESS_OUTCOME_PARTIAL : NEMO_PROGRESS_OUTCOME_SUCCESS,
+            .completed_items = 2, .completed_regular_files = 2,
+            .checksum_verified_files = 2, .failed_items = failed,
+            .verification_requested = TRUE
+        };
+        nemo_progress_info_take_completion_details (info,
+            g_strdup ("From: source\nTo: destination\nRecovery: retained-file\nOptional metadata warning"));
+        nemo_progress_info_set_result (info, &result);
+        nemo_progress_info_finish (info);
+        drain ();
+        g_assert_nonnull (strstr (last_summary (handler), "SHA-256 verified files (completed): 2"));
+        g_assert_nonnull (strstr (last_summary (handler), "From: source\nTo: destination"));
+        g_assert_null (strstr (last_summary (handler), "Optional metadata"));
+        g_assert_null (strstr (last_summary (handler), "physical-media read"));
+        g_assert_nonnull (strstr (last_details (handler), "Recovery: retained-file"));
+        g_assert_nonnull (strstr (last_details (handler), "Optional metadata"));
+        GtkExpander *details = g_object_get_data (G_OBJECT (last_result (handler)), "details-expander");
+        g_assert_cmpint (gtk_expander_get_expanded (details), ==, failed);
+        if (failed) {
+            g_assert_nonnull (strstr (last_summary (handler), "Copy incomplete."));
+            g_assert_nonnull (strstr (last_summary (handler), "Failed items: 1"));
+            g_assert_null (strstr (last_summary (handler), "All copied regular files"));
+        } else {
+            g_assert_nonnull (strstr (last_summary (handler), "Copy completed."));
+            g_assert_nonnull (strstr (last_summary (handler), "All copied regular files were SHA-256 verified."));
+        }
+        g_object_unref (info);
+        g_object_unref (handler);
+        drain ();
+    }
+}
+
+static void
+test_generic_with_transfer (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *copy = new_operation ();
+    NemoProgressInfo *generic = new_operation_kind (NEMO_PROGRESS_OPERATION_UNKNOWN);
+    drain ();
+    nemo_progress_info_finish (generic);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+    finish_operation (copy, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_true (g_str_has_prefix (last_summary (handler), "Copy completed."));
+    g_assert_null (strstr (last_summary (handler), "Success was not reported"));
+    g_assert_cmpuint (notifications, ==, 0);
+    g_object_unref (generic);
+    g_object_unref (copy);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_generic_visible (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = new_operation_kind (NEMO_PROGRESS_OPERATION_UNKNOWN);
+    drain ();
+    show_operation (handler, info);
+    nemo_progress_info_finish (info);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_assert_cmpuint (notifications, ==, 0);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (holds, ==, 0);
+    assert_empty_manager (handler);
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_unknown_transfer_result (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = new_operation ();
+    nemo_progress_info_finish (info);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_nonnull (strstr (last_summary (handler), "Success was not reported."));
+    g_assert_null (strstr (last_summary (handler), "Copy completed."));
+    GtkExpander *details = g_object_get_data (G_OBJECT (last_result (handler)), "details-expander");
+    g_assert_true (gtk_expander_get_expanded (details));
     g_object_unref (info);
     g_object_unref (handler);
     drain ();
@@ -857,8 +1046,10 @@ test_notification_reopen (void)
     NemoProgressUIHandler *handler = new_handler ();
     GVariant *target = g_variant_ref_sink (g_variant_new_string ("Earlier copy\nVerification failed"));
     g_action_group_activate_action (G_ACTION_GROUP (application), "show-file-operation-results", target);
-    g_assert_cmpstr (last_summary (handler), ==,
-                     "Earlier completion notification\nEarlier copy\nVerification failed");
+    g_assert_cmpstr (last_summary (handler), ==, "Earlier completion notification");
+    g_assert_cmpstr (last_details (handler), ==, "Earlier copy\nVerification failed");
+    GtkExpander *details = g_object_get_data (G_OBJECT (last_result (handler)), "details-expander");
+    g_assert_true (gtk_expander_get_expanded (details));
     g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
     g_assert_cmpuint (holds, ==, 1);
     g_variant_unref (target);
@@ -921,7 +1112,7 @@ test_model_snapshot (void)
     nemo_progress_info_finish (info);
     g_free (text);
     text = nemo_progress_info_get_completion_text (info);
-    g_assert_cmpstr (text, ==, "Operation finished. Success was not reported.");
+    g_assert_cmpstr (text, ==, "Operation finished.");
     drain ();
     g_object_unref (info);
 }
@@ -941,7 +1132,7 @@ test_notification_input (void)
 
     target = g_variant_ref_sink (g_variant_new_string ("<b>not markup</b>"));
     g_action_group_activate_action (G_ACTION_GROUP (application), "show-file-operation-results", target);
-    g_assert_nonnull (strstr (last_summary (handler), "<b>not markup</b>"));
+    g_assert_nonnull (strstr (last_details (handler), "<b>not markup</b>"));
     g_action_group_activate_action (G_ACTION_GROUP (application), "show-file-operation-results", target);
     g_assert_cmpuint (handler->priv->completed_count, ==, 1);
     g_variant_unref (target);
@@ -1265,6 +1456,12 @@ main (int argc, char **argv)
     g_test_add_func ("/completion/quick-generic-hidden", test_quick_generic_hidden);
     g_test_add_func ("/completion/queued-move-visible", test_queued_move_visible);
     g_test_add_func ("/completion/visible-close", test_visible_and_close);
+    g_test_add_func ("/completion/keyboard-close", test_keyboard_close);
+    g_test_add_func ("/completion/dialog-parent", test_dialog_parent);
+    g_test_add_func ("/completion/details", test_completion_details);
+    g_test_add_func ("/completion/generic-with-transfer", test_generic_with_transfer);
+    g_test_add_func ("/completion/generic-visible", test_generic_visible);
+    g_test_add_func ("/completion/unknown-transfer-result", test_unknown_transfer_result);
     g_test_add_func ("/completion/concurrent-close", test_concurrent_close);
     g_test_add_func ("/completion/mixed-results", test_mixed_results);
     g_test_add_func ("/completion/dispose-pending", test_dispose_pending);

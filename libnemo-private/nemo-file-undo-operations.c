@@ -459,6 +459,7 @@ transfer_undo_done (GObject *source, GAsyncResult *result, gpointer unused)
 				GTK_BUTTONS_CLOSE, "%s", _("Undo or redo could not be completed safely."));
 			gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), "%s\n%s",
 			                                          error->message, state->details->str);
+			nemo_progress_info_attach_dialog (state->progress, GTK_WINDOW (dialog));
 			gtk_dialog_run (GTK_DIALOG (dialog));
 			gtk_widget_destroy (dialog);
 		}

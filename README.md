@@ -82,6 +82,11 @@ writer race, or certify that a remote server committed data to physical media.
 
 See [transfer behavior and recovery limits](FEATURES.md#verify-after-copymove).
 
+The File Operations window shows the transfer result and SHA-256 verification
+summary. Technical notes and recovery locations are under **Details**, expanded
+automatically for incomplete operations. **Enter**, **Escape**, or **Close**
+dismisses the window without cancelling active transfers.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
