@@ -1,12 +1,16 @@
 name: Build Debian Package
 
 on:
-  push:
-    branches:
-      - release
-  pull_request:
-    branches:
-      - release
+  workflow_call:
+    inputs:
+      build-ref:
+        description: Commit selected by the package release workflow
+        required: true
+        type: string
+      publish-release:
+        description: Attach packages to the selected version's release
+        required: true
+        type: boolean
   workflow_dispatch:
 
 permissions:
@@ -21,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.build-ref || github.ref }}
 
       - name: Install dependencies
         run: |
@@ -67,7 +73,7 @@ jobs:
           retention-days: 14
 
       - name: Add to GitHub Release
-        if: github.event_name != 'pull_request'
+        if: inputs.publish-release
         uses: softprops/action-gh-release@v2
         with:
           files: debian-build/*.deb

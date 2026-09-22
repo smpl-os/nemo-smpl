@@ -1,8 +1,7 @@
 nemo-smpl
 =========
 
-[![Build](https://github.com/KonTy/nemo/actions/workflows/build-arch.yml/badge.svg)](https://github.com/KonTy/nemo/actions/workflows/build-arch.yml)
-[![Debian](https://github.com/KonTy/nemo/actions/workflows/build-debian.yml/badge.svg)](https://github.com/KonTy/nemo/actions/workflows/build-debian.yml)
+[![Packages](https://github.com/smpl-os/nemo-smpl/actions/workflows/build-arch.yml/badge.svg?branch=main)](https://github.com/smpl-os/nemo-smpl/actions/workflows/build-arch.yml)
 
 **nemo-smpl** is an enhanced fork of [Nemo](https://github.com/linuxmint/nemo), the file manager for the Cinnamon desktop environment. This fork is maintained for **smplOS** and ships features that upstream considers out-of-scope.
 
@@ -125,7 +124,15 @@ Open PRs to upstream:
 
 - **Bug reports / feature requests:** [GitHub Issues](https://github.com/KonTy/nemo/issues)
 - **Development:** See [INSTALLATION.md](INSTALLATION.md) for build instructions
-- **PRs:** Target the `release` branch
+- **PRs:** Target the `main` branch
+
+`main` is the development and release branch. Pushes to `main` run **Build and
+Release Packages**, which bumps the version once and builds both Arch and Debian
+packages from that same commit. Both package builds run the transfer-safety
+regressions before uploading packages. The old `release` branch is retained for
+history; it is no longer the publishing source. To publish manually, run **Build
+and Release Packages** on `main`; dispatching **Build Debian Package** alone only
+builds an artifact.
 
 ## License
 
