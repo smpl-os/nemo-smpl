@@ -74,9 +74,44 @@ static gboolean birthtime_shifted;
 static gboolean birthtime_mount_changed;
 static guint birthtime_observations;
 
+typedef enum {
+    REPLACE_OK, REPLACE_PROBE_IO, REPLACE_NO_NOREPLACE, REPLACE_LATE_UNSUPPORTED,
+    REPLACE_PREPARE_FLUSH, REPLACE_CAPTURE_IO, REPLACE_CAPTURE_RESULT_IO,
+    REPLACE_CAPTURE_RESULT_INTR, REPLACE_CAPTURE_RACE, REPLACE_BACKUP_OCCUPIED,
+    REPLACE_BACKUP_FLUSH, REPLACE_CAPTURE_DIR_FLUSH, REPLACE_PARENT_FLUSH,
+    REPLACE_CAPTURE_RECORD_FLUSH, REPLACE_PUBLISH_IO, REPLACE_PUBLISH_RESULT_IO,
+    REPLACE_PUBLISH_RESULT_INTR, REPLACE_PUBLISH_RACE, REPLACE_PUBLISH_FLUSH,
+    REPLACE_PUBLISHED_RECORD_FLUSH, REPLACE_PREPARE_CANCEL, REPLACE_CAPTURE_CANCEL,
+    REPLACE_PUBLISH_CANCEL, REPLACE_FINISH_CLOSE
+} ReplacementFault;
+
+typedef struct {
+    const char *name;
+    ReplacementFault fault;
+    int exchange_errno;
+    gboolean native;
+    gboolean move;
+} ReplacementCase;
+
+static struct {
+    const ReplacementCase *test;
+    Fixture *fixture;
+    GCancellable *cancel;
+    const char *source;
+    const char *destination;
+    const char *saved;
+    char *transaction;
+    gboolean active;
+    gboolean finishing;
+    guint injected, exchanges, captures, publications;
+    guint prepared_flushes, captured_record_flushes, captured_dir_flushes, parent_flushes;
+} replacement;
+
 static void interleave_namespace_publication (const char *private_path);
 static guint descriptor_count (void);
 static void change_byte (const char *path, gsize offset);
+static void create_file (const char *path, const char *contents);
+static void assert_contents (const char *path, const char *expected);
 
 static void
 sample_descriptor_peak (void)
@@ -127,6 +162,87 @@ int __real_renameat2 (int from_fd, const char *from, int to_fd, const char *to, 
 int
 __wrap_renameat2 (int from_fd, const char *from, int to_fd, const char *to, unsigned int flags)
 {
+    if (replacement.active) {
+        ReplacementFault fault = replacement.test->fault;
+        g_autofree char *source = path_at_fd (from_fd, from);
+        g_autofree char *destination = path_at_fd (to_fd, to);
+        gboolean capture = !strcmp (to, "previous-destination");
+        gboolean publish = !strcmp (from, "payload") &&
+                           g_strcmp0 (destination, replacement.destination) == 0;
+        if (flags == RENAME_EXCHANGE) {
+            replacement.exchanges++;
+            if (fault != REPLACE_LATE_UNSUPPORTED || publish) {
+                errno = fault == REPLACE_PROBE_IO ? EIO : replacement.test->exchange_errno;
+                return -1;
+            }
+        }
+        if (fault == REPLACE_NO_NOREPLACE && !strcmp (to, "probe-c")) {
+            replacement.injected++;
+            errno = EOPNOTSUPP;
+            return -1;
+        }
+        if (capture) {
+            g_assert_cmpuint (flags, ==, RENAME_NOREPLACE);
+            g_assert_cmpuint (replacement.prepared_flushes, >, 0);
+            g_free (replacement.transaction);
+            replacement.transaction = path_at_fd (to_fd, "");
+            if (fault == REPLACE_CAPTURE_IO) {
+                replacement.injected++;
+                errno = EIO;
+                return -1;
+            }
+            if (fault == REPLACE_CAPTURE_RACE) {
+                g_assert_cmpint (rename (source, replacement.saved), ==, 0);
+                create_file (source, "racing destination");
+                replacement.injected++;
+            }
+            if (fault == REPLACE_BACKUP_OCCUPIED) {
+                create_file (destination, "occupied recovery slot");
+                replacement.injected++;
+            }
+        }
+        if (publish && flags == RENAME_NOREPLACE) {
+            g_assert_cmpuint (replacement.captures, ==, 1);
+            g_assert_cmpuint (replacement.captured_record_flushes, >, 0);
+            g_assert_cmpuint (replacement.captured_dir_flushes, >, 0);
+            g_assert_cmpuint (replacement.parent_flushes, >, 0);
+            if (fault == REPLACE_PUBLISH_RACE) {
+                create_file (destination, "racing destination");
+                replacement.injected++;
+            }
+            if (fault == REPLACE_PUBLISH_IO) {
+                replacement.injected++;
+                errno = EIO;
+                return -1;
+            }
+        }
+        int result = __real_renameat2 (from_fd, from, to_fd, to, flags);
+        if (result == 0 && capture) {
+            replacement.captures++;
+            if (fault == REPLACE_CAPTURE_CANCEL) {
+                replacement.injected++;
+                g_cancellable_cancel (replacement.cancel);
+            }
+            if (fault == REPLACE_CAPTURE_RESULT_IO || fault == REPLACE_CAPTURE_RESULT_INTR) {
+                replacement.injected++;
+                errno = fault == REPLACE_CAPTURE_RESULT_IO ? EIO : EINTR;
+                return -1;
+            }
+        }
+        if (result == 0 && publish) {
+            replacement.publications++;
+            if (fault == REPLACE_PUBLISH_CANCEL) {
+                replacement.injected++;
+                g_cancellable_cancel (replacement.cancel);
+            }
+            if (fault == REPLACE_PUBLISH_RESULT_IO || fault == REPLACE_PUBLISH_RESULT_INTR) {
+                replacement.injected++;
+                errno = fault == REPLACE_PUBLISH_RESULT_IO ? EIO : EINTR;
+                return -1;
+            }
+        }
+        return result;
+    }
     gboolean interleaved = FALSE;
     if (namespace_race && !namespace_race->observing) {
         g_autofree char *destination = path_at_fd (to_fd, to);
@@ -171,6 +287,38 @@ int
 __wrap_fsync (int fd)
 {
     sample_descriptor_peak ();
+    if (replacement.active) {
+        g_autofree char *path = path_at_fd (fd, "");
+        ReplacementFault fault = replacement.test->fault;
+        gboolean prepared = g_str_has_suffix (path, "/record-replacement-prepared");
+        gboolean recorded = g_str_has_suffix (path, "/record-replacement-captured");
+        gboolean directory = g_strcmp0 (path, replacement.transaction) == 0;
+        gboolean parent = g_strcmp0 (path, replacement.fixture->destination) == 0;
+        if (!replacement.injected &&
+            ((fault == REPLACE_PREPARE_FLUSH && prepared) ||
+             (fault == REPLACE_BACKUP_FLUSH && g_str_has_suffix (path, "/previous-destination")) ||
+             (fault == REPLACE_CAPTURE_DIR_FLUSH && replacement.captures && directory) ||
+             (fault == REPLACE_PARENT_FLUSH && replacement.captures && parent) ||
+             (fault == REPLACE_CAPTURE_RECORD_FLUSH && recorded) ||
+             (fault == REPLACE_PUBLISH_FLUSH && replacement.publications && parent) ||
+             (fault == REPLACE_PUBLISHED_RECORD_FLUSH && g_str_has_suffix (path, "/record-published")))) {
+            replacement.injected++;
+            errno = EIO;
+            return -1;
+        }
+        int result = __real_fsync (fd);
+        if (result == 0) {
+            replacement.prepared_flushes += prepared;
+            replacement.captured_record_flushes += recorded;
+            replacement.captured_dir_flushes += replacement.captures && directory;
+            replacement.parent_flushes += replacement.captures && parent;
+            if (prepared && fault == REPLACE_PREPARE_CANCEL) {
+                replacement.injected++;
+                g_cancellable_cancel (replacement.cancel);
+            }
+        }
+        return result;
+    }
     if (candidate_owner_io (fd, 1)) {
         errno = EIO;
         return -1;
@@ -183,6 +331,16 @@ int __real_close (int fd);
 int
 __wrap_close (int fd)
 {
+    if (replacement.active && replacement.finishing &&
+        replacement.test->fault == REPLACE_FINISH_CLOSE && !replacement.injected) {
+        g_autofree char *path = path_at_fd (fd, "");
+        if (g_strcmp0 (path, replacement.transaction) == 0) {
+            g_assert_cmpint (__real_close (fd), ==, 0);
+            replacement.injected++;
+            errno = EIO;
+            return -1;
+        }
+    }
     gboolean fail = candidate_owner_io (fd, 2);
     int result = __real_close (fd);
     if (fail) {
@@ -1720,11 +1878,194 @@ directory_birthtime (gconstpointer data)
     fixture_free (fixture);
 }
 
+static void
+replacement_contract (gconstpointer data)
+{
+    const ReplacementCase *test = data;
+    Fixture *fixture = fixture_new ();
+    g_autofree char *source_path = g_build_filename (fixture->sources, "item", NULL);
+    g_autofree char *destination_path = g_build_filename (fixture->destination, "item", NULL);
+    g_autofree char *saved = g_build_filename (fixture->destination, "racer-saved", NULL);
+    create_file (source_path, "new contents");
+    create_file (destination_path, "previous contents");
+    g_autoptr (GFile) source = g_file_new_for_path (source_path);
+    g_autoptr (GFile) destination = g_file_new_for_path (destination_path);
+    g_autoptr (GFile) root = g_file_new_for_path (fixture->destination);
+    g_autoptr (GCancellable) cancel = g_cancellable_new ();
+    GList sources = { .data = source };
+    NemoTransferGuard *guard = nemo_transfer_guard_new (&sources, root, test->move);
+    g_autoptr (GError) error = NULL;
+    g_assert_true (nemo_transfer_guard_expect (guard, destination, &error));
+    g_assert_no_error (error);
+    replacement = (typeof (replacement)) {
+        .test = test, .fixture = fixture, .cancel = cancel,
+        .source = source_path, .destination = destination_path, .saved = saved, .active = TRUE
+    };
+    NemoTransferTransaction *transaction = NULL;
+    NemoTransferUndo *undo = NULL;
+    gboolean published = FALSE, ok = FALSE;
+    g_autofree char *stage_path = NULL;
+    if (test->native) {
+        ok = nemo_transfer_native_move (guard, source, destination, TRUE,
+                                       &published, &undo, cancel, &error);
+    } else {
+        transaction = nemo_transfer_transaction_new (guard, source, destination, cancel, &error);
+        if (transaction) {
+            g_autofree char *stage = g_file_get_path (nemo_transfer_transaction_stage (transaction));
+            g_autofree char *parent = g_path_get_dirname (stage);
+            replacement.transaction = g_file_read_link (parent, NULL);
+            g_assert_nonnull (replacement.transaction);
+            stage_path = g_build_filename (replacement.transaction, "payload", NULL);
+            create_file (stage, "new contents");
+            g_assert_true (nemo_transfer_transaction_stage_created (transaction, &error));
+            g_assert_no_error (error);
+            ok = nemo_transfer_transaction_publish (transaction, TRUE, &published, cancel, &error);
+            if (ok) {
+                replacement.finishing = TRUE;
+                ok = nemo_transfer_transaction_finish (transaction, &error);
+                replacement.finishing = FALSE;
+            }
+            if (ok && test->move)
+                ok = nemo_transfer_transaction_retire_source (transaction, cancel, &error);
+            if (ok)
+                undo = nemo_transfer_transaction_undo (transaction, test->move);
+            else if (test->move) {
+                /* Even an accidental caller retry cannot retire after a failed publish/finish. */
+                g_autoptr (GError) retire_error = NULL;
+                g_assert_false (nemo_transfer_transaction_retire_source (transaction, NULL, &retire_error));
+                g_assert_nonnull (retire_error);
+                assert_contents (source_path, "new contents");
+            }
+            nemo_transfer_transaction_free (transaction);
+        }
+    }
+    replacement.active = FALSE;
+    gboolean success = test->fault == REPLACE_OK || test->fault == REPLACE_LATE_UNSUPPORTED;
+    g_assert_cmpint (ok, ==, success);
+    g_assert_cmpuint (replacement.exchanges, ==, test->fault == REPLACE_LATE_UNSUPPORTED ? 2 : 1);
+    if (success) {
+        g_assert_no_error (error);
+        g_assert_true (published);
+        g_assert_cmpuint (replacement.captures, ==, 1);
+        g_assert_cmpuint (replacement.publications, ==, 1);
+        assert_contents (destination_path, "new contents");
+        g_assert_cmpint (g_file_test (source_path, G_FILE_TEST_EXISTS), ==, !test->move);
+    } else {
+        g_assert_nonnull (error);
+        g_assert_null (undo);
+        if (test->fault == REPLACE_PROBE_IO)
+            g_assert_nonnull (strstr (error->message, g_strerror (EIO)));
+        else
+            g_assert_cmpuint (replacement.injected, ==, 1);
+        if (replacement.captures)
+            g_assert_true (published);
+        if (!test->native)
+            assert_contents (source_path, "new contents");
+        if (replacement.publications) {
+            assert_contents (destination_path, "new contents");
+        } else if (test->fault == REPLACE_PUBLISH_RACE) {
+            assert_contents (destination_path, "racing destination");
+        } else if (replacement.captures) {
+            g_assert_false (g_file_test (destination_path, G_FILE_TEST_EXISTS));
+        } else {
+            assert_contents (destination_path, "previous contents");
+        }
+        if (test->native && !replacement.publications)
+            assert_contents (source_path, "new contents");
+        if (replacement.captures && !replacement.publications && !test->native)
+            assert_contents (stage_path, "new contents");
+    }
+    g_autofree char *backup = replacement.transaction ?
+        g_build_filename (replacement.transaction, "previous-destination", NULL) : NULL;
+    if (replacement.captures) {
+        assert_contents (backup, test->fault == REPLACE_CAPTURE_RACE ?
+                         "racing destination" : "previous contents");
+        g_autofree char *record_path =
+            g_build_filename (replacement.transaction, "record-replacement-prepared", NULL);
+        g_autoptr (GKeyFile) record = g_key_file_new ();
+        g_assert_true (g_key_file_load_from_file (record, record_path, G_KEY_FILE_NONE, NULL));
+        g_autofree char *method = g_key_file_get_string (record, "Transfer", "replacement-method", NULL);
+        g_autofree char *slot = g_key_file_get_string (record, "Transfer", "previous-destination-slot", NULL);
+        g_assert_cmpstr (method, ==, "retained-backup");
+        g_assert_cmpstr (slot, ==, "previous-destination");
+        if (!success) {
+            g_autofree char *details = nemo_transfer_guard_take_details (guard);
+            g_assert_nonnull (strstr (details, backup));
+            g_assert_nonnull (strstr (details, test->fault == REPLACE_FINISH_CLOSE ?
+                                     "could not be closed" : "not an atomic exchange"));
+        }
+    }
+    if (test->fault == REPLACE_CAPTURE_RACE)
+        assert_contents (saved, "previous contents");
+    if (test->fault == REPLACE_BACKUP_OCCUPIED)
+        assert_contents (backup, "occupied recovery slot");
+    if (undo) {
+        /* Two cycles exercise native undo's metadata cleanup and fresh redo recovery. */
+        for (guint i = 0; i < 2; i++) {
+            g_assert_true (nemo_transfer_undo_check (undo, FALSE, NULL, &error));
+            g_assert_no_error (error);
+            g_assert_true (nemo_transfer_undo_apply (undo, FALSE, NULL, &error));
+            g_assert_no_error (error);
+            assert_contents (destination_path, "previous contents");
+            assert_contents (source_path, "new contents");
+            g_assert_true (nemo_transfer_undo_apply (undo, TRUE, NULL, &error));
+            g_assert_no_error (error);
+            assert_contents (destination_path, "new contents");
+            g_assert_cmpint (g_file_test (source_path, G_FILE_TEST_EXISTS), ==, !test->move);
+        }
+        release_undo (undo);
+    }
+    release_guard (guard);
+    g_free (replacement.transaction);
+    memset (&replacement, 0, sizeof replacement);
+    fixture_free (fixture);
+}
+
 int
 main (int argc, char **argv)
 {
     g_setenv ("GIO_USE_VFS", "local", TRUE);
     g_test_init (&argc, &argv, NULL);
+    static const ReplacementCase replacements[] = {
+        { "copy-eopnotsupp-undo-redo", REPLACE_OK, EOPNOTSUPP },
+        { "copy-einval-undo-redo", REPLACE_OK, EINVAL },
+        { "copy-enosys-undo-redo", REPLACE_OK, ENOSYS },
+        { "native-eopnotsupp-undo-redo", REPLACE_OK, EOPNOTSUPP, TRUE, TRUE },
+        { "copied-move-undo-redo", REPLACE_OK, EOPNOTSUPP, FALSE, TRUE },
+        { "late-unsupported", REPLACE_LATE_UNSUPPORTED, EOPNOTSUPP },
+        { "probe-eio-not-unsupported", REPLACE_PROBE_IO, EOPNOTSUPP, FALSE, TRUE },
+        { "no-noreplace-refused", REPLACE_NO_NOREPLACE, EOPNOTSUPP, FALSE, TRUE },
+        { "prepare-record-flush", REPLACE_PREPARE_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-eio", REPLACE_CAPTURE_IO, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-result-eio", REPLACE_CAPTURE_RESULT_IO, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-result-eintr", REPLACE_CAPTURE_RESULT_INTR, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-race", REPLACE_CAPTURE_RACE, EOPNOTSUPP, FALSE, TRUE },
+        { "backup-occupied", REPLACE_BACKUP_OCCUPIED, EOPNOTSUPP, FALSE, TRUE },
+        { "backup-data-flush", REPLACE_BACKUP_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-directory-flush", REPLACE_CAPTURE_DIR_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-parent-flush", REPLACE_PARENT_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "captured-record-flush", REPLACE_CAPTURE_RECORD_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-eio", REPLACE_PUBLISH_IO, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-result-eio", REPLACE_PUBLISH_RESULT_IO, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-result-eintr", REPLACE_PUBLISH_RESULT_INTR, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-race", REPLACE_PUBLISH_RACE, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-directory-flush", REPLACE_PUBLISH_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "published-record-flush", REPLACE_PUBLISHED_RECORD_FLUSH, EOPNOTSUPP, FALSE, TRUE },
+        { "prepare-cancel", REPLACE_PREPARE_CANCEL, EOPNOTSUPP, FALSE, TRUE },
+        { "capture-cancel", REPLACE_CAPTURE_CANCEL, EOPNOTSUPP, FALSE, TRUE },
+        { "publish-cancel", REPLACE_PUBLISH_CANCEL, EOPNOTSUPP, FALSE, TRUE },
+        { "finish-close", REPLACE_FINISH_CLOSE, EOPNOTSUPP, FALSE, TRUE },
+        { "native-captured-record-flush", REPLACE_CAPTURE_RECORD_FLUSH, EOPNOTSUPP, TRUE, TRUE },
+        { "native-capture-result-eio", REPLACE_CAPTURE_RESULT_IO, EOPNOTSUPP, TRUE, TRUE },
+        { "native-publish-race", REPLACE_PUBLISH_RACE, EOPNOTSUPP, TRUE, TRUE },
+        { "native-publish-result-eio", REPLACE_PUBLISH_RESULT_IO, EOPNOTSUPP, TRUE, TRUE },
+        { "native-publish-cancel", REPLACE_PUBLISH_CANCEL, EOPNOTSUPP, TRUE, TRUE },
+        { "native-published-record-flush", REPLACE_PUBLISHED_RECORD_FLUSH, EOPNOTSUPP, TRUE, TRUE },
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (replacements); i++) {
+        g_autofree char *path = g_strconcat ("/transfer-recovery/replacement/", replacements[i].name, NULL);
+        g_test_add_data_func (path, &replacements[i], replacement_contract);
+    }
     g_test_add_data_func ("/transfer-recovery/directory-identity/exfat-mutable-birthtime",
                           GUINT_TO_POINTER (0), directory_birthtime);
     g_test_add_data_func ("/transfer-recovery/directory-identity/stable-filesystem-birthtime",

@@ -37,6 +37,8 @@ GFile *nemo_transfer_transaction_destination (NemoTransferTransaction *transacti
 GFile *nemo_transfer_transaction_stage (NemoTransferTransaction *transaction);
 gboolean nemo_transfer_transaction_stage_created (NemoTransferTransaction *transaction,
                                                   GError **error);
+/* published also signals a changed/uncertain namespace on failure: do not retry.
+ * Replacement prefers exchange, otherwise retains the old entry before publishing. */
 gboolean nemo_transfer_transaction_publish (NemoTransferTransaction *transaction,
                                            gboolean overwrite, gboolean *published,
                                            GCancellable *cancellable, GError **error);

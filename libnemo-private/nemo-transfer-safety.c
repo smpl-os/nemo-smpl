@@ -113,6 +113,10 @@ struct _NemoTransferTransaction {
     gboolean stage_owned;
     gboolean published;
     gboolean backup;
+    gboolean separate_backup;
+    gboolean replacement_started;
+    gboolean publication_confirmed;
+    gboolean finished;
     gboolean native_source;
     gboolean publication_uncertain;
     TransferSnapshot original;
@@ -125,6 +129,12 @@ struct _NemoTransferUndo {
     gboolean undone;
     guint serial;
 };
+
+static const char *
+backup_slot (NemoTransferTransaction *transaction)
+{
+    return transaction->separate_backup ? "previous-destination" : "payload";
+}
 
 static gboolean
 transfer_error (GError **error, const char *operation)
@@ -1711,6 +1721,14 @@ recovery_record (NemoTransferTransaction *transaction, TransferRecovery *recover
     g_key_file_set_string (record, "Transfer", "source-uri-base64", source64);
     g_key_file_set_string (record, "Transfer", "destination-uri-base64", destination64);
     g_key_file_set_string (record, "Transfer", "phase", phase);
+    if (recovery == &transaction->recovery && (transaction->separate_backup || transaction->backup)) {
+        g_key_file_set_string (record, "Transfer", "replacement-method",
+                              transaction->separate_backup ? "retained-backup" : "exchange");
+        g_key_file_set_string (record, "Transfer", "previous-destination-slot",
+                              backup_slot (transaction));
+        if (transaction->separate_backup)
+            g_key_file_set_string (record, "Transfer", "new-payload-slot", "payload");
+    }
     g_key_file_set_uint64 (record, "Transfer", "directory-device", recovery->identity.st_dev);
     g_key_file_set_uint64 (record, "Transfer", "directory-inode", recovery->identity.st_ino);
     g_key_file_set_uint64 (record, "Transfer", "source-device", transaction->source_before.stat.st_dev);
@@ -1826,16 +1844,18 @@ gboolean
 nemo_transfer_transaction_finish (NemoTransferTransaction *transaction, GError **error)
 {
     if (transaction->recovery.fd < 0)
-        return TRUE;
+        return transaction->finished || changed (error);
     if (!recovery_identity_check (&transaction->recovery, error)) {
         report_recovery (transaction->guard, &transaction->recovery,
                          _("The recovery folder changed location or permissions."));
         return FALSE;
     }
     if (recovery_finish (&transaction->recovery, error)) {
-        if (!transaction->publication_uncertain && !transaction->backup &&
-            (!transaction->guard->move || transaction->native_source))
-            return recovery_cleanup (transaction->guard, &transaction->recovery, error);
+        if (!transaction->publication_uncertain && !transaction->replacement_started &&
+            !transaction->backup && (!transaction->guard->move || transaction->native_source) &&
+            !recovery_cleanup (transaction->guard, &transaction->recovery, error))
+            return FALSE;
+        transaction->finished = TRUE;
         return TRUE;
     }
     report_recovery (transaction->guard, &transaction->recovery,
@@ -2071,7 +2091,7 @@ static gboolean
 probe_exchange (NemoTransferTransaction *transaction, GError **error)
 {
     TransferDirectory *root = transaction->recovery.parent;
-    if (root->exchange_capability == TRANSFER_EXCHANGE_SUPPORTED)
+    if (root->exchange_capability != TRANSFER_EXCHANGE_UNKNOWN)
         return TRUE;
     const char *names[] = { "probe-a", "probe-b" };
     struct stat identities[2];
@@ -2089,22 +2109,36 @@ probe_exchange (NemoTransferTransaction *transaction, GError **error)
         if (!ok)
             return FALSE;
     }
-    if (!rename_entry (parent, names[0], parent, names[1], RENAME_EXCHANGE, error)) {
-        if (g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) {
-            root->exchange_capability = TRANSFER_EXCHANGE_UNSUPPORTED;
-            report_replacement_error (transaction, *error);
-        }
+    g_autoptr (GError) probe_error = NULL;
+    gboolean exchanged = rename_entry (parent, names[0], parent, names[1],
+                                        RENAME_EXCHANGE, &probe_error);
+    if (!exchanged && !g_error_matches (probe_error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED)) {
+        g_propagate_error (error, g_steal_pointer (&probe_error));
         return FALSE;
     }
     for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
         struct stat current;
         if (fstatat (parent, names[i], &current, AT_SYMLINK_NOFOLLOW) < 0 ||
-            !same_contents_metadata (&identities[1 - i], &current))
+            !same_contents_metadata (&identities[exchanged ? 1 - i : i], &current))
+            return changed (error);
+    }
+    if (!exchanged) {
+        /* Qualifying EXCHANGE is optional; no-replace publication is not. */
+        if (!rename_entry (parent, names[0], parent, "probe-c", RENAME_NOREPLACE, error))
+            return FALSE;
+        names[0] = "probe-c";
+    }
+    for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+        struct stat current;
+        if (fstatat (parent, names[i], &current, AT_SYMLINK_NOFOLLOW) < 0 ||
+            !same_contents_metadata (&identities[exchanged ? 1 - i : i], &current))
             return changed (error);
         if (unlinkat (parent, names[i], 0) < 0)
             return transfer_error (error, _("Could not remove the owned replacement probe"));
     }
-    root->exchange_capability = TRANSFER_EXCHANGE_SUPPORTED;
+    if (!sync_fd (parent, NULL, error))
+        return FALSE;
+    root->exchange_capability = exchanged ? TRANSFER_EXCHANGE_SUPPORTED : TRANSFER_EXCHANGE_UNSUPPORTED;
     return TRUE;
 }
 
@@ -2146,11 +2180,6 @@ nemo_transfer_transaction_new (NemoTransferGuard *guard, GFile *source, GFile *d
     }
     TransferDirectory *root = recovery_parent (guard, transaction->destination_parent, TRUE);
     gboolean replacement = g_hash_table_contains (guard->expected, destination);
-    if (replacement && root->exchange_capability == TRANSFER_EXCHANGE_UNSUPPORTED) {
-        unsupported_replacement (error);
-        report_replacement_error (transaction, *error);
-        goto failed;
-    }
     if (!recovery_new (root, &transaction->recovery, cancel, error))
         goto failed;
     transaction->stage = file_at (transaction->recovery.fd, "payload");
@@ -2192,6 +2221,47 @@ nemo_transfer_transaction_stage_created (NemoTransferTransaction *transaction, G
     return TRUE;
 }
 
+static gboolean check_snapshot (int fd, const char *name, const TransferSnapshot *expected,
+                                GCancellable *cancel, GError **error);
+
+static gboolean
+capture_previous_destination (NemoTransferTransaction *transaction, TransferSnapshot *expected,
+                              gboolean *published, GCancellable *cancel, GError **error)
+{
+    TransferRecovery *recovery = &transaction->recovery;
+    TransferDirectory *parent = transaction->destination_parent;
+    TransferSnapshot staged = { 0 };
+    transaction->separate_backup = TRUE;
+    /* Both payloads and this intent record must be durable before opening the
+     * namespace gap. A failure after capture must never trigger staging cleanup. */
+    gboolean ok = snapshot_at (recovery->fd, "payload", &staged, TRUE, TRUE, cancel, error);
+    if (ok && !snapshot_matches (&transaction->installed, &staged))
+        ok = changed (error);
+    snapshot_clear (&staged);
+    if (!ok || !recovery_record (transaction, recovery, "replacement-prepared", cancel, error) ||
+        !directory_check (parent, error) || !recovery_identity_check (recovery, error) ||
+        !check_snapshot (parent->fd, transaction->destination_name, expected, cancel, error) ||
+        g_cancellable_set_error_if_cancelled (cancel, error))
+        return FALSE;
+    transaction->guard->copy_fallback_blocked = TRUE;
+    ok = rename_entry (parent->fd, transaction->destination_name, recovery->fd,
+                       backup_slot (transaction), RENAME_NOREPLACE, error);
+    if (!ok && !rename_result_uncertain (*error))
+        return FALSE;
+    transaction->replacement_started = transaction->backup = TRUE;
+    *published = TRUE; /* Namespace changed or uncertain: callers must not retry. */
+    if (!ok)
+        return FALSE;
+    if (!sync_fd (recovery->fd, cancel, error) || !sync_fd (parent->fd, cancel, error) ||
+        !snapshot_at (recovery->fd, backup_slot (transaction), &transaction->original,
+                      TRUE, TRUE, cancel, error))
+        return FALSE;
+    if (!snapshot_matches (expected, &transaction->original))
+        return changed (error);
+    return recovery_record (transaction, recovery, "replacement-captured", cancel, error) &&
+           check_directory_close (recovery->fd, error) && check_directory_close (parent->fd, error);
+}
+
 gboolean
 nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolean overwrite,
                                    gboolean *published, GCancellable *cancel, GError **error)
@@ -2201,6 +2271,8 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
     TransferSnapshot *expected = g_hash_table_lookup (guard->expected, transaction->destination);
     TransferSnapshot current = { 0 };
     gboolean ok = FALSE;
+    if (transaction->replacement_started || transaction->published)
+        return changed (error);
     if (!nemo_transfer_guard_check (guard, error) || !directory_check (parent, error) ||
         !recovery_identity_check (&transaction->recovery, error) ||
         g_cancellable_set_error_if_cancelled (cancel, error))
@@ -2222,9 +2294,26 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
         }
         if (!sync_fd (parent->fd, cancel, error))
             goto out;
-        if (!rename_entry (transaction->recovery.fd, "payload", parent->fd,
-                           transaction->destination_name, RENAME_EXCHANGE, error))
-            goto rename_failed;
+        gboolean exchange = transaction->recovery.parent->exchange_capability != TRANSFER_EXCHANGE_UNSUPPORTED;
+        if (exchange && !rename_entry (transaction->recovery.fd, "payload", parent->fd,
+                                      transaction->destination_name, RENAME_EXCHANGE, error)) {
+            if (!g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
+                goto rename_failed;
+            g_clear_error (error);
+            transaction->recovery.parent->exchange_capability = TRANSFER_EXCHANGE_UNSUPPORTED;
+            exchange = FALSE;
+        }
+        if (!exchange) {
+            if (!capture_previous_destination (transaction, expected, published, cancel, error) ||
+                !directory_check (parent, error) ||
+                !recovery_identity_check (&transaction->recovery, error) ||
+                !check_snapshot (transaction->recovery.fd, "payload", &transaction->installed, cancel, error) ||
+                g_cancellable_set_error_if_cancelled (cancel, error))
+                goto out;
+            if (!rename_entry (transaction->recovery.fd, "payload", parent->fd,
+                               transaction->destination_name, RENAME_NOREPLACE, error))
+                goto rename_failed;
+        }
         transaction->backup = TRUE;
     } else {
         if (!rename_entry (transaction->recovery.fd, "payload", parent->fd,
@@ -2237,9 +2326,9 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
         g_hash_table_insert (guard->published_destinations, g_object_ref (transaction->destination), NULL);
     if (transaction->backup) {
         snapshot_clear (&current);
-        report_recovery_entry (guard, &transaction->recovery, "payload",
+        report_recovery_entry (guard, &transaction->recovery, backup_slot (transaction),
                                _("The previous destination was preserved for recovery and undo."));
-        if (!snapshot_at (transaction->recovery.fd, "payload", &current, TRUE, TRUE, cancel, error) ||
+        if (!snapshot_at (transaction->recovery.fd, backup_slot (transaction), &current, TRUE, TRUE, cancel, error) ||
             !snapshot_matches (expected, &current)) {
             if (!*error)
                 changed (error);
@@ -2266,13 +2355,13 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
     if (!check_directory_close (parent->fd, error) ||
         !check_directory_close (transaction->recovery.fd, error))
         goto out;
-    ok = TRUE;
+    transaction->publication_confirmed = ok = TRUE;
     goto out;
 rename_failed:
     if (overwrite && expected &&
         g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
         report_replacement_error (transaction, *error);
-    if (g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
+    if (g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_EXISTS) && !transaction->replacement_started) {
         GError *snapshot_error = NULL;
         if (!nemo_transfer_guard_expect (guard, transaction->destination, &snapshot_error)) {
             g_clear_error (error);
@@ -2288,11 +2377,20 @@ rename_failed:
                            "private entries were retained; no rollback or retry was attempted."));
     }
 out:
+    if (!ok && transaction->replacement_started) {
+        report_recovery_entry (guard, &transaction->recovery, backup_slot (transaction),
+                               _("Replacement stopped after attempting to retain the previous destination. "
+                                 "The destination name may be absent or occupied by a newer entry; "
+                                 "this was not an atomic exchange."));
+        report_recovery_entry (guard, &transaction->recovery, "payload",
+                               _("Inspect the staged new data and destination before retrying; "
+                                 "retained data was not removed."));
+    }
     if (!ok && transaction->published) {
         nemo_transfer_guard_describe_destination (guard, transaction->destination);
         if (transaction->backup)
-            report_recovery_entry (guard, &transaction->recovery, "payload",
-                                   transaction->publication_uncertain ?
+            report_recovery_entry (guard, &transaction->recovery, backup_slot (transaction),
+                                   transaction->publication_uncertain && !transaction->separate_backup ?
                                    _("The private entry was retained because an exchange may have completed. "
                                      "Inspect it before attempting recovery.") :
                                    _("The displaced destination entry was retained; publication was not confirmed."));
@@ -2324,6 +2422,8 @@ nemo_transfer_transaction_retire_source (NemoTransferTransaction *transaction,
     TransferRecovery capture = { .fd = -1 };
     TransferSnapshot source = { 0 }, destination = { 0 };
     gboolean captured = FALSE, ok = FALSE;
+    if (!transaction->publication_confirmed || !transaction->finished)
+        return changed (error);
     if (!transaction->source_parent)
         return unsupported (error);
     if (!nemo_transfer_guard_check (transaction->guard, error) ||
@@ -2501,7 +2601,8 @@ nemo_transfer_transaction_free (NemoTransferTransaction *transaction)
         recovery_finish (&transaction->recovery, NULL);
         return;
     }
-    if (transaction->stage_owned && !transaction->published && !transaction->native_source) {
+    if (transaction->stage_owned && !transaction->published && !transaction->replacement_started &&
+        !transaction->native_source) {
         struct stat current;
         if (fstatat (transaction->recovery.fd, "payload", &current, AT_SYMLINK_NOFOLLOW) == 0 &&
             same_inode (&transaction->stage_identity, &current)) {
@@ -2872,7 +2973,7 @@ nemo_transfer_undo_check (NemoTransferUndo *undo, gboolean redo,
         ok = check_snapshot (transaction->destination_parent->fd, transaction->destination_name,
                               &transaction->installed, cancel, error) &&
              (!undo->move || check_absent (transaction->source_parent->fd, transaction->source_name, error)) &&
-             (!transaction->backup || check_snapshot (transaction->recovery.fd, "payload",
+             (!transaction->backup || check_snapshot (transaction->recovery.fd, backup_slot (transaction),
                                                        &transaction->original, cancel, error));
     } else {
         ok = transaction->backup ?
@@ -2939,13 +3040,13 @@ nemo_transfer_undo_apply (NemoTransferUndo *undo, gboolean redo,
                                          RENAME_NOREPLACE, error))
             goto retained;
         if (transaction->backup &&
-            !rename_entry (transaction->recovery.fd, "payload", destination->fd,
+            !rename_entry (transaction->recovery.fd, backup_slot (transaction), destination->fd,
                            transaction->destination_name, RENAME_NOREPLACE, error))
             goto retained;
     } else {
         if (transaction->backup &&
             !undo_capture (transaction, destination->fd, transaction->destination_name,
-                           "payload", &transaction->original, cancel, error))
+                           backup_slot (transaction), &transaction->original, cancel, error))
             return FALSE;
         if (undo->move &&
             !undo_capture (transaction, transaction->source_parent->fd, transaction->source_name,

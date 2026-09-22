@@ -2081,6 +2081,9 @@ test_transfer (void)
     if (large_case ())
         check_large_contents ();
     gboolean merge_race = named ("native-directory-race");
+    gboolean compatible_replace = scenario->fault == EXCHANGE_UNSUPPORTED ||
+        scenario->fault == EXCHANGE_EINVAL || scenario->fault == EXCHANGE_EOPNOTSUPP ||
+        exchange_backend_errno ();
     gboolean should_succeed = merge_race || (scenario->fault == FAULT_NONE &&
                                !named ("real-tmpfs-destination")) || scenario->fault == RENAME_EINTR ||
         (scenario->fault == REMOTE_SOURCE && scenario->operation == COPY) ||
@@ -2088,7 +2091,7 @@ test_transfer (void)
         scenario->fault == UNDO_FSYNC || scenario->fault == UNDO_POSTCAPTURE_FSYNC ||
         scenario->fault == UNDO_CANCEL_PREFLIGHT || scenario->fault == UNDO_CANCEL_CAPTURE ||
         scenario->fault == RECOVERY_READABLE || scenario->fault == RECOVERY_UNKNOWN ||
-        retained_recovery_entry ();
+        retained_recovery_entry () || compatible_replace;
     if (should_succeed)
         assert_success ();
     else if (scenario->fault == FINAL_ANCHOR_CLOSE) {
@@ -2370,41 +2373,25 @@ test_transfer (void)
         g_autofree char *recovery = g_path_get_dirname (retained);
         g_assert_nonnull (strstr (text, recovery));
     }
-    if (scenario->fault == EXCHANGE_UNSUPPORTED || scenario->fault == EXCHANGE_EINVAL ||
-        scenario->fault == EXCHANGE_EOPNOTSUPP || exchange_backend_errno ()) {
-        assert_contents (f.source, payload);
-        assert_contents (f.dest, previous);
-        g_assert_cmpuint (f.publications, ==, 0);
-        if (scenario->fault != EXCHANGE_UNSUPPORTED) {
-            g_autofree char *text = g_utf8_strdown (f.dialog_text->str, -1);
-            g_test_message ("Unsupported replacement message: %s", f.dialog_text->str);
-            g_assert_nonnull (strstr (text, "support"));
-            g_assert_true (strstr (text, "another name") || strstr (text, "different name"));
-            g_assert_null (strstr (text, "invalid argument"));
-        }
+    if (compatible_replace) {
+        assert_contents (f.dest, payload);
+        if (scenario->operation == MOVE)
+            g_assert_false (exists (f.source));
+        else
+            assert_contents (f.source, payload);
+        g_assert_cmpuint (f.publications, ==, 1);
+        g_assert_cmpuint (f.exchanges, ==, 0);
+        g_assert_cmpuint (f.result.checksum_verified_files, ==,
+                          scenario->operation == MOVE && !scenario->crossfs ? 0 : 1);
         if (exchange_backend_errno ()) {
             g_assert_cmpuint (f.exchange_attempts, ==, 1);
             g_assert_cmpuint (f.exchange_probes, ==, 1);
             g_assert_cmpuint (f.injections, ==, 1);
-            g_assert_cmpuint (f.stage_creations, ==, 0);
-            g_assert_cmpuint (f.writes, ==, 0);
-            g_assert_cmpuint (f.capture_calls, ==, 0);
-            g_assert_cmpuint (f.captures, ==, 0);
-            g_assert_cmpuint (f.deletes, ==, 0);
-            g_assert_cmpuint (f.publication_calls, ==, 0);
-            g_assert_cmpuint (f.result.completed_regular_files, ==, 0);
-            g_assert_cmpuint (f.result.atomic_moves, ==, 0);
-            struct stat source, destination;
-            g_assert_cmpint (lstat (f.source, &source), ==, 0);
-            g_assert_cmpint (lstat (f.dest, &destination), ==, 0);
-            g_assert_cmpuint (source.st_dev, ==, f.source_identity.st_dev);
-            g_assert_cmpuint (source.st_ino, ==, f.source_identity.st_ino);
-            g_assert_cmpuint (destination.st_dev, ==, f.destination_identity.st_dev);
-            g_assert_cmpuint (destination.st_ino, ==, f.destination_identity.st_ino);
-        } else if (scenario->fault != EXCHANGE_UNSUPPORTED) {
+            g_assert_cmpuint (f.publication_calls, ==, 1);
+        } else {
             g_assert_cmpuint (f.exchange_probes, >, 0);
             g_assert_cmpuint (f.stage_creations, >, 0);
-            g_assert_cmpuint (f.publication_calls, ==, 1);
+            g_assert_cmpuint (f.publication_calls, ==, 2);
         }
     }
     if (scenario->fault == CAPTURE_SWAP) {
@@ -2488,7 +2475,9 @@ test_transfer (void)
     }
     if (scenario->replace && !scenario->directory && should_succeed) {
         g_assert_nonnull (backup);
-        g_assert_cmpuint (f.exchanges, ==, 1);
+        g_assert_cmpuint (f.exchanges, ==, compatible_replace ? 0 : 1);
+        if (compatible_replace)
+            g_assert_true (g_str_has_suffix (backup, "/previous-destination"));
         g_autofree char *text = nemo_progress_info_get_completion_text (f.progress);
         g_autofree char *recovery = g_path_get_dirname (backup);
         struct stat recovery_stat;

@@ -5982,9 +5982,9 @@ out:
 	return ok;
 }
 
-/* FALSE always means not completed: before publication both names are
- * untouched, and after publication the source remains until directory sync,
- * verification and cancellation checks have all succeeded. */
+/* FALSE always means not completed. A changed or uncertain namespace sets
+ * published even if replacement stopped between backup and installation.
+ * Copied-move sources remain until sync, verification and cancellation checks succeed. */
 static gboolean
 copy_move_transaction (CopyMoveJob *copy_job, GFile *src, GFile *dest,
                        gboolean same_fs, GFileCopyFlags flags, ProgressData *pdata,
