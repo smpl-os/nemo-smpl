@@ -189,6 +189,24 @@ if smpl_features_enabled
     'NO_AT_BRIDGE': '1',
     'TMPDIR': meson.current_build_dir(),
   }
+  delete_dialog_test = executable('test-delete-dialog',
+    'test-delete-dialog.c',
+    include_directories: [rootInclude],
+    dependencies: [gtk, nemo_private],
+    c_args: nemo_definitions,
+    link_args: [
+      '-Wl,--wrap=gtk_window_present',
+      '-Wl,--wrap=nemo_inhibit_power_manager',
+    ],
+  )
+  test('Delete confirmation focus', hardening_python,
+    args: hardening_runner + [delete_dialog_test],
+    env: copy_integrity_base_env,
+    depends: copy_integrity_schemas,
+    suite: 'delete-dialog',
+    timeout: 60,
+    is_parallel: false,
+  )
   copy_selection_test = executable('test-copy-selection',
     'test-copy-selection.c',
     objects: copy_selection_objects,

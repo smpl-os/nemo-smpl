@@ -1327,6 +1327,18 @@ typedef struct {
 	int result;
 } RunSimpleDialogData;
 
+#ifdef NEMO_SMPL
+static void
+present_simple_dialog (GdkFrameClock *clock,
+		       GtkWindow *dialog)
+{
+	g_signal_handlers_disconnect_by_func (clock, present_simple_dialog, dialog);
+	if (gtk_widget_get_mapped (GTK_WIDGET (dialog))) {
+		gtk_window_present (dialog);
+	}
+}
+#endif
+
 static gboolean
 do_run_simple_dialog (gpointer _data)
 {
@@ -1372,6 +1384,14 @@ do_run_simple_dialog (gpointer _data)
 	}
 
 	/* Run it. */
+#ifdef NEMO_SMPL
+	/* Wayland compositors can ignore activation before the first buffer
+	 * is committed. Block parent input now, then present after painting. */
+	gtk_window_set_modal (GTK_WINDOW (dialog), TRUE);
+	gtk_widget_show (dialog);
+	g_signal_connect_object (gtk_widget_get_frame_clock (dialog), "after-paint",
+				 G_CALLBACK (present_simple_dialog), dialog, G_CONNECT_AFTER);
+#endif
         result = gtk_dialog_run (GTK_DIALOG (dialog));
 
 	while ((result == GTK_RESPONSE_NONE || result == GTK_RESPONSE_DELETE_EVENT) && data->ignore_close_box) {
