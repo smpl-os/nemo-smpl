@@ -159,6 +159,8 @@ if smpl_features_enabled
     link_args: [
       '-Wl,--wrap=g_uuid_string_random',
       '-Wl,--wrap=statx',
+      '-Wl,--wrap=fstatfs',
+      '-Wl,--wrap=fstatfs64',
       '-Wl,--wrap=mkdirat',
       '-Wl,--wrap=renameat2',
       '-Wl,--wrap=fsync',

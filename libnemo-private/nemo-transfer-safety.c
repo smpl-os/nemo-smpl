@@ -302,6 +302,15 @@ directory_identity (int fd, struct statx *identity, GError **error)
         (identity->stx_mask & (STATX_INO | STATX_TYPE)) != (STATX_INO | STATX_TYPE) ||
         !S_ISDIR (identity->stx_mode))
         return unsupported (error);
+    if (identity->stx_mask & STATX_BTIME) {
+        struct statfs filesystem;
+        if (fstatfs (fd, &filesystem) < 0)
+            return transfer_error (error, _("Could not inspect the directory filesystem"));
+        /* exFAT can update directory birth time with ordinary entry changes.
+         * It is not a generation token; mount, device and inode still must match. */
+        if (filesystem.f_type == EXFAT_SUPER_MAGIC)
+            identity->stx_mask &= ~STATX_BTIME;
+    }
     return TRUE;
 }
 

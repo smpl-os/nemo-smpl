@@ -5,12 +5,14 @@
 #include <fcntl.h>
 #include <gio/gunixmounts.h>
 #include <glib/gstdio.h>
+#include <linux/magic.h>
 #include <libnemo-private/nemo-mount-operation.h>
 #include <libnemo-private/nemo-transfer-safety.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #define BATCH_SIZE 256
@@ -66,6 +68,11 @@ static gboolean sample_transfer_fds;
 static guint sampled_fd_peak;
 static GHashTable *queued_source_roots;
 static const char *queued_source_prefix;
+static const char *birthtime_root;
+static gboolean birthtime_exfat;
+static gboolean birthtime_shifted;
+static gboolean birthtime_mount_changed;
+static guint birthtime_observations;
 
 static void interleave_namespace_publication (const char *private_path);
 static guint descriptor_count (void);
@@ -257,11 +264,51 @@ __wrap_g_uuid_string_random (void)
 
 int __real_statx (int fd, const char *path, int flags, unsigned int mask, struct statx *identity);
 
+static gboolean
+birthtime_directory (int fd)
+{
+    if (birthtime_root == NULL)
+        return FALSE;
+    g_autofree char *path = path_at_fd (fd, "");
+    gsize length = strlen (birthtime_root);
+    return path && g_str_has_prefix (path, birthtime_root) &&
+           (path[length] == '\0' || path[length] == '/');
+}
+
+int __real_fstatfs (int fd, struct statfs *filesystem);
+int
+__wrap_fstatfs (int fd, struct statfs *filesystem)
+{
+    int result = __real_fstatfs (fd, filesystem);
+    if (result == 0 && birthtime_exfat && birthtime_directory (fd))
+        filesystem->f_type = EXFAT_SUPER_MAGIC;
+    return result;
+}
+
+int __real_fstatfs64 (int fd, struct statfs64 *filesystem);
+int
+__wrap_fstatfs64 (int fd, struct statfs64 *filesystem)
+{
+    int result = __real_fstatfs64 (fd, filesystem);
+    if (result == 0 && birthtime_exfat && birthtime_directory (fd))
+        filesystem->f_type = EXFAT_SUPER_MAGIC;
+    return result;
+}
+
 int
 __wrap_statx (int fd, const char *path, int flags, unsigned int mask, struct statx *identity)
 {
     int result = __real_statx (fd, path, flags, mask, identity);
     int saved_errno = errno;
+    if (result == 0 && path[0] == '\0' && (flags & AT_EMPTY_PATH) &&
+        birthtime_directory (fd)) {
+        identity->stx_mask |= STATX_BTIME;
+        identity->stx_btime.tv_sec = 1000;
+        identity->stx_btime.tv_nsec = birthtime_shifted ? 770000000 : 740000000;
+        if (birthtime_shifted && birthtime_mount_changed)
+            identity->stx_mnt_id++;
+        birthtime_observations++;
+    }
     if (observe_mount_cache)
         mount_statx_checks++;
     sample_descriptor_peak ();
@@ -1617,11 +1664,75 @@ undo_redo_cleaned_metadata (void)
     fixture_free (fixture);
 }
 
+static void
+directory_birthtime (gconstpointer data)
+{
+    guint mode = GPOINTER_TO_UINT (data);
+    Fixture *fixture = fixture_new ();
+    g_autofree char *source_path = g_build_filename (fixture->sources, "source", NULL);
+    g_autofree char *destination_path = g_build_filename (fixture->destination, "copy", NULL);
+    create_file (source_path, "Directory birth time is not file contents.\n");
+    g_autoptr (GFile) source = g_file_new_for_path (source_path);
+    g_autoptr (GFile) destination = g_file_new_for_path (destination_path);
+    g_autoptr (GFile) directory = g_file_new_for_path (fixture->destination);
+    GList sources = { .data = source };
+    birthtime_root = fixture->destination;
+    birthtime_exfat = mode != 1;
+    birthtime_shifted = FALSE;
+    birthtime_mount_changed = mode == 3;
+    birthtime_observations = 0;
+    NemoTransferGuard *guard = nemo_transfer_guard_new (&sources, directory, FALSE);
+    g_autoptr (GError) error = NULL;
+    g_assert_true (nemo_transfer_guard_check (guard, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (birthtime_observations, >, 0);
+    birthtime_shifted = TRUE;
+    if (mode == 2) {
+        g_autofree char *moved = g_build_filename (fixture->path, "old-destination", NULL);
+        g_assert_cmpint (g_rename (fixture->destination, moved), ==, 0);
+        g_assert_cmpint (g_mkdir (fixture->destination, 0700), ==, 0);
+    }
+    g_autoptr (GFile) bound = nemo_transfer_guard_file (guard, destination, TRUE, &error);
+    if (mode == 0) {
+        g_assert_no_error (error);
+        g_assert_nonnull (bound);
+        g_clear_object (&bound);
+        NemoTransferUndo *undo =
+            finish_copy (publish_copy (guard, source_path, destination_path, FALSE, NULL));
+        assert_contents (source_path, "Directory birth time is not file contents.\n");
+        assert_contents (destination_path, "Directory birth time is not file contents.\n");
+        release_undo (undo);
+    } else {
+        g_assert_null (bound);
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+        g_assert_false (g_file_test (destination_path, G_FILE_TEST_EXISTS));
+        assert_contents (source_path, "Directory birth time is not file contents.\n");
+        g_clear_error (&error);
+    }
+    g_clear_object (&bound);
+    g_assert_true (nemo_transfer_guard_release (guard, &error));
+    g_assert_no_error (error);
+    nemo_transfer_guard_unref (guard);
+    birthtime_root = NULL;
+    birthtime_exfat = FALSE;
+    birthtime_shifted = FALSE;
+    birthtime_mount_changed = FALSE;
+    fixture_free (fixture);
+}
+
 int
 main (int argc, char **argv)
 {
     g_setenv ("GIO_USE_VFS", "local", TRUE);
     g_test_init (&argc, &argv, NULL);
+    g_test_add_data_func ("/transfer-recovery/directory-identity/exfat-mutable-birthtime",
+                          GUINT_TO_POINTER (0), directory_birthtime);
+    g_test_add_data_func ("/transfer-recovery/directory-identity/stable-filesystem-birthtime",
+                          GUINT_TO_POINTER (1), directory_birthtime);
+    g_test_add_data_func ("/transfer-recovery/directory-identity/exfat-inode-replacement",
+                          GUINT_TO_POINTER (2), directory_birthtime);
+    g_test_add_data_func ("/transfer-recovery/directory-identity/exfat-mount-replacement",
+                          GUINT_TO_POINTER (3), directory_birthtime);
     g_test_add_data_func ("/transfer-recovery/batch/replacements-retain-every-payload",
                           GINT_TO_POINTER (TRUE), batch_copy);
     g_test_add_data_func ("/transfer-recovery/batch/ordinary-bounded-metadata",
