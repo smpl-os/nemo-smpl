@@ -72,6 +72,8 @@ struct NemoWindowDetails
         NemoWindowPane *active_pane;
 
         GtkWidget *content_paned;
+        /* Keep this layout independent of whether config.h was included first. */
+        GtkWidget *transfer_area;
         NemoNavigationState *nav_state;
         
         /* Side Pane */

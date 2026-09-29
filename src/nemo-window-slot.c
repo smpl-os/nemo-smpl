@@ -121,13 +121,50 @@ static void
 query_editor_cancel_callback (NemoQueryEditor *editor,
 			      NemoWindowSlot *slot)
 {
+#ifdef NEMO_SMPL
+	nemo_window_slot_cancel_search (slot);
+#else
 	GtkAction *search;
 
 	search = gtk_action_group_get_action (slot->pane->toolbar_action_group,
 					      NEMO_ACTION_SEARCH);
 
 	gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (search), FALSE);
+#endif
 }
+
+#ifdef NEMO_SMPL
+gboolean
+nemo_window_slot_cancel_search (NemoWindowSlot *slot)
+{
+	g_return_val_if_fail (NEMO_IS_WINDOW_SLOT (slot), FALSE);
+	gboolean results = slot->location != NULL &&
+		g_file_has_uri_scheme (slot->location, "x-nemo-search");
+	if (!results && !nemo_query_editor_get_active (slot->query_editor))
+		return FALSE;
+
+	GtkAction *search = gtk_action_group_get_action (slot->pane->action_group, NEMO_ACTION_SEARCH);
+	if (gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (search))) {
+		/* The toggle callback returns here with the action inactive. */
+		gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (search), FALSE);
+		return TRUE;
+	}
+
+	const char *uri = nemo_query_editor_get_base_uri (slot->query_editor);
+	GFile *location = uri != NULL && *uri != '\0' ?
+		g_file_new_for_uri (uri) : g_file_new_for_path (g_get_home_dir ());
+	/* A late completion of the search must not cancel the return navigation. */
+	slot->needs_reload = FALSE;
+	if (slot->content_view != NULL)
+		nemo_window_slot_stop_loading (slot);
+	nemo_window_slot_set_query_editor_visible (slot, FALSE);
+	if (slot->pending_location != NULL || slot->location == NULL ||
+	    !g_file_equal (slot->location, location))
+		nemo_window_slot_open_location (slot, location, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+	g_object_unref (location);
+	return TRUE;
+}
+#endif
 
 static void
 query_editor_changed_callback (NemoQueryEditor *editor,
@@ -226,7 +263,12 @@ nemo_window_slot_set_query_editor_visible (NemoWindowSlot *slot,
 
         nemo_query_editor_set_query (slot->query_editor, NULL);
 
-        if (slot->content_view != NULL) {
+        if (slot->content_view != NULL
+#ifdef NEMO_SMPL
+            && nemo_window_slot_get_window (slot) != NULL
+            && nemo_window_get_active_slot (nemo_window_slot_get_window (slot)) == slot
+#endif
+        ) {
             nemo_view_grab_focus (slot->content_view);
         }
 	}
@@ -314,6 +356,38 @@ create_nsr_box (NemoWindowSlot *slot)
 
 #ifdef NEMO_SMPL
 static void mtp_unlock_overlay_set_visible (NemoWindowSlot *slot, gboolean visible);
+
+static void
+view_update_empty_state_cb (NemoView *view,
+                           NemoWindowSlot *slot)
+{
+    NemoDirectory *directory;
+    const char *message = NULL;
+
+    if (view != slot->content_view) {
+        return;
+    }
+
+    directory = nemo_view_get_model (view);
+    if (directory != NULL && !nemo_view_get_loading (view) &&
+        !gtk_widget_get_visible (slot->mtp_unlock_box) &&
+        (slot->pending_location == NULL ||
+         (slot->location != NULL && g_file_equal (slot->pending_location, slot->location))) &&
+        NEMO_VIEW_CLASS (G_OBJECT_GET_CLASS (view))->is_empty (view)) {
+        if (gtk_revealer_get_reveal_child (GTK_REVEALER (slot->filter_bar_revealer))) {
+            message = _("No matching files");
+        } else if (NEMO_IS_SEARCH_DIRECTORY (directory) &&
+                   nemo_directory_are_all_files_seen (directory) &&
+                   !nemo_directory_is_not_empty (directory)) {
+            message = _("No files found");
+        }
+    }
+
+    if (message != NULL) {
+        gtk_label_set_text (GTK_LABEL (slot->no_results_label), message);
+    }
+    gtk_widget_set_visible (slot->no_search_results_box, message != NULL);
+}
 #endif
 
 static void
@@ -325,13 +399,18 @@ view_begin_loading_cb (NemoView       *view,
         return;
     }
     mtp_unlock_overlay_set_visible (slot, FALSE);
+    gtk_widget_hide (slot->no_search_results_box);
 #endif
     if (gtk_revealer_get_reveal_child (GTK_REVEALER (slot->filter_bar_revealer))) {
         gtk_revealer_set_reveal_child (GTK_REVEALER (slot->filter_bar_revealer), FALSE);
         nemo_filter_bar_set_text (NEMO_FILTER_BAR (slot->filter_bar), "");
     }
 
-    nemo_view_grab_focus (view);
+#ifdef NEMO_SMPL
+    NemoWindow *window = nemo_window_slot_get_window (slot);
+    if (window != NULL && nemo_window_get_active_slot (window) == slot)
+#endif
+        nemo_view_grab_focus (view);
 }
 
 static void
@@ -644,8 +723,8 @@ view_end_loading_cb (NemoView       *view,
 #ifndef NEMO_SMPL
 	gboolean show_mtp_unlock = FALSE;
 	char *uri = NULL;
-#endif
 	NemoDirectory *directory;
+#endif
 
 #ifdef NEMO_SMPL
 	if (view != slot->content_view || slot->viewed_file == NULL) {
@@ -657,8 +736,16 @@ view_end_loading_cb (NemoView       *view,
 		slot->needs_reload = FALSE;
 	}
 
+#ifdef NEMO_SMPL
+	/* Cancellation is not a completed empty search. Results can arrive in
+	 * batches long after a replacement search has started. */
+	if (all_files_seen) {
+		view_update_empty_state_cb (view, slot);
+	} else {
+		gtk_widget_hide (slot->no_search_results_box);
+	}
+#else
 	directory = nemo_directory_get_for_file (slot->viewed_file);
-
 	if (NEMO_IS_SEARCH_DIRECTORY (directory) &&
 	    !nemo_directory_is_not_empty (directory)) {
 		gtk_label_set_text (GTK_LABEL (slot->no_results_label), _("No files found"));
@@ -667,16 +754,14 @@ view_end_loading_cb (NemoView       *view,
 		gtk_widget_hide (slot->no_search_results_box);
 	}
 
-#ifndef NEMO_SMPL
 	uri = slot->location ? g_file_get_uri (slot->location) : NULL;
 	if (uri_is_mtp_location (uri)) {
 		if (!nemo_directory_is_not_empty (directory)) {
 			show_mtp_unlock = TRUE;
 		}
 	}
-#endif
-
 	nemo_directory_unref (directory);
+#endif
 #ifdef NEMO_SMPL
 	/* A successful empty listing is not a lock error. Only load_error may
 	 * enable access guidance/retries; success also ends a previous retry. */
@@ -953,12 +1038,16 @@ nemo_window_slot_set_content_view_widget (NemoWindowSlot *slot,
 
 #ifdef NEMO_SMPL
 	mtp_unlock_overlay_set_visible (slot, FALSE);
+	gtk_widget_hide (slot->no_search_results_box);
 #endif
 	if (slot->content_view != NULL) {
 		/* disconnect old view */
         g_signal_handlers_disconnect_by_func (slot->content_view, G_CALLBACK (view_end_loading_cb), slot);
 		g_signal_handlers_disconnect_by_func (slot->content_view, G_CALLBACK (view_load_error_cb), slot);
         g_signal_handlers_disconnect_by_func (slot->content_view, G_CALLBACK (view_begin_loading_cb), slot);
+#ifdef NEMO_SMPL
+        g_signal_handlers_disconnect_by_func (slot->content_view, G_CALLBACK (view_update_empty_state_cb), slot);
+#endif
 
         if (slot->filter_activate_handler_id > 0) {
             g_signal_handler_disconnect (slot->content_view, slot->filter_activate_handler_id);
@@ -987,6 +1076,10 @@ nemo_window_slot_set_content_view_widget (NemoWindowSlot *slot,
 		g_signal_connect (new_view, "end_loading", G_CALLBACK (view_end_loading_cb), slot);
 		g_signal_connect (new_view, "load_error", G_CALLBACK (view_load_error_cb), slot);
 		g_signal_connect (new_view, "begin_loading", G_CALLBACK (view_begin_loading_cb), slot);
+#ifdef NEMO_SMPL
+		g_signal_connect_after (new_view, "end_file_changes",
+					G_CALLBACK (view_update_empty_state_cb), slot);
+#endif
 
         slot->filter_activate_handler_id =
             g_signal_connect (new_view, "activate-filter",
@@ -1202,6 +1295,10 @@ nemo_window_slot_go_up (NemoWindowSlot *slot,
 	GFile *parent;
 	char * uri;
 
+#ifdef NEMO_SMPL
+	if (flags == 0 && nemo_window_slot_cancel_search (slot))
+		return;
+#endif
 	if (slot->location == NULL) {
 		return;
 	}

@@ -37,9 +37,13 @@ Double Commander-style instant file viewer:
 - **Timecode display**: live `hh:mm:ss:ff` timestamp (monospace) with auto-detected framerate
 - **Frame stepping**: `<` (comma) steps back one frame, `>` (period) steps forward — pauses playback automatically, like YouTube
 - **Keyboard media controls**: Space = play/pause, M = mute/unmute, F = fullscreen, ← → = navigate files
+- **Image controls**: Fit fills the preview without distorting the image; wheel zoom anchors at the pointer, and left-button dragging pans zoomed images without allocating a full zoomed bitmap
+- **RAW previews**: camera RAW files are decoded with LibRaw rather than accepting an embedded TIFF thumbnail
+- **Filename footer**: the current filename stays visible at the bottom, including fullscreen
+- **File information (I)**: toggle file and available camera metadata, with an OpenStreetMap location map when GPS coordinates exist (uncached tiles require network access)
 - Escape to dismiss; singleton window reused across invocations
 - Split view moved to Ctrl+F3
-- Modular architecture: `NemoImageViewer`, `NemoPagedViewer`, `NemoPreviewUtils` shared between sidebar pane and quick preview
+- Modular architecture: `NemoImageViewer`, `NemoPreviewDetails`, `NemoPagedViewer`, `NemoPreviewUtils` shared between sidebar pane and quick preview
 
 ### Shared Directory Analyzer Widget
 
@@ -89,14 +93,17 @@ Double Commander-style instant file viewer:
 
 ### Copy/Move Completion Feedback
 
-- The non-modal File Operations window keeps completed results until **Close**. Closing it clears completed summaries and hides the window; active transfers continue.
-- Each new copy/move batch opens the window immediately, including queued or paused transfers and jobs that finish before the first UI update. A previous hidden result does not leave later batches invisible.
+- The non-modal File Operations panel keeps reported results until **Close**. Closing it clears completed summaries and hides the panel; active transfers continue.
+- **Dock / Undock** moves the same transfer controls between a separate window and a resizable panel at the bottom of Nemo. The choice is remembered across operations and restarts. Docked progress stays with its Nemo window instead of floating over other workspaces.
+- Closing the dock's host window leaves active transfers in the background. Reportable results still produce notifications; opening another Nemo window restores the panel without interrupting the jobs.
+- **Preferences → Behavior → Show completion results for successful copies and moves** controls successful summaries and notifications (on by default). **Don't show successful transfers again** in the completion UI changes the same setting. Failures, partial/skipped work, cancellations, unknown outcomes and unverified retained files are never suppressed, and transfer verification is unchanged.
+- Each new copy/move batch opens the selected panel immediately, including queued or paused transfers. A previous hidden result does not leave later batches invisible. Already-finished successes do not open a panel when successful results are disabled.
 - Active work does not display 100% merely because all bytes have been submitted. Flushing and verification remain unfinished work; indeterminate progress clears stale percentages, including the status icon.
 - Copy/move results distinguish success, incomplete/skipped work, failure and cancellation. SHA-256 file-content verification and symbolic-link target checks are reported separately. Atomic renames and empty folders are not described as checksum-verified.
 - Newly copied files, verified existing files, and existing files retained without verification have separate counters. With verification off, ordinary retained-file conflicts can finish neutrally as **existing files retained (not verified)**; this is not content-confirmed success. Known differences, unexamined skipped folders, failures, and cancellation remain incomplete. Successful copy callbacks require every source item to be actually copied or verified already present.
 - Fully successful copies clear the original source selection only if that view, location and selection stayed unchanged. F5/Copy To, same-process clipboard paste and internal drag-and-drop use explicit weak source tracking; changed selections, navigation, closed tabs, failures, unverified retention and external/unknown origins are left alone. Destination highlighting is preserved without overriding newer user selections.
-- If you hide the window during an active batch, its completions send a desktop notification without reopening it. The status icon or notification opens the results; a fresh copy/move batch also opens the window again.
-- Nemo retains the latest 50 text summaries in memory, with an explicit notice when older results are omitted. Results are not written to disk. A visible summary keeps Nemo running until closed; hidden results do not. If Nemo exits, the desktop notification is the remaining record, subject to the desktop's notification-retention settings. Reopening a result after exit requires a desktop notification backend that supports restarting application actions; freedesktop notification backends can only reopen it while Nemo is running.
+- If you hide the panel during an active batch, reportable completions send a desktop notification without reopening it. The status icon or notification opens the results; a fresh copy/move batch also opens the panel again.
+- Nemo retains the latest 50 reported text summaries in memory, with an explicit notice when older results are omitted. Results are not written to disk. A visible floating summary keeps Nemo running until closed; hidden results do not. Docked results live with their host window. If Nemo exits, the desktop notification is the remaining record, subject to the desktop's notification-retention settings. Reopening a result after exit requires a desktop notification backend that supports restarting application actions; freedesktop notification backends can only reopen it while Nemo is running.
 - Transfer completion is separate from safe device removal. All removal entry points share per-operation feedback, and only successful completion of the removal request reports removal success.
 - Device removal waits for users to finish or cancel queued, running, and paused operations; new transfers are refused while removal is in progress. This gate is deliberately conservative across devices.
 - Removal does not offer forced unmount or automatically empty the device's trash. Use the explicit Empty Trash action separately, and never unplug based only on a transfer percentage.
@@ -166,6 +173,9 @@ Double Commander-style instant file viewer:
 
 - **Configurable Keyboard Shortcuts** — edit all keybindings via preferences, including media controls (`toggle-mute`, `toggle-play`)
 - **Substring Search** — match anywhere in filename, not just prefix
+- Search empty-state messages appear only after an empty search completes and clear when results arrive or a new search starts
+- **Search return navigation**: Escape and non-editing Backspace leave search results and return to the starting folder, including cancellation while a search is still loading.
+- **Containing folders**: Ctrl+Alt+O opens a selected result's folder and highlights the item; Ctrl+Alt+Shift+O opens it in the other pane without replacing the search. Both actions are available in the context menu and configurable in Keyboard Shortcuts.
 - **Tab-based Pane Splitting** — Tab to switch focus, Ctrl+N for new split pane
 - **Copy Path** — right-click "Copy Path" to clipboard
 - **Cover Art Directory Icons** — directories with `cover.jpg`/`cover.png` use them as folder icons

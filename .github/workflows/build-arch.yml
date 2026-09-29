@@ -73,7 +73,7 @@ jobs:
               pacman -Syu --noconfirm --needed \
                 base-devel git meson ninja pkgconf intltool \
                 gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop \
-                libexif exempi gstreamer gst-plugins-base-libs \
+                libexif libraw exempi gstreamer gst-plugins-base-libs \
                 pango gobject-introspection libgsf python zstd \
                 dbus xorg-server-xvfb xorg-xauth
 

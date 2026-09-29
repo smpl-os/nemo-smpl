@@ -5,8 +5,10 @@
 #include <gio/gsettingsbackend.h>
 #include <gtk/gtk.h>
 #include "../src/nemo-application.h"
+#include "../src/nemo-window.h"
 #include <libnemo-private/nemo-icon-fallback.h>
 #include <libxapp/xapp-status-icon.h>
+#include <libxapp/xapp-stack-sidebar.h>
 #include <eel/eel-debug.h>
 #include <libnemo-private/nemo-smpl-prefs.h>
 #include <libnemo-private/nemo-file-private.h>
@@ -23,6 +25,13 @@ static guint delivered_notifications;
 static char *schema_directory;
 static char *status_tooltip;
 static char *status_icon_name;
+
+GType nemo_window_get_type (void) { return GTK_TYPE_WINDOW; }
+GtkWidget *
+nemo_window_get_transfer_area (NemoWindow *window)
+{
+    return g_object_get_data (G_OBJECT (window), "test-transfer-area");
+}
 
 typedef GObject TestStatusIcon;
 typedef GObjectClass TestStatusIconClass;
@@ -449,6 +458,8 @@ static NemoProgressUIHandler *
 new_handler (void)
 {
     g_assert_cmpuint (holds, ==, 0);
+    g_settings_reset (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS);
+    g_settings_reset (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS);
     notifications = 0;
     g_clear_object (&last_notification);
     return nemo_progress_ui_handler_new ();
@@ -625,6 +636,10 @@ test_verification_preference (void)
     nemo_preferences = g_settings_new_full (schema, backend, NULL);
     g_settings_reset (nemo_preferences, NEMO_PREFERENCES_VERIFY_FILE_COPIES);
     g_assert_true (nemo_smpl_verify_file_copies ());
+    g_assert_true (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS));
+    g_assert_false (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS));
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS, TRUE);
     g_assert_true (g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_VERIFY_FILE_COPIES, FALSE));
     g_settings_sync ();
     g_clear_object (&nemo_preferences);
@@ -633,6 +648,8 @@ test_verification_preference (void)
     backend = g_keyfile_settings_backend_new (path, "/", NULL);
     nemo_preferences = g_settings_new_full (schema, backend, NULL);
     g_assert_false (nemo_smpl_verify_file_copies ());
+    g_assert_false (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS));
+    g_assert_true (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS));
     g_assert_true (g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_VERIFY_FILE_COPIES, TRUE));
     g_assert_true (nemo_smpl_verify_file_copies ());
     g_clear_object (&nemo_preferences);
@@ -816,6 +833,313 @@ test_keyboard_close (void)
         g_object_unref (handler);
         drain ();
     }
+}
+
+static void
+test_suppress_successful_results (void)
+{
+    for (guint delayed = 0; delayed < 2; delayed++) {
+        NemoProgressUIHandler *handler = new_handler ();
+        g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+        NemoProgressInfo *info = new_operation ();
+        if (delayed) {
+            drain ();
+            g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+        }
+        finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+        g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+        g_assert_cmpuint (notifications, ==, 0);
+        g_assert_cmpuint (holds, ==, 0);
+        if (delayed)
+            g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+        else
+            g_assert_null (handler->priv->progress_window);
+        assert_empty_manager (handler);
+        g_object_unref (info);
+        g_object_unref (handler);
+        drain ();
+    }
+}
+
+static void
+test_problems_always_reported (void)
+{
+    const NemoProgressOutcome outcomes[] = {
+        NEMO_PROGRESS_OUTCOME_FAILED, NEMO_PROGRESS_OUTCOME_PARTIAL,
+        NEMO_PROGRESS_OUTCOME_CANCELLED, NEMO_PROGRESS_OUTCOME_RETAINED,
+        NEMO_PROGRESS_OUTCOME_UNKNOWN
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (outcomes); i++) {
+        NemoProgressUIHandler *handler = new_handler ();
+        g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+        NemoProgressInfo *info = new_operation ();
+        drain ();
+        progress_window_close_clicked (NULL, handler);
+        finish_operation (info, outcomes[i]);
+        g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+        g_assert_cmpuint (notifications, ==, 1);
+        g_assert_cmpuint (holds, ==, 0);
+        g_object_unref (info);
+        g_object_unref (handler);
+        drain ();
+    }
+    NemoProgressUIHandler *handler = new_handler ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+    NemoProgressInfo *info = new_operation ();
+    NemoProgressResult result = { .operation = NEMO_PROGRESS_OPERATION_MOVE,
+        .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS, .unverified_retained_files = 1 };
+    nemo_progress_info_set_result (info, &result);
+    nemo_progress_info_finish (info);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+test_completion_checkbox (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    NemoProgressInfo *info = new_operation ();
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_true (gtk_widget_get_visible (handler->priv->quiet_check));
+    g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (handler->priv->quiet_check)));
+    g_type_ensure (XAPP_TYPE_STACK_SIDEBAR);
+    GtkBuilder *builder = gtk_builder_new_from_resource ("/org/nemo/nemo-file-management-properties.glade");
+    GtkWidget *option = GTK_WIDGET (gtk_builder_get_object (builder, "show_successful_transfer_results_checkbutton"));
+    g_assert_true (GTK_IS_CHECK_BUTTON (option));
+    g_settings_bind (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS,
+                     option, "active", G_SETTINGS_BIND_DEFAULT);
+    g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (option)));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (handler->priv->quiet_check), TRUE);
+    g_assert_false (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS));
+    g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (option)));
+    g_assert_true (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_VERIFY_FILE_COPIES));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (option), TRUE);
+    g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (handler->priv->quiet_check)));
+    gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (handler->priv->quiet_check), TRUE);
+    gtk_widget_destroy (GTK_WIDGET (gtk_builder_get_object (builder, "file_management_dialog")));
+    g_object_unref (builder);
+    progress_window_close_clicked (NULL, handler);
+    g_object_unref (info);
+    info = new_operation_kind (NEMO_PROGRESS_OPERATION_MOVE);
+    NemoProgressResult result = { .operation = NEMO_PROGRESS_OPERATION_MOVE,
+                                 .outcome = NEMO_PROGRESS_OUTCOME_SUCCESS, .atomic_moves = 1 };
+    nemo_progress_info_set_result (info, &result);
+    nemo_progress_info_finish (info);
+    drain ();
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_assert_cmpuint (notifications, ==, 0);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_object_unref (info);
+    g_object_unref (handler);
+    drain ();
+}
+
+static void
+fixture_window_destroyed (GtkWidget *window, gpointer data)
+{
+    g_object_set_data (G_OBJECT (window), "test-transfer-area", NULL);
+}
+
+static GtkWindow *
+new_dock_window (void)
+{
+    GtkWidget *window = gtk_application_window_new (GTK_APPLICATION (application));
+    GtkWidget *paned = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
+    GtkWidget *area = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    g_object_ref_sink (window);
+    gtk_window_set_default_size (GTK_WINDOW (window), 800, 600);
+    gtk_paned_pack1 (GTK_PANED (paned), gtk_label_new ("File view"), TRUE, FALSE);
+    gtk_paned_pack2 (GTK_PANED (paned), area, FALSE, TRUE);
+    gtk_widget_set_no_show_all (area, TRUE);
+    gtk_container_add (GTK_CONTAINER (window), paned);
+    g_object_set_data (G_OBJECT (window), "test-transfer-area", area);
+    g_signal_connect (window, "destroy", G_CALLBACK (fixture_window_destroyed), NULL);
+    gtk_widget_show_all (window);
+    return GTK_WINDOW (window);
+}
+
+static NemoProgressInfo *
+new_window_operation (GtkWindow *window)
+{
+    NemoProgressInfo *info = new_operation ();
+    nemo_progress_info_set_parent_window (info, window);
+    return info;
+}
+
+static void
+assert_operation_not_cancelled (NemoProgressInfo *info)
+{
+    GCancellable *cancel = nemo_progress_info_get_cancellable (info);
+    g_assert_false (g_cancellable_is_cancelled (cancel));
+    g_object_unref (cancel);
+}
+
+static void
+test_dock_undock (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    GtkWindow *window = new_dock_window ();
+    NemoProgressInfo *info = new_window_operation (window);
+    drain ();
+    GList *children = gtk_container_get_children (GTK_CONTAINER (handler->priv->list));
+    GtkWidget *progress = g_object_ref (children->data);
+    g_list_free (children);
+    g_assert_true (gtk_widget_get_sensitive (handler->priv->dock_button));
+    gtk_button_clicked (GTK_BUTTON (handler->priv->dock_button));
+    g_assert_true (handler->priv->dock_window == window);
+    g_assert_true (gtk_widget_get_parent (handler->priv->window_vbox) ==
+                   nemo_window_get_transfer_area (NEMO_WINDOW (window)));
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_true (gtk_widget_get_visible (handler->priv->dock_area));
+    g_assert_true (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS));
+    g_assert_cmpuint (holds, ==, 1);
+    g_assert_true (gtk_widget_get_parent (progress) == handler->priv->list);
+    assert_operation_not_cancelled (info);
+    GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Return };
+    gboolean handled = FALSE;
+    g_signal_emit_by_name (handler->priv->dock_area, "key-press-event", &key, &handled);
+    g_assert_true (handled);
+    g_assert_false (gtk_widget_get_visible (handler->priv->dock_area));
+    g_assert_true (gtk_widget_get_visible (GTK_WIDGET (window)));
+    assert_operation_not_cancelled (info);
+    progress_ui_handler_present (handler, TRUE);
+    gtk_button_clicked (GTK_BUTTON (handler->priv->dock_button));
+    g_assert_null (handler->priv->dock_window);
+    g_assert_true (gtk_widget_get_parent (handler->priv->window_vbox) == handler->priv->progress_window);
+    g_assert_true (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_false (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS));
+    g_assert_cmpuint (holds, ==, 2);
+    assert_operation_not_cancelled (info);
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_object_unref (progress);
+    g_object_unref (info);
+    g_object_unref (handler);
+    gtk_widget_destroy (GTK_WIDGET (window));
+    g_object_unref (window);
+    g_assert_cmpuint (holds, ==, 0);
+    drain ();
+}
+
+static void
+test_dock_remembered_and_mixed (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS, TRUE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+    GtkWindow *first = new_dock_window ();
+    GtkWindow *second = new_dock_window ();
+    NemoProgressInfo *one = new_window_operation (first);
+    drain ();
+    g_assert_true (handler->priv->dock_window == first);
+    NemoProgressInfo *two = new_window_operation (second);
+    drain ();
+    g_assert_true (handler->priv->dock_window == first);
+    finish_operation (one, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_cmpuint (handler->priv->active_infos, ==, 1);
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_assert_true (gtk_widget_get_visible (handler->priv->dock_area));
+    finish_operation (two, NEMO_PROGRESS_OUTCOME_PARTIAL);
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_true (gtk_widget_get_visible (handler->priv->dock_area));
+    progress_window_close_clicked (NULL, handler);
+    g_assert_true (gtk_widget_get_visible (GTK_WIDGET (first)));
+    g_assert_false (gtk_widget_get_visible (handler->priv->dock_area));
+    g_assert_cmpuint (holds, ==, 0);
+    g_object_unref (one);
+    g_object_unref (two);
+    g_object_unref (handler);
+    handler = nemo_progress_ui_handler_new ();
+    one = new_window_operation (second);
+    drain ();
+    g_assert_true (handler->priv->dock_window == second);
+    finish_operation (one, NEMO_PROGRESS_OUTCOME_SUCCESS);
+    g_assert_false (gtk_widget_get_visible (handler->priv->dock_area));
+    g_assert_cmpuint (handler->priv->completed_count, ==, 0);
+    g_object_unref (one);
+    g_object_unref (handler);
+    gtk_widget_destroy (GTK_WIDGET (first));
+    gtk_widget_destroy (GTK_WIDGET (second));
+    g_object_unref (first);
+    g_object_unref (second);
+    drain ();
+}
+
+static void
+test_dock_host_close_and_reopen (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS, TRUE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS, FALSE);
+    GtkWindow *window = new_dock_window ();
+    NemoProgressInfo *info = new_window_operation (window);
+    drain ();
+    g_assert_true (handler->priv->dock_window == window);
+    gtk_widget_destroy (GTK_WIDGET (window));
+    g_object_unref (window);
+    g_assert_null (handler->priv->dock_window);
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_assert_cmpuint (holds, ==, 1);
+    g_assert_null (nemo_progress_info_get_parent_window (info));
+    assert_operation_not_cancelled (info);
+    window = new_dock_window ();
+    drain ();
+    g_assert_true (handler->priv->dock_window == window);
+    g_assert_true (gtk_widget_get_visible (handler->priv->dock_area));
+    assert_operation_not_cancelled (info);
+    gtk_widget_destroy (GTK_WIDGET (window));
+    g_object_unref (window);
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_FAILED);
+    g_assert_cmpuint (notifications, ==, 1);
+    g_assert_cmpuint (handler->priv->completed_count, ==, 1);
+    g_assert_cmpuint (holds, ==, 0);
+    window = new_dock_window ();
+    drain ();
+    g_assert_true (handler->priv->dock_window == window);
+    g_assert_true (gtk_widget_get_visible (handler->priv->dock_area));
+    g_assert_false (gtk_widget_get_visible (handler->priv->progress_window));
+    g_object_unref (info);
+    g_object_unref (handler);
+    gtk_widget_destroy (GTK_WIDGET (window));
+    g_object_unref (window);
+    drain ();
+}
+
+static void
+test_docked_decision_dialog (void)
+{
+    NemoProgressUIHandler *handler = new_handler ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS, TRUE);
+    GtkWindow *window = new_dock_window ();
+    GtkWindowGroup *group = gtk_window_group_new ();
+    gtk_window_group_add_window (group, window);
+    NemoProgressInfo *info = new_window_operation (window);
+    GtkWidget *dialog = gtk_message_dialog_new (window, GTK_DIALOG_MODAL,
+                                               GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK, "Test decision");
+    nemo_progress_info_attach_dialog (info, GTK_WINDOW (dialog));
+    gtk_widget_show (dialog);
+    drain ();
+    g_assert_true (handler->priv->dock_window == window);
+    g_assert_true (gtk_window_get_transient_for (GTK_WINDOW (dialog)) == window);
+    g_assert_true (gtk_window_get_group (GTK_WINDOW (dialog)) == group);
+    gtk_button_clicked (GTK_BUTTON (handler->priv->dock_button));
+    g_assert_true (gtk_window_get_transient_for (GTK_WINDOW (dialog)) ==
+                   GTK_WINDOW (handler->priv->progress_window));
+    g_assert_true (gtk_window_get_group (GTK_WINDOW (dialog)) == group);
+    gtk_button_clicked (GTK_BUTTON (handler->priv->dock_button));
+    g_assert_true (gtk_window_get_transient_for (GTK_WINDOW (dialog)) == window);
+    g_assert_true (gtk_window_get_modal (GTK_WINDOW (dialog)));
+    gtk_widget_destroy (dialog);
+    g_assert_null (handler->priv->dialogs);
+    finish_operation (info, NEMO_PROGRESS_OUTCOME_CANCELLED);
+    g_object_unref (info);
+    g_object_unref (handler);
+    gtk_widget_destroy (GTK_WIDGET (window));
+    g_object_unref (window);
+    g_object_unref (group);
+    drain ();
 }
 
 static void
@@ -1441,7 +1765,8 @@ main (int argc, char **argv)
     schema_directory = g_path_get_dirname (argv[0]);
     removal_notifications = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
     nemo_icon_fallback_init ();
-    application = g_application_new ("org.nemo.CompletionTest", G_APPLICATION_NON_UNIQUE);
+    nemo_global_preferences_init ();
+    application = G_APPLICATION (gtk_application_new ("org.nemo.CompletionTest", G_APPLICATION_NON_UNIQUE));
     GError *error = NULL;
     g_assert_true (g_application_register (application, NULL, &error));
     g_assert_no_error (error);
@@ -1458,6 +1783,13 @@ main (int argc, char **argv)
     g_test_add_func ("/completion/visible-close", test_visible_and_close);
     g_test_add_func ("/completion/keyboard-close", test_keyboard_close);
     g_test_add_func ("/completion/dialog-parent", test_dialog_parent);
+    g_test_add_func ("/completion/suppress-success", test_suppress_successful_results);
+    g_test_add_func ("/completion/problems-always-reported", test_problems_always_reported);
+    g_test_add_func ("/completion/checkbox-setting", test_completion_checkbox);
+    g_test_add_func ("/completion/dock-undock", test_dock_undock);
+    g_test_add_func ("/completion/dock-remembered-mixed", test_dock_remembered_and_mixed);
+    g_test_add_func ("/completion/dock-host-close-reopen", test_dock_host_close_and_reopen);
+    g_test_add_func ("/completion/docked-decision-dialog", test_docked_decision_dialog);
     g_test_add_func ("/completion/details", test_completion_details);
     g_test_add_func ("/completion/generic-with-transfer", test_generic_with_transfer);
     g_test_add_func ("/completion/generic-visible", test_generic_visible);

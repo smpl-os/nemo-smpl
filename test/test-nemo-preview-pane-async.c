@@ -166,176 +166,25 @@ test_thumbnail_worker (void)
 	g_object_unref (pane);
 }
 
-#ifdef HAVE_EXIF
-typedef struct {
-	Completion completion;
-	GpsData *gps;
-} MetadataResult;
-
+/* Metadata/GPS ordering and cache regressions live in test-nemo-preview-details.
+ * The pane must own exactly one shared widget and tear it down with itself. */
 static void
-metadata_fixture_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
-{
-	MetadataResult *metadata = user_data;
-	GError *error = NULL;
-
-	metadata->gps = g_task_propagate_pointer (G_TASK (result), &error);
-	g_assert_no_error (error);
-	metadata->completion.done = TRUE;
-}
-
-static void
-add_gps_entry (ExifData *exif, ExifTag tag, ExifFormat format,
-	       const guchar *bytes, guint size, guint components)
-{
-	ExifEntry *entry = exif_entry_new ();
-
-	entry->tag = tag;
-	entry->format = format;
-	entry->components = components;
-	entry->size = size;
-	entry->data = g_malloc (size);
-	memcpy (entry->data, bytes, size);
-	exif_content_add_entry (exif->ifd[EXIF_IFD_GPS], entry);
-	exif_entry_unref (entry);
-}
-
-static void
-test_metadata_worker (void)
+test_details_ownership (void)
 {
 	NemoPreviewPane *pane = new_test_pane ();
-	GFile *file = g_file_new_for_path ("pane-test-gps.jpg");
-	MetadataResult metadata = { { NULL, FALSE }, NULL };
-	GTask *task = g_task_new (NULL, pane->cancellable,
-				 metadata_fixture_ready_cb, &metadata);
-	ExifData *exif = exif_data_new ();
-	guchar values[24], header[6] = { 0xff, 0xd8, 0xff, 0xe1, 0, 0 };
-	const guchar end[2] = { 0xff, 0xd9 };
-	ExifRational value = { 40, 1 };
-	guchar *bytes = NULL;
-	guint length = 0;
-	GByteArray *jpeg = g_byte_array_new ();
-	GError *error = NULL;
+	NemoPreviewDetails *weak_details = pane->details;
+	GFile *file = g_file_new_for_path ("unused-preview-details");
 
-	exif_data_set_byte_order (exif, EXIF_BYTE_ORDER_INTEL);
-	exif_set_rational (values, EXIF_BYTE_ORDER_INTEL, value);
-	value.numerator = 30;
-	exif_set_rational (values + 8, EXIF_BYTE_ORDER_INTEL, value);
-	value.numerator = 0;
-	exif_set_rational (values + 16, EXIF_BYTE_ORDER_INTEL, value);
-	add_gps_entry (exif, 0x0002, EXIF_FORMAT_RATIONAL, values, sizeof values, 3);
-	value.numerator = 70;
-	exif_set_rational (values, EXIF_BYTE_ORDER_INTEL, value);
-	value.numerator = 15;
-	exif_set_rational (values + 8, EXIF_BYTE_ORDER_INTEL, value);
-	add_gps_entry (exif, 0x0004, EXIF_FORMAT_RATIONAL, values, sizeof values, 3);
-	add_gps_entry (exif, 0x0001, EXIF_FORMAT_ASCII, (const guchar *) "N", 2, 2);
-	add_gps_entry (exif, 0x0003, EXIF_FORMAT_ASCII, (const guchar *) "W", 2, 2);
-	exif_data_save_data (exif, &bytes, &length);
-	g_assert_cmpuint (length, >, 0);
-	g_assert_cmpuint (length, <, 65534);
-	header[4] = (length + 2) >> 8;
-	header[5] = (length + 2) & 0xff;
-	g_byte_array_append (jpeg, header, sizeof header);
-	g_byte_array_append (jpeg, bytes, length);
-	g_byte_array_append (jpeg, end, sizeof end);
-	g_assert_true (g_file_set_contents ("pane-test-gps.jpg",
-					   (const char *) jpeg->data, jpeg->len, &error));
-	g_assert_no_error (error);
-	g_free (bytes);
-	exif_data_unref (exif);
-	g_byte_array_unref (jpeg);
-
-	g_task_set_task_data (task, pane_load_data_new (pane, file),
-			     (GDestroyNotify) pane_load_data_free);
-	nemo_preview_run_task (task, gps_metadata_worker);
-	wait_for_completion (&metadata.completion);
-	g_assert_nonnull (metadata.gps);
-	g_assert_cmpfloat (metadata.gps->latitude, ==, 40.5);
-	g_assert_cmpfloat (metadata.gps->longitude, ==, -70.25);
-	g_free (metadata.gps);
-	g_assert_cmpint (g_remove ("pane-test-gps.jpg"), ==, 0);
-	g_object_unref (task);
-	g_object_unref (file);
-	gtk_widget_destroy (GTK_WIDGET (pane));
-	g_object_unref (pane);
-}
-
-static void
-test_cached_map_worker (void)
-{
-	NemoPreviewPane *pane = new_test_pane ();
-	GFile *file = g_file_new_for_path ("nonexistent-map-download.png");
-	GdkPixbuf *pixbuf = new_test_pixbuf ();
-	GError *error = NULL;
-	Completion completion = { map_tile_ready_cb, FALSE };
-	GTask *task = new_test_task (pane, file, &completion);
-	PaneLoadData *data = g_task_get_task_data (task);
-
-	data->cache_path = g_strdup ("pane-test-map.png");
-	data->pixel_x = data->pixel_y = 128;
-	g_assert_true (gdk_pixbuf_save (pixbuf, data->cache_path, "png", &error, NULL));
-	g_assert_no_error (error);
-	g_object_unref (pixbuf);
-	nemo_preview_run_task (task, map_tile_worker);
-	wait_for_completion (&completion);
-	pixbuf = gtk_image_get_pixbuf (GTK_IMAGE (pane->detail_gps_map));
-	g_assert_nonnull (pixbuf);
-	g_assert_cmpint (gdk_pixbuf_get_width (pixbuf), ==, GPS_MAP_SIZE);
-	g_assert_true (gtk_widget_get_visible (pane->gps_map_event_box));
-
-	g_assert_cmpint (g_remove (data->cache_path), ==, 0);
-	g_object_unref (task);
-	g_object_unref (file);
-	gtk_widget_destroy (GTK_WIDGET (pane));
-	g_object_unref (pane);
-}
-
-static void
-test_stale_metadata_and_map (void)
-{
-	NemoPreviewPane *pane = new_test_pane ();
-	GFile *file = g_file_new_for_path ("unused-preview-gps");
-	Completion metadata = { gps_metadata_ready_cb, FALSE };
-	Completion map = { map_tile_ready_cb, FALSE };
-	GTask *metadata_task = new_test_task (pane, file, &metadata);
-	GTask *map_task = new_test_task (pane, file, &map);
-	GpsData *gps = g_new0 (GpsData, 1);
-
-	gps->latitude = 40;
-	gps->longitude = -70;
-	g_strlcpy (gps->label, "obsolete GPS", sizeof gps->label);
-	g_task_return_pointer (metadata_task, gps, g_free);
-	g_task_return_pointer (map_task, new_test_pixbuf (), g_object_unref);
+	g_assert_true (NEMO_IS_PREVIEW_DETAILS (pane->details));
+	g_object_add_weak_pointer (G_OBJECT (pane->details), (gpointer *) &weak_details);
+	nemo_preview_details_set_file (pane->details, file);
 	nemo_preview_pane_clear (pane);
-	wait_for_completion (&metadata);
-	wait_for_completion (&map);
-	g_assert_false (gtk_widget_get_visible (pane->detail_gps));
-	g_assert_false (gtk_widget_get_visible (pane->gps_map_event_box));
-	g_assert_cmpint (gtk_image_get_storage_type (GTK_IMAGE (pane->detail_gps_map)),
-			 ==, GTK_IMAGE_EMPTY);
-
-	g_object_unref (metadata_task);
-	g_object_unref (map_task);
-	g_object_unref (file);
+	g_assert_false (gtk_widget_get_visible (pane->details_scroll));
 	gtk_widget_destroy (GTK_WIDGET (pane));
 	g_object_unref (pane);
+	g_assert_null (weak_details);
+	g_object_unref (file);
 }
-
-static void
-test_polar_coordinates (void)
-{
-	int x, y;
-	double px, py;
-
-	gps_to_tile (90, 180, GPS_MAP_ZOOM, &x, &y, &px, &py);
-	g_assert_cmpint (x, >=, 0);
-	g_assert_cmpint (x, <, 1 << GPS_MAP_ZOOM);
-	g_assert_cmpint (y, >=, 0);
-	g_assert_cmpint (y, <, 1 << GPS_MAP_ZOOM);
-	g_assert_true (isfinite (px));
-	g_assert_true (isfinite (py));
-}
-#endif
 
 #ifdef HAVE_GSTREAMER
 static GThread *test_main_thread;
@@ -456,12 +305,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview-pane/generation", test_generation_guard);
 	g_test_add_func ("/preview-pane/destroy-pending", test_destroy_pending);
 	g_test_add_func ("/preview-pane/thumbnail-worker", test_thumbnail_worker);
-#ifdef HAVE_EXIF
-	g_test_add_func ("/preview-pane/metadata-worker", test_metadata_worker);
-	g_test_add_func ("/preview-pane/cached-map-worker", test_cached_map_worker);
-	g_test_add_func ("/preview-pane/stale-metadata-and-map", test_stale_metadata_and_map);
-	g_test_add_func ("/preview-pane/polar-coordinates", test_polar_coordinates);
-#endif
+	g_test_add_func ("/preview-pane/details-ownership", test_details_ownership);
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview-pane/media-frame-lifetime", test_media_frame_lifetime);
 #endif

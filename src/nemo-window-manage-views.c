@@ -616,7 +616,7 @@ nemo_window_slot_open_location_full (NemoWindowSlot *slot,
 		    (flags & NEMO_WINDOW_OPEN_FLAG_NEW_TAB) != 0));
 
 	/* and if the flags specify so, this is overridden */
-	if ((flags & NEMO_WINDOW_OPEN_FLAG_SEARCH) != 0) {
+	if ((flags & (NEMO_WINDOW_OPEN_FLAG_SEARCH | NEMO_WINDOW_OPEN_FLAG_SAME_SLOT)) != 0) {
 		use_same = TRUE;
 	}
 	else if ((flags & NEMO_WINDOW_OPEN_FLAG_NEW_WINDOW) != 0) {

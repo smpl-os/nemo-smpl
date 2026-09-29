@@ -15,7 +15,8 @@ def section(start, end):
     return source[source.index(start):source.index(end, source.index(start))]
 
 
-production = section("static void\nview_begin_loading_cb", "static void\nfilter_bar_cancel_cb")
+production = "#ifdef NEMO_SMPL\n" + section(
+    "static void\nview_update_empty_state_cb", "static void\nfilter_bar_cancel_cb")
 production += section("static GtkWidget *\ncreate_mtp_unlock_box", "static void\nnemo_window_slot_init")
 production += section("static void\nview_end_loading_cb", "static void\nnemo_window_slot_dispose")
 flags = shlex.split(subprocess.check_output(

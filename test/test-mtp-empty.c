@@ -4,8 +4,12 @@
 #define NEMO_SMPL 1
 #define _(text) (text)
 
-typedef struct { gboolean not_empty, search; } NemoDirectory;
-typedef struct { guint focus_count; } NemoView;
+typedef struct { gboolean not_empty, search, all_seen; } NemoDirectory;
+typedef struct {
+    guint focus_count, item_count;
+    gboolean loading;
+    NemoDirectory *model;
+} NemoView;
 typedef struct {
     NemoView *content_view;
     NemoDirectory *viewed_file;
@@ -13,18 +17,27 @@ typedef struct {
     GtkWidget *filter_bar_revealer, *filter_bar;
     GtkWidget *mtp_unlock_box, *no_search_results_box, *no_results_label;
     guint mtp_retry_timeout_id, reloads;
-    gboolean needs_reload, begin_on_reload;
+    gboolean needs_reload, begin_on_reload, active;
 } NemoWindowSlot;
+typedef NemoWindowSlot NemoWindow;
 
 #define NEMO_WINDOW_SLOT(slot) ((NemoWindowSlot *) (slot))
 #define NEMO_FILTER_BAR(bar) (bar)
-#define NEMO_IS_SEARCH_DIRECTORY(directory) ((directory)->search)
+#define NEMO_IS_SEARCH_DIRECTORY(directory) ((directory) != NULL && (directory)->search)
 
 static NemoDirectory *nemo_directory_get_for_file (NemoDirectory *file) { return file; }
 static gboolean nemo_directory_is_not_empty (NemoDirectory *dir) { return dir->not_empty; }
+static gboolean nemo_directory_are_all_files_seen (NemoDirectory *dir) { return dir->all_seen; }
+static NemoDirectory *nemo_view_get_model (NemoView *view) { return view->model; }
+static gboolean nemo_view_get_loading (NemoView *view) { return view->loading; }
+static gboolean fixture_is_empty (NemoView *view) { return view->item_count == 0; }
+static const struct { gboolean (*is_empty) (NemoView *); } view_class = { fixture_is_empty };
+#define NEMO_VIEW_CLASS(klass) (&view_class)
 static void nemo_directory_unref (NemoDirectory *dir) {}
 static void nemo_filter_bar_set_text (GtkWidget *bar, const char *text) {}
 static void nemo_view_grab_focus (NemoView *view) { view->focus_count++; }
+static NemoWindow *nemo_window_slot_get_window (NemoWindowSlot *slot) { return slot; }
+static NemoWindowSlot *nemo_window_get_active_slot (NemoWindow *window) { return window->active ? window : NULL; }
 static void nemo_window_slot_queue_reload (NemoWindowSlot *slot, gboolean clear);
 static void mtp_unlock_overlay_set_visible (NemoWindowSlot *slot, gboolean visible);
 
@@ -44,7 +57,10 @@ setup_slot (NemoWindowSlot *slot, NemoView *view, NemoDirectory *directory, cons
 {
     memset (slot, 0, sizeof (*slot));
     slot->content_view = view;
+    slot->active = TRUE;
     slot->viewed_file = directory;
+    view->model = directory;
+    directory->all_seen = TRUE;
     slot->location = g_file_new_for_uri (uri);
     slot->mtp_unlock_box = g_object_ref_sink (create_mtp_unlock_box ());
     slot->no_search_results_box = g_object_ref_sink (gtk_box_new (GTK_ORIENTATION_VERTICAL, 0));
@@ -197,6 +213,137 @@ test_navigation_and_stale_views (void)
 }
 
 static void
+test_cancelled_search_is_not_empty_result (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 };
+    NemoDirectory directory = { .search = TRUE };
+    setup_slot (&slot, &view, &directory, "x-nemo-search:///results");
+    directory.all_seen = FALSE;
+    view_end_loading_cb (&view, FALSE, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    clear_slot (&slot);
+}
+
+static void
+test_search_restart_hides_previous_empty_result (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 };
+    NemoDirectory directory = { .search = TRUE };
+    setup_slot (&slot, &view, &directory, "x-nemo-search:///results");
+    view_end_loading_cb (&view, TRUE, &slot);
+    g_assert_true (gtk_widget_get_visible (slot.no_search_results_box));
+    view.loading = TRUE;
+    directory.all_seen = FALSE;
+    view_begin_loading_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    clear_slot (&slot);
+}
+
+static void
+test_search_streamed_results (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 };
+    NemoDirectory directory = { .search = TRUE };
+    setup_slot (&slot, &view, &directory, "x-nemo-search:///results");
+    view_end_loading_cb (&view, TRUE, &slot);
+    g_assert_true (gtk_widget_get_visible (slot.no_search_results_box));
+
+    view.loading = TRUE;
+    directory.all_seen = FALSE;
+    directory.not_empty = TRUE;
+    view.item_count = 1;
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+
+    /* A temporarily empty batch is not the end of a recursive search. */
+    directory.not_empty = FALSE;
+    view.item_count = 0;
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    view.loading = FALSE;
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+
+    directory.all_seen = TRUE;
+    view_end_loading_cb (&view, TRUE, &slot);
+    g_assert_true (gtk_widget_get_visible (slot.no_search_results_box));
+
+    /* Never cover visible rows, even if the backing list was just reset. */
+    view.item_count = 2;
+    view_end_loading_cb (&view, TRUE, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    gtk_widget_show (slot.no_search_results_box);
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    clear_slot (&slot);
+}
+
+static void
+test_search_stale_view_and_navigation (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 }, old_view = { .item_count = 10 };
+    NemoDirectory directory = { .search = TRUE };
+    setup_slot (&slot, &view, &directory, "x-nemo-search:///results");
+    view_end_loading_cb (&view, TRUE, &slot);
+    view_update_empty_state_cb (&old_view, &slot);
+    view_begin_loading_cb (&old_view, &slot);
+    g_assert_true (gtk_widget_get_visible (slot.no_search_results_box));
+    slot.pending_location = g_file_new_for_uri ("file:///tmp/next");
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    g_clear_object (&slot.pending_location);
+    view.model = NULL;
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    clear_slot (&slot);
+}
+
+static void
+test_filter_result_updates (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 };
+    NemoDirectory directory = { .not_empty = TRUE };
+    setup_slot (&slot, &view, &directory, "file:///tmp/filter");
+    gtk_revealer_set_reveal_child (GTK_REVEALER (slot.filter_bar_revealer), TRUE);
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_true (gtk_widget_get_visible (slot.no_search_results_box));
+    g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (slot.no_results_label)), ==, "No matching files");
+    view.item_count = 1;
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    view.item_count = 0;
+    gtk_widget_show (slot.mtp_unlock_box);
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    gtk_widget_hide (slot.mtp_unlock_box);
+    gtk_revealer_set_reveal_child (GTK_REVEALER (slot.filter_bar_revealer), FALSE);
+    view_update_empty_state_cb (&view, &slot);
+    g_assert_false (gtk_widget_get_visible (slot.no_search_results_box));
+    clear_slot (&slot);
+}
+
+static void
+test_background_load_keeps_focus (void)
+{
+    NemoWindowSlot slot;
+    NemoView view = { 0 };
+    NemoDirectory directory = { 0 };
+    setup_slot (&slot, &view, &directory, "file:///tmp/other-pane");
+    slot.active = FALSE;
+    view_begin_loading_cb (&view, &slot);
+    g_assert_cmpuint (view.focus_count, ==, 0);
+    slot.active = TRUE;
+    view_begin_loading_cb (&view, &slot);
+    g_assert_cmpuint (view.focus_count, ==, 1);
+    clear_slot (&slot);
+}
+
+static void
 test_search_state (void)
 {
     NemoWindowSlot slot;
@@ -225,5 +372,11 @@ main (int argc, char **argv)
     g_test_add_func ("/mtp/error-recovery", test_actual_error_recovery);
     g_test_add_func ("/mtp/navigation-stale", test_navigation_and_stale_views);
     g_test_add_func ("/mtp/search-state", test_search_state);
+    g_test_add_func ("/search/cancelled-is-not-no-results", test_cancelled_search_is_not_empty_result);
+    g_test_add_func ("/search/restart-hides-old-empty-result", test_search_restart_hides_previous_empty_result);
+    g_test_add_func ("/search/streamed-results", test_search_streamed_results);
+    g_test_add_func ("/search/stale-view-navigation", test_search_stale_view_and_navigation);
+    g_test_add_func ("/search/filter-result-updates", test_filter_result_updates);
+    g_test_add_func ("/search/background-load-focus", test_background_load_keeps_focus);
     return g_test_run ();
 }

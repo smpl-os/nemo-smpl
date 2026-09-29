@@ -25,6 +25,9 @@
 #include "nemo-quick-preview.h"
 #include "nemo-paged-viewer.h"
 #include "nemo-image-viewer.h"
+#ifdef NEMO_SMPL
+#include "nemo-preview-details.h"
+#endif
 #include "nemo-preview-utils.h"
 #include "nemo-dir-analyzer.h"
 #include "nemo-keybindings.h"
@@ -130,6 +133,10 @@ struct _NemoQuickPreview {
 	GtkWidget   *search_match_label;
 	GtkWidget   *search_header_btn;  /* header-bar shortcut button */
 #ifdef NEMO_SMPL
+	GtkWidget   *filename_label;
+	GtkWidget   *info_button;
+	GtkWidget   *details_scroll;
+	NemoPreviewDetails *details;
 	GtkWidget   *status_label;
 	GCancellable *content_cancel;
 	GCancellable *navigation_cancel;
@@ -151,6 +158,29 @@ static void     preview_show_paged     (NemoQuickPreview *self, GFile *file, Nem
 static void     preview_show_image     (NemoQuickPreview *self, GFile *file);
 
 #ifdef NEMO_SMPL
+static void
+info_toggled_cb (GtkToggleButton *button, NemoQuickPreview *self)
+{
+	gboolean visible = gtk_toggle_button_get_active (button);
+	gtk_widget_set_visible (self->details_scroll, visible);
+	if (visible && self->current_file != NULL)
+		nemo_preview_details_set_file (self->details, self->current_file);
+	else
+		nemo_preview_details_clear (self->details);
+}
+
+static void
+preview_set_filename (NemoQuickPreview *self, GFile *file, const char *display_name)
+{
+	g_autofree char *basename = g_file_get_basename (file);
+	g_autofree char *name = display_name == NULL && basename != NULL ?
+		g_filename_display_name (basename) : NULL;
+	g_autofree char *location = g_file_get_parse_name (file);
+	gtk_label_set_text (GTK_LABEL (self->filename_label),
+			    display_name != NULL ? display_name : (name != NULL ? name : location));
+	gtk_widget_set_tooltip_text (self->filename_label, location);
+}
+
 static void
 preview_set_status (NemoQuickPreview *self, const char *message)
 {
@@ -358,6 +388,16 @@ static gboolean
 on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (widget);
+
+#ifdef NEMO_SMPL
+	if ((event->keyval == GDK_KEY_i || event->keyval == GDK_KEY_I) &&
+	    (event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK)) == 0 &&
+	    !GTK_IS_EDITABLE (gtk_window_get_focus (GTK_WINDOW (self)))) {
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (self->info_button),
+			!gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->info_button)));
+		return GDK_EVENT_STOP;
+	}
+#endif
 
 	/* ── Search key bindings (text/hex modes only) ── */
 	if (self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX) {
@@ -658,10 +698,19 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	                  G_CALLBACK (on_search_header_btn_clicked), self);
 	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->search_header_btn);
 	gtk_widget_hide (self->search_header_btn);
+#ifdef NEMO_SMPL
+	self->info_button = gtk_toggle_button_new ();
+	gtk_button_set_image (GTK_BUTTON (self->info_button),
+		gtk_image_new_from_icon_name ("dialog-information-symbolic", GTK_ICON_SIZE_BUTTON));
+	gtk_widget_set_tooltip_text (self->info_button, _("File information (I)"));
+	g_signal_connect (self->info_button, "toggled", G_CALLBACK (info_toggled_cb), self);
+	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->info_button);
+#endif
 
 	/* Stack for switching between views */
 	self->stack = gtk_stack_new ();
 #ifdef NEMO_SMPL
+	gtk_stack_set_homogeneous (GTK_STACK (self->stack), FALSE);
 	self->status_label = gtk_label_new (_("Loading..."));
 	gtk_label_set_line_wrap (GTK_LABEL (self->status_label), TRUE);
 	gtk_label_set_max_width_chars (GTK_LABEL (self->status_label), 70);
@@ -674,7 +723,24 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	{
 		GtkWidget *outer_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 		gtk_container_add (GTK_CONTAINER (self), outer_box);
+#ifdef NEMO_SMPL
+		GtkWidget *content_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+		gtk_box_pack_start (GTK_BOX (outer_box), content_box, TRUE, TRUE, 0);
+		gtk_box_pack_start (GTK_BOX (content_box), self->stack, TRUE, TRUE, 0);
+		self->details = nemo_preview_details_new ();
+		gtk_orientable_set_orientation (GTK_ORIENTABLE (self->details), GTK_ORIENTATION_VERTICAL);
+		self->details_scroll = gtk_scrolled_window_new (NULL, NULL);
+		gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->details_scroll),
+			GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+		gtk_widget_set_size_request (self->details_scroll, 300, -1);
+		gtk_container_add (GTK_CONTAINER (self->details_scroll), GTK_WIDGET (self->details));
+		gtk_widget_show (GTK_WIDGET (self->details));
+		gtk_widget_set_no_show_all (self->details_scroll, TRUE);
+		gtk_box_pack_end (GTK_BOX (content_box), self->details_scroll, FALSE, FALSE, 0);
+		gtk_widget_show (content_box);
+#else
 		gtk_box_pack_start (GTK_BOX (outer_box), self->stack, TRUE, TRUE, 0);
+#endif
 
 		/* Search bar */
 		self->search_bar = gtk_search_bar_new ();
@@ -723,6 +789,17 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 		                              GTK_ENTRY (self->search_entry));
 		gtk_box_pack_end (GTK_BOX (outer_box), self->search_bar, FALSE, FALSE, 0);
 		/* search_bar is hidden until a text/hex file is loaded */
+#ifdef NEMO_SMPL
+		self->filename_label = gtk_label_new (NULL);
+		gtk_label_set_ellipsize (GTK_LABEL (self->filename_label), PANGO_ELLIPSIZE_MIDDLE);
+		gtk_label_set_selectable (GTK_LABEL (self->filename_label), TRUE);
+		gtk_widget_set_margin_start (self->filename_label, 8);
+		gtk_widget_set_margin_end (self->filename_label, 8);
+		gtk_widget_set_margin_top (self->filename_label, 4);
+		gtk_widget_set_margin_bottom (self->filename_label, 4);
+		gtk_box_pack_end (GTK_BOX (outer_box), self->filename_label, FALSE, FALSE, 0);
+		gtk_widget_show (self->filename_label);
+#endif
 
 		gtk_widget_show (outer_box);
 	}
@@ -741,10 +818,12 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	/* --- Image page — shared NemoImageViewer widget --- */
 	self->image_viewer = nemo_image_viewer_new ();
 	nemo_image_viewer_set_fit (self->image_viewer, TRUE);
-	nemo_image_viewer_set_show_controls (self->image_viewer, FALSE);
 #ifdef NEMO_SMPL
+	nemo_image_viewer_set_show_controls (self->image_viewer, TRUE);
 	g_signal_connect (self->image_viewer, "load-failed",
 			  G_CALLBACK (image_load_failed), self);
+#else
+	nemo_image_viewer_set_show_controls (self->image_viewer, FALSE);
 #endif
 	gtk_stack_add_named (GTK_STACK (self->stack),
 	                     GTK_WIDGET (self->image_viewer), "image");
@@ -917,6 +996,8 @@ preview_clear (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
 	cancel_request (&self->content_cancel);
+	nemo_preview_details_clear (self->details);
+	gtk_label_set_text (GTK_LABEL (self->filename_label), "");
 #endif
 #ifdef HAVE_GSTREAMER
 	media_stop (self);
@@ -1176,6 +1257,9 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 	/* Title = filename */
 	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar),
 	                          display_name ? display_name : _("Quick Preview"));
+#ifdef NEMO_SMPL
+	preview_set_filename (self, file, display_name);
+#endif
 
 	/* ── Directory → dir-analyzer ── */
 	if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY) {
@@ -1214,7 +1298,7 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 	g_free (subtitle);
 
 	/* Decide which view to use */
-	if (nemo_preview_mime_is_image (content_type)) {
+	if (nemo_preview_mime_is_image (content_type) || nemo_preview_file_is_raw (file)) {
 		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 		preview_show_image (self, file);
 	}
@@ -1283,6 +1367,9 @@ load_file_content (NemoQuickPreview *self, GFile *file)
 	GTask *task;
 	char *name = g_file_get_basename (file);
 
+	preview_set_filename (self, file, NULL);
+	if (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->info_button)))
+		nemo_preview_details_set_file (self->details, file);
 	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar), name);
 	gtk_header_bar_set_subtitle (GTK_HEADER_BAR (self->header_bar), "");
 	g_free (name);

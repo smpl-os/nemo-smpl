@@ -1149,6 +1149,13 @@ nemo_file_management_properties_dialog_setup (GtkBuilder  *builder,
     bind_builder_bool (builder, nemo_preferences,
                        NEMO_FILE_MANAGEMENT_PROPERTIES_NEMO_PREFERENCES_SKIP_FILE_OP_QUEUE_WIDGET,
                        NEMO_PREFERENCES_NEVER_QUEUE_FILE_OPS);
+#ifdef NEMO_SMPL
+    bind_builder_bool (builder, nemo_preferences,
+                       "show_successful_transfer_results_checkbutton",
+                       NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS);
+    gtk_widget_show (GTK_WIDGET (gtk_builder_get_object (
+        builder, "show_successful_transfer_results_checkbutton")));
+#endif
 
     bind_builder_bool (builder, nemo_preferences,
                        NEMO_FILE_MANAGEMENT_PROPERTIES_NEMO_PREFERENCES_CLICK_DBL_PARENT_FOLDER_WIDGET,

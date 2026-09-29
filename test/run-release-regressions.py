@@ -24,6 +24,13 @@ REQUIRED_TESTS = {
     "Completion real backends",
     "Completion pending backend exit",
     "Delete confirmation focus",
+    "test-image-viewer",
+    "test-nemo-preview-details",
+    "Nemo window startup",
+    "Installed package version",
+    "test-about-version",
+    "test-search-navigation",
+    "MTP empty folder state",
 }
 TOOLS = ("meson", "dbus-run-session", "dbus-daemon", "xvfb-run", "Xvfb", "xauth")
 SKIPPED_TAP = re.compile(
@@ -118,6 +125,7 @@ def run(build_dir):
         )
         env = os.environ.copy()
         env["NEMO_TEST_CROSS_FS_ROOT"] = crossfs_root
+        env["NEMO_TEST_REQUIRE_RAW"] = "1"
         # Unique logs prevent an old passing run from satisfying this invocation.
         logbase = "release-safety-" + uuid.uuid4().hex
         result = subprocess.run(

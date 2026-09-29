@@ -48,6 +48,7 @@
 #include <libnemo-private/nemo-dbus-manager.h>
 #include <libnemo-private/nemo-directory-private.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-package-version.h>
 #include <libnemo-private/nemo-file-operations.h>
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-lib-self-check-functions.h>
@@ -876,7 +877,17 @@ nemo_main_application_local_command_line (GApplication *application,
 	}
 
 	if (version) {
+#ifdef NEMO_SMPL
+		g_autofree char *package_version = nemo_get_package_version (NULL, &error);
+		if (package_version == NULL) {
+			g_printerr ("%s\n", error->message);
+			g_clear_error (&error);
+			*exit_status = EXIT_FAILURE;
+		} else
+			g_print ("nemo %s\n", package_version);
+#else
 		g_print ("nemo " VERSION "\n");
+#endif
 		goto out;
 	}
 

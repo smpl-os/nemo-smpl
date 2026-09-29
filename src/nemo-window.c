@@ -693,7 +693,19 @@ nemo_window_constructed (GObject *self)
 	gtk_widget_set_hexpand (window->details->content_paned, TRUE);
 	gtk_widget_set_vexpand (window->details->content_paned, TRUE);
 
+#ifdef NEMO_SMPL
+	GtkWidget *transfer_paned = gtk_paned_new (GTK_ORIENTATION_VERTICAL);
+	gtk_widget_set_hexpand (transfer_paned, TRUE);
+	gtk_widget_set_vexpand (transfer_paned, TRUE);
+	gtk_paned_pack1 (GTK_PANED (transfer_paned), window->details->content_paned, TRUE, FALSE);
+	window->details->transfer_area = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_set_no_show_all (window->details->transfer_area, TRUE);
+	gtk_paned_pack2 (GTK_PANED (transfer_paned), window->details->transfer_area, FALSE, TRUE);
+	gtk_container_add (GTK_CONTAINER (grid), transfer_paned);
+	gtk_widget_show (transfer_paned);
+#else
 	gtk_container_add (GTK_CONTAINER (grid), window->details->content_paned);
+#endif
 	gtk_widget_show (window->details->content_paned);
 
 	vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
@@ -870,8 +882,20 @@ nemo_window_destroy (GtkWidget *object)
 		window->details->preview_pane = NULL;
 	}
 
+#ifdef NEMO_SMPL
+	window->details->transfer_area = NULL;
+#endif
 	GTK_WIDGET_CLASS (nemo_window_parent_class)->destroy (object);
 }
+
+#ifdef NEMO_SMPL
+GtkWidget *
+nemo_window_get_transfer_area (NemoWindow *window)
+{
+	g_return_val_if_fail (NEMO_IS_WINDOW (window), NULL);
+	return window->details->disable_chrome ? NULL : window->details->transfer_area;
+}
+#endif
 
 static void
 nemo_window_finalize (GObject *object)
@@ -1217,6 +1241,19 @@ nemo_window_key_press_event (GtkWidget *widget,
 
 	window = NEMO_WINDOW (widget);
 
+#ifdef NEMO_SMPL
+	focus_widget = gtk_window_get_focus (GTK_WINDOW (window));
+	if (window->details->transfer_area != NULL && focus_widget != NULL &&
+	    gtk_widget_is_ancestor (focus_widget, window->details->transfer_area)) {
+		/* Dock controls get their keys before file-list shortcuts (notably
+		 * Enter and Tab), just as they do in the separate progress window. */
+		if (gtk_widget_event (window->details->transfer_area, (GdkEvent *) event) ||
+		    gtk_window_propagate_key_event (GTK_WINDOW (window), event))
+			return TRUE;
+		return GTK_WIDGET_CLASS (nemo_window_parent_class)->key_press_event (widget, event);
+	}
+#endif
+
 	active_slot = nemo_window_get_active_slot (window);
 	view = active_slot->content_view;
 
@@ -1253,6 +1290,14 @@ nemo_window_key_press_event (GtkWidget *widget,
 			return TRUE;
 		}
 	}
+
+#ifdef NEMO_SMPL
+	if (event->keyval == GDK_KEY_Escape &&
+	    (event->state & gtk_accelerator_get_default_mod_mask ()) == 0 &&
+	    (view == NULL || !nemo_view_get_filter_active (view)) &&
+	    nemo_window_slot_cancel_search (active_slot))
+		return TRUE;
+#endif
 
 	/* Tab switches between split panes when both are visible */
 	if (event->keyval == GDK_KEY_Tab &&
@@ -2686,7 +2731,8 @@ nemo_window_split_view_on (NemoWindow *window)
 	old_active_slot = nemo_window_get_active_slot (window);
 	slot = create_extra_pane (window);
 
-    location = window->details->secondary_pane_last_location;
+    location = window->details->secondary_pane_last_location != NULL ?
+        g_object_ref (window->details->secondary_pane_last_location) : NULL;
 
 	if (location == NULL && old_active_slot != NULL) {
 		location = nemo_window_slot_get_location (old_active_slot);

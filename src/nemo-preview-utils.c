@@ -397,6 +397,27 @@ nemo_preview_mime_is_raw_image (const gchar *mime)
 }
 
 gboolean
+nemo_preview_file_is_raw (GFile *file)
+{
+	g_autofree char *name = g_file_get_basename (file);
+	g_autofree char *type = g_content_type_guess (name, NULL, 0, NULL);
+	const char *extension = name != NULL ? strrchr (name, '.') : NULL;
+	static const char *extensions[] = {
+		".dng", ".arw", ".cr2", ".cr3", ".crw", ".nef", ".nrw",
+		".orf", ".pef", ".rw2", ".raw", ".raf", ".srw", ".x3f",
+		".mrw", ".dcr", ".kdc", NULL
+	};
+
+	if (nemo_preview_mime_is_raw_image (type))
+		return TRUE;
+	for (guint i = 0; extension != NULL && extensions[i] != NULL; i++) {
+		if (g_ascii_strcasecmp (extension, extensions[i]) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+gboolean
 nemo_preview_mime_is_text (const gchar *mime)
 {
 	if (mime == NULL)

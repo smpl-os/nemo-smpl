@@ -161,6 +161,9 @@ void     nemo_window_preview_pane_on      (NemoWindow *window);
 void     nemo_window_preview_pane_off     (NemoWindow *window);
 gboolean nemo_window_preview_pane_showing (NemoWindow *window);
 void     nemo_window_preview_pane_resize  (NemoWindow *window, int delta);
+#ifdef NEMO_SMPL
+GtkWidget *nemo_window_get_transfer_area  (NemoWindow *window);
+#endif
 
 gboolean nemo_window_disable_chrome_mapping (GValue *value,
                                                  GVariant *variant,

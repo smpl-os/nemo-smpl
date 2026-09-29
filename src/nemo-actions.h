@@ -161,6 +161,7 @@
 #define NEMO_ACTION_OPEN_IN_TERMINAL "OpenInTerminal"
 #define NEMO_ACTION_FOLLOW_SYMLINK "FollowSymbolicLink"
 #define NEMO_ACTION_OPEN_CONTAINING_FOLDER "OpenContainingFolder"
+#define NEMO_ACTION_OPEN_CONTAINING_FOLDER_OTHER_PANE "OpenContainingFolderOtherPane"
 
 #define NEMO_ACTION_PLUGIN_MANAGER "NemoPluginManager"
 

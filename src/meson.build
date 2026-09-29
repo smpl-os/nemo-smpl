@@ -59,6 +59,7 @@ nemoCommon_sources = [
   'nemo-plugin-manager.c',
   'nemo-previewer.c',
   'nemo-preview-pane.c',
+  'nemo-preview-details.c',
   'nemo-preview-utils.c',
   'nemo-image-viewer.c',
   'nemo-quick-preview.c',

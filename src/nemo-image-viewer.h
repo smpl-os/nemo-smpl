@@ -52,7 +52,8 @@ void             nemo_image_viewer_load_stream_async  (NemoImageViewer *self,
 /* Clear the current image. */
 void             nemo_image_viewer_clear              (NemoImageViewer *self);
 
-/* Zoom: 1.0 = original size. */
+/* Zoom: 1.0 = original size. Setting zoom leaves fit mode; the getter
+ * returns the effective scale, including automatically fitted images. */
 void             nemo_image_viewer_set_zoom           (NemoImageViewer *self,
                                                        double           zoom);
 double           nemo_image_viewer_get_zoom           (NemoImageViewer *self);

@@ -1,7 +1,7 @@
 # Meson build file
 
 # https://github.com/linuxmint/nemo
-project('nemo', 'c', version : '1.4.51', meson_version : '>=0.64.0')
+project('nemo', 'c', version : '1.4.52', meson_version : '>=0.64.0')
 
 # 1. If the library code has changed at all since last release, then increment revision.
 # 2. If any interfaces have been added, then increment current and set revision to 0.
@@ -83,7 +83,7 @@ glib_version = '>=2.45.7'
 
 math    = cc.find_library('m', required: true)
 
-gtk_version = smpl_features_enabled ? '>=3.14.0' : '>=3.10.0'
+gtk_version = smpl_features_enabled ? '>=3.22.0' : '>=3.10.0'
 gtk     = dependency('gtk+-3.0',                    version: gtk_version)
 gio     = dependency('gio-2.0',                     version: glib_version)
 gio_unix= dependency('gio-unix-2.0',                version: glib_version)

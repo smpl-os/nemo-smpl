@@ -47,6 +47,7 @@
 #include <libnemo-private/nemo-desktop-link-monitor.h>
 #include <libnemo-private/nemo-desktop-metadata.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-package-version.h>
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-module.h>
 #include <libnemo-private/nemo-signaller.h>
@@ -286,7 +287,17 @@ nemo_desktop_application_local_command_line (GApplication *application,
     }
 
     if (version) {
+#ifdef NEMO_SMPL
+        g_autofree char *package_version = nemo_get_package_version (NULL, &error);
+        if (package_version == NULL) {
+            g_printerr ("%s\n", error->message);
+            g_clear_error (&error);
+            *exit_status = EXIT_FAILURE;
+        } else
+            g_print ("nemo-desktop %s\n", package_version);
+#else
         g_print ("nemo-desktop " VERSION "\n");
+#endif
         goto out;
     }
 
@@ -560,4 +571,3 @@ nemo_desktop_application_get_singleton (void)
                                                   "register-session", TRUE,
                                                   NULL);
 }
-

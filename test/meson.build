@@ -63,8 +63,43 @@ if smpl_features_enabled
     timeout: 60,
     is_parallel: false,
   )
+  test('Nemo window startup', hardening_python,
+    args: hardening_runner + [hardening_python.full_path(), files('test-window-startup.py')[0], nemo],
+    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
+    depends: copy_integrity_schemas,
+    suite: 'hardening',
+    timeout: 60,
+    is_parallel: false,
+  )
   ui_regressions = [
     completion_test,
+    executable('test-search-navigation',
+      'test-search-navigation.c',
+      objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache'],
+    ),
+    executable('test-about-version',
+      'test-about-version.c',
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions + ['-ffunction-sections', '-fdata-sections'],
+      link_args: ['-Wl,--gc-sections'],
+    ),
+    executable('test-image-viewer',
+      ['test-image-viewer.c', '../src/nemo-preview-utils.c'],
+      include_directories: [rootInclude],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+    ),
+    executable('test-nemo-preview-details',
+      ['test-nemo-preview-details.c', '../src/nemo-preview-utils.c'],
+      include_directories: [rootInclude],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+    ),
     executable('test-nemo-file-hierarchy',
       'test-nemo-file-hierarchy.c',
       include_directories: [rootInclude],
@@ -78,6 +113,7 @@ if smpl_features_enabled
     executable('test-nemo-preview-pane-async',
       [
         'test-nemo-preview-pane-async.c',
+        '../src/nemo-preview-details.c',
         '../src/nemo-image-viewer.c',
         '../src/nemo-paged-viewer.c',
         '../src/nemo-preview-utils.c',
@@ -89,6 +125,7 @@ if smpl_features_enabled
     executable('test-nemo-preview-async',
       [
         'test-nemo-preview-async.c',
+        '../src/nemo-preview-details.c',
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
       ],
@@ -122,6 +159,15 @@ if smpl_features_enabled
       is_parallel: false,
     )
   endforeach
+  test('Installed package version',
+    executable('test-package-version',
+      'test-package-version.c',
+      include_directories: [rootInclude],
+      dependencies: [gio],
+    ),
+    suite: 'hardening',
+    timeout: 30,
+  )
 endif
 
 

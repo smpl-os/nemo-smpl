@@ -442,6 +442,61 @@ test_image_error_and_raw_worker (void)
 }
 
 static void
+test_quick_image_information (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-quick-info-XXXXXX", NULL);
+	GFile *file = write_image (directory, "image & <one>.png", 0x00ff00ff);
+	GFile *other = write_image (directory, "other.png", 0x0000ffff);
+	NemoQuickPreview *preview = g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL);
+	g_object_ref_sink (preview);
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->mode == PREVIEW_IMAGE &&
+		    preview->image_viewer->original_pixbuf != NULL);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->filename_label)),
+			==, "image & <one>.png");
+	g_assert_true (gtk_widget_get_visible (preview->image_viewer->ctrl_box));
+	g_assert_false (gtk_widget_get_visible (preview->details_scroll));
+
+	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_i };
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_true (gtk_widget_get_visible (preview->details_scroll));
+	g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (preview->info_button)));
+	assert_responsive ();
+	double fit = MIN ((gtk_widget_get_allocated_width (preview->image_viewer->scroll) - 20.0) / 4,
+			  (gtk_widget_get_allocated_height (preview->image_viewer->scroll) - 20.0) / 4);
+	g_assert_cmpfloat_with_epsilon (nemo_image_viewer_get_zoom (preview->image_viewer), fit, 0.001);
+	gint footer_x, footer_y, image_x, image_y;
+	g_assert_true (gtk_widget_translate_coordinates (preview->filename_label,
+		GTK_WIDGET (preview), 0, 0, &footer_x, &footer_y));
+	g_assert_true (gtk_widget_translate_coordinates (GTK_WIDGET (preview->image_viewer),
+		GTK_WIDGET (preview), 0, 0, &image_x, &image_y));
+	g_assert_cmpint (footer_y, >=,
+		image_y + gtk_widget_get_allocated_height (GTK_WIDGET (preview->image_viewer)));
+
+	nemo_quick_preview_show_file (preview, other, NULL);
+	WAIT_UNTIL (preview->mode == PREVIEW_IMAGE &&
+		    preview->image_viewer->original_pixbuf != NULL);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->filename_label)), ==, "other.png");
+	g_assert_true (gtk_widget_get_visible (preview->details_scroll));
+	key.keyval = GDK_KEY_I;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_false (gtk_widget_get_visible (preview->details_scroll));
+	key.state = GDK_CONTROL_MASK;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_false (gtk_widget_get_visible (preview->details_scroll));
+
+	nemo_quick_preview_dismiss (preview);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->filename_label)), ==, "");
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	iterate_for (100);
+	remove_fixture (file);
+	remove_fixture (other);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (directory);
+}
+
+static void
 test_quick_text_search_and_modes (void)
 {
 	char *directory = g_dir_make_tmp ("nemo-text-async-XXXXXX", NULL);
@@ -456,6 +511,10 @@ test_quick_text_search_and_modes (void)
 	WAIT_UNTIL (preview->mode == PREVIEW_TEXT);
 	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (preview->search_bar), TRUE);
 	gtk_entry_set_text (GTK_ENTRY (preview->search_entry), "needle");
+	GdkEventKey info_key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_i };
+	gtk_widget_grab_focus (preview->search_entry);
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &info_key, NULL));
+	g_assert_false (gtk_widget_get_visible (preview->details_scroll));
 	on_search_changed (GTK_SEARCH_ENTRY (preview->search_entry), preview);
 	WAIT_UNTIL (!nemo_paged_viewer_search_is_pending (preview->paged_viewer) &&
 		    nemo_paged_viewer_search_has_match (preview->paged_viewer));
@@ -647,6 +706,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/image/rapid-selection-worker-bound", test_rapid_selection_worker_bound);
 	g_test_add_func ("/preview/image/worker-creation-failure", test_worker_creation_failure);
 	g_test_add_func ("/preview/quick/metadata-navigation-races", test_quick_navigation_races);
+	g_test_add_func ("/preview/quick/filename-image-information", test_quick_image_information);
 	g_test_add_func ("/preview/quick/text-search-hex-folder", test_quick_text_search_and_modes);
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview/media/bounded-delayed-stop", test_bounded_media_stop);

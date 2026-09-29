@@ -30,6 +30,10 @@
 
 #include "nemo-application.h"
 #include "nemo-progress-info-widget.h"
+#ifdef NEMO_SMPL
+#include "nemo-window.h"
+#include <libnemo-private/nemo-global-preferences.h>
+#endif
 
 #include <gio/gio.h>
 #include <glib/gi18n.h>
@@ -60,8 +64,16 @@ struct _NemoProgressUIHandlerPriv {
 #ifdef NEMO_SMPL
     GHashTable *operations;
     GtkWidget *completed_list;
-    GtkWidget *completed_scroll;
+    GtkWidget *completed_section;
     GtkWidget *history_notice;
+    GtkWidget *dock_button;
+    GtkWidget *close_button;
+    GtkWidget *quiet_check;
+    GtkWidget *dock_area;
+    GtkWindow *dock_window;
+    GWeakRef preferred_window;
+    GList *dialogs;
+    gboolean awaiting_dock_host;
     GSimpleAction *show_action;
     guint completed_count;
     gboolean window_held;
@@ -76,6 +88,11 @@ G_DEFINE_TYPE (NemoProgressUIHandler, nemo_progress_ui_handler, G_TYPE_OBJECT);
 #define COMPLETION_TEXT_LIMIT (64 * 1024)
 
 static void progress_ui_handler_clear_completed (NemoProgressUIHandler *self);
+static void progress_ui_handler_ensure_window (NemoProgressUIHandler *self);
+static void progress_ui_handler_present (NemoProgressUIHandler *self, gboolean user_requested);
+static void progress_ui_handler_hide (NemoProgressUIHandler *self);
+static void progress_ui_handler_undock (NemoProgressUIHandler *self);
+static void progress_ui_handler_hide_status (NemoProgressUIHandler *self);
 static void progress_ui_handler_show_results (GSimpleAction *action,
                                              GVariant *parameter,
                                              NemoProgressUIHandler *self);
@@ -93,7 +110,11 @@ status_icon_activate_cb (XAppStatusIcon        *icon,
 #endif
     self->priv->should_show_status_icon = FALSE;
     xapp_status_icon_set_visible (icon, FALSE);
+#ifdef NEMO_SMPL
+    progress_ui_handler_present (self, TRUE);
+#else
     gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+#endif
 }
 
 static void
@@ -190,8 +211,11 @@ progress_window_delete_event (GtkWidget *widget,
 {
 #ifdef NEMO_SMPL
     progress_ui_handler_clear_completed (self);
-#endif
+    self->priv->awaiting_dock_host = FALSE;
+    progress_ui_handler_hide (self);
+#else
     gtk_widget_hide (widget);
+#endif
 
     self->priv->should_show_status_icon = TRUE;
     progress_ui_handler_update_status_icon (self);
@@ -240,6 +264,223 @@ progress_window_hidden (GtkWidget *widget, NemoProgressUIHandler *self)
         self->priv->window_held = FALSE;
         g_application_release (G_APPLICATION (nemo_application_get_singleton ()));
     }
+}
+
+static GtkWidget *
+get_dock_area (GtkWindow *window)
+{
+    if (window == NULL || !NEMO_IS_WINDOW (window) ||
+        gtk_widget_in_destruction (GTK_WIDGET (window)))
+        return NULL;
+    return nemo_window_get_transfer_area (NEMO_WINDOW (window));
+}
+
+static GtkWindow *
+find_dock_window (NemoProgressUIHandler *self)
+{
+    GtkWindow *window = g_weak_ref_get (&self->priv->preferred_window);
+    if (get_dock_area (window) != NULL)
+        return window;
+    g_clear_object (&window);
+    GApplication *app = G_APPLICATION (nemo_application_get_singleton ());
+    if (GTK_IS_APPLICATION (app)) {
+        for (GList *l = gtk_application_get_windows (GTK_APPLICATION (app)); l != NULL; l = l->next) {
+            if (get_dock_area (l->data) != NULL && gtk_widget_get_visible (l->data))
+                return g_object_ref (l->data);
+        }
+    }
+    return NULL;
+}
+
+static void
+update_dock_button (NemoProgressUIHandler *self)
+{
+    if (self->priv->dock_button == NULL)
+        return;
+    GtkWindow *window = find_dock_window (self);
+    gboolean docked = self->priv->dock_window != NULL;
+    gtk_button_set_label (GTK_BUTTON (self->priv->dock_button), docked ? _("_Undock") : _("_Dock"));
+    gtk_widget_set_sensitive (self->priv->dock_button,
+        (docked || window != NULL) &&
+        g_settings_is_writable (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS));
+    gtk_widget_set_tooltip_text (self->priv->dock_button, docked ?
+        _("Show file operations in a separate window") : window != NULL ?
+        _("Dock file operations at the bottom of Nemo") : _("Open a Nemo window to dock file operations"));
+    g_clear_object (&window);
+}
+
+static void
+reparent_dialogs (NemoProgressUIHandler *self)
+{
+    GtkWindow *parent = self->priv->dock_window != NULL ?
+        self->priv->dock_window : GTK_WINDOW (self->priv->progress_window);
+    for (GList *l = self->priv->dialogs; l != NULL; l = l->next) {
+        GtkWindow *dialog = l->data;
+        /* Changing the stacking parent must preserve the original modal grab. */
+        GtkWindowGroup *group = g_object_ref (gtk_window_get_group (dialog));
+        gtk_window_set_transient_for (dialog, parent);
+        gtk_window_group_add_window (group, dialog);
+        g_object_unref (group);
+    }
+}
+
+static void
+move_progress_content (NemoProgressUIHandler *self, GtkWidget *parent)
+{
+    GtkWidget *content = self->priv->window_vbox;
+    GtkWidget *old_parent = gtk_widget_get_parent (content);
+    if (old_parent == parent)
+        return;
+    g_object_ref (content);
+    gtk_container_remove (GTK_CONTAINER (old_parent), content);
+    gtk_container_add (GTK_CONTAINER (parent), content);
+    g_object_unref (content);
+}
+
+static void
+dock_window_destroyed (GtkWidget *window, NemoProgressUIHandler *self)
+{
+    progress_ui_handler_undock (self);
+    g_weak_ref_set (&self->priv->preferred_window, NULL);
+    self->priv->awaiting_dock_host = TRUE;
+    self->priv->should_show_status_icon = TRUE;
+    progress_ui_handler_update_status_icon (self);
+}
+
+static void
+progress_ui_handler_undock (NemoProgressUIHandler *self)
+{
+    if (self->priv->dock_window == NULL)
+        return;
+    g_signal_handlers_disconnect_by_func (self->priv->dock_window, dock_window_destroyed, self);
+    g_signal_handlers_disconnect_by_func (self->priv->dock_area, progress_window_key_press, self);
+    gtk_widget_hide (self->priv->dock_area);
+    move_progress_content (self, self->priv->progress_window);
+    self->priv->dock_window = NULL;
+    self->priv->dock_area = NULL;
+    reparent_dialogs (self);
+    gtk_window_set_default (GTK_WINDOW (self->priv->progress_window), self->priv->close_button);
+    update_dock_button (self);
+}
+
+static void
+progress_ui_handler_dock (NemoProgressUIHandler *self, GtkWindow *window)
+{
+    GtkWidget *area = get_dock_area (window);
+    g_return_if_fail (area != NULL);
+    if (window != self->priv->dock_window) {
+        progress_ui_handler_undock (self);
+        gtk_window_set_default (GTK_WINDOW (self->priv->progress_window), NULL);
+        move_progress_content (self, area);
+        self->priv->dock_window = window;
+        self->priv->dock_area = area;
+        g_signal_connect_object (window, "destroy", G_CALLBACK (dock_window_destroyed), self, 0);
+        g_signal_connect_object (area, "key-press-event", G_CALLBACK (progress_window_key_press), self, 0);
+        reparent_dialogs (self);
+    }
+    gtk_widget_hide (self->priv->progress_window);
+    gtk_widget_show (area);
+    GtkWidget *paned = gtk_widget_get_parent (area);
+    if (GTK_IS_PANED (paned)) {
+        gboolean positioned;
+        g_object_get (paned, "position-set", &positioned, NULL);
+        int height = gtk_widget_get_allocated_height (paned);
+        if (height > 1 && (!positioned || gtk_paned_get_position (GTK_PANED (paned)) >= height - 20))
+            gtk_paned_set_position (GTK_PANED (paned), height - MIN (280, height / 3));
+    }
+    self->priv->awaiting_dock_host = FALSE;
+    update_dock_button (self);
+}
+
+static void
+progress_ui_handler_hide (NemoProgressUIHandler *self)
+{
+    if (self->priv->dock_area != NULL)
+        gtk_widget_hide (self->priv->dock_area);
+    if (self->priv->progress_window != NULL)
+        gtk_widget_hide (self->priv->progress_window);
+}
+
+static void
+progress_ui_handler_present (NemoProgressUIHandler *self, gboolean user_requested)
+{
+    if (self->priv->shutting_down)
+        return;
+    progress_ui_handler_ensure_window (self);
+    if (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS)) {
+        GtkWindow *window = find_dock_window (self);
+        if (window != NULL) {
+            progress_ui_handler_dock (self, window);
+            self->priv->should_show_status_icon = FALSE;
+            progress_ui_handler_hide_status (self);
+            if (user_requested)
+                gtk_window_present (window);
+            g_object_unref (window);
+            return;
+        }
+        self->priv->awaiting_dock_host = TRUE;
+        if (!user_requested) {
+            progress_ui_handler_hide (self);
+            self->priv->should_show_status_icon = TRUE;
+            progress_ui_handler_update_status_icon (self);
+            return;
+        }
+    } else
+        self->priv->awaiting_dock_host = FALSE;
+    progress_ui_handler_undock (self);
+    update_dock_button (self);
+    self->priv->should_show_status_icon = FALSE;
+    progress_ui_handler_hide_status (self);
+    gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+}
+
+static void
+dock_button_clicked (GtkButton *button, NemoProgressUIHandler *self)
+{
+    if (!g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS,
+                                  self->priv->dock_window == NULL)) {
+        g_warning ("Could not save file-operation docking preference");
+        return;
+    }
+    progress_ui_handler_present (self, TRUE);
+}
+
+static void
+nemo_window_mapped (GtkWidget *window, NemoProgressUIHandler *self)
+{
+    if (self->priv->shutting_down)
+        return;
+    if (self->priv->awaiting_dock_host && get_dock_area (GTK_WINDOW (window)) != NULL &&
+        (self->priv->active_infos > 0 || self->priv->completed_count > 0) &&
+        g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS)) {
+        g_weak_ref_set (&self->priv->preferred_window, window);
+        progress_ui_handler_present (self, FALSE);
+    }
+    update_dock_button (self);
+}
+
+static void
+nemo_window_added (GtkApplication *application, GtkWindow *window, NemoProgressUIHandler *self)
+{
+    g_signal_connect_object (window, "map", G_CALLBACK (nemo_window_mapped), self, G_CONNECT_AFTER);
+}
+
+static void
+decision_dialog_destroyed (GtkWidget *dialog, NemoProgressUIHandler *self)
+{
+    self->priv->dialogs = g_list_remove (self->priv->dialogs, dialog);
+}
+
+static gboolean
+show_transfer_result (NemoProgressInfo *info)
+{
+    NemoProgressResult result;
+    if (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS))
+        return TRUE;
+    return !nemo_progress_info_get_result (info, &result) ||
+           result.outcome != NEMO_PROGRESS_OUTCOME_SUCCESS ||
+           result.failed_items > 0 || result.skipped_items > 0 ||
+           result.unverified_retained_files > 0;
 }
 #endif
 
@@ -322,6 +563,18 @@ progress_ui_handler_ensure_window (NemoProgressUIHandler *self)
                        main_box);
 	self->priv->window_vbox = main_box;
 
+#ifdef NEMO_SMPL
+    GtkWidget *scroll = gtk_scrolled_window_new (NULL, NULL);
+    GtkWidget *body = gtk_box_new (GTK_ORIENTATION_VERTICAL, 2);
+    gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_min_content_height (GTK_SCROLLED_WINDOW (scroll), 80);
+    gtk_scrolled_window_set_max_content_height (GTK_SCROLLED_WINDOW (scroll), 350);
+    gtk_scrolled_window_set_propagate_natural_height (GTK_SCROLLED_WINDOW (scroll), TRUE);
+    gtk_container_add (GTK_CONTAINER (scroll), body);
+    gtk_box_pack_start (GTK_BOX (main_box), scroll, TRUE, TRUE, 0);
+#else
+    GtkWidget *body = main_box;
+#endif
     frame = gtk_frame_new (NULL);
     gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_NONE);
 
@@ -336,23 +589,33 @@ progress_ui_handler_ensure_window (NemoProgressUIHandler *self)
                   "margin-bottom", 5,
                   NULL);
 
-    gtk_box_pack_start (GTK_BOX (main_box), frame, FALSE, FALSE, 0);
+    gtk_box_pack_start (GTK_BOX (body), frame, FALSE, FALSE, 0);
 #ifdef NEMO_SMPL
-    priv->completed_scroll = gtk_scrolled_window_new (NULL, NULL);
-    gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (priv->completed_scroll),
-                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_widget_set_size_request (priv->completed_scroll, -1, 220);
+    priv->completed_section = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     priv->completed_list = gtk_box_new (GTK_ORIENTATION_VERTICAL, 12);
     gtk_container_set_border_width (GTK_CONTAINER (priv->completed_list), 12);
-    gtk_container_add (GTK_CONTAINER (priv->completed_scroll), priv->completed_list);
-    gtk_box_pack_start (GTK_BOX (main_box), priv->completed_scroll, TRUE, TRUE, 0);
+    gtk_container_add (GTK_CONTAINER (priv->completed_section), priv->completed_list);
+    gtk_box_pack_start (GTK_BOX (body), priv->completed_section, FALSE, FALSE, 0);
     priv->history_notice = gtk_label_new (_("Only the latest 50 completed operations are shown."));
-    gtk_box_pack_start (GTK_BOX (main_box), priv->history_notice, FALSE, FALSE, 4);
+    gtk_box_pack_start (GTK_BOX (body), priv->history_notice, FALSE, FALSE, 4);
+    priv->quiet_check = gtk_check_button_new_with_label (_("Don't show successful transfers again"));
+    gtk_widget_set_tooltip_text (priv->quiet_check,
+        _("Errors and incomplete transfers will still be reported. Verification remains unchanged."));
+    gtk_widget_set_margin_start (priv->quiet_check, 12);
+    gtk_widget_set_margin_end (priv->quiet_check, 12);
+    gtk_widget_set_no_show_all (priv->quiet_check, TRUE);
+    g_settings_bind (nemo_preferences, NEMO_PREFERENCES_SHOW_SUCCESSFUL_TRANSFERS,
+                     priv->quiet_check, "active", G_SETTINGS_BIND_INVERT_BOOLEAN);
+    gtk_box_pack_start (GTK_BOX (main_box), priv->quiet_check, FALSE, FALSE, 0);
+    GtkWidget *buttons = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_container_set_border_width (GTK_CONTAINER (buttons), 12);
+    gtk_box_pack_start (GTK_BOX (main_box), buttons, FALSE, FALSE, 0);
+    priv->dock_button = gtk_button_new_with_mnemonic (_("_Dock"));
+    g_signal_connect (priv->dock_button, "clicked", G_CALLBACK (dock_button_clicked), self);
+    gtk_box_pack_start (GTK_BOX (buttons), priv->dock_button, FALSE, FALSE, 0);
     w = gtk_button_new_with_mnemonic (_("_Close"));
-    gtk_widget_set_halign (w, GTK_ALIGN_END);
-    gtk_widget_set_margin_end (w, 12);
-    gtk_widget_set_margin_bottom (w, 12);
-    gtk_box_pack_start (GTK_BOX (main_box), w, FALSE, FALSE, 0);
+    priv->close_button = w;
+    gtk_box_pack_end (GTK_BOX (buttons), w, FALSE, FALSE, 0);
     gtk_widget_set_can_default (w, TRUE);
     gtk_widget_grab_default (w);
     gtk_widget_grab_focus (w);
@@ -364,8 +627,9 @@ progress_ui_handler_ensure_window (NemoProgressUIHandler *self)
 #endif
     gtk_widget_show_all (main_box);
 #ifdef NEMO_SMPL
-    gtk_widget_hide (priv->completed_scroll);
+    gtk_widget_hide (priv->completed_section);
     gtk_widget_hide (priv->history_notice);
+    update_dock_button (self);
 #endif
 
 	g_signal_connect (progress_window,
@@ -654,7 +918,8 @@ progress_ui_handler_clear_completed (NemoProgressUIHandler *self)
 
     g_list_free_full (children, (GDestroyNotify) progress_ui_handler_dismiss_result);
     self->priv->completed_count = 0;
-    gtk_widget_hide (self->priv->completed_scroll);
+    gtk_widget_hide (self->priv->completed_section);
+    gtk_widget_hide (self->priv->quiet_check);
     gtk_widget_hide (self->priv->history_notice);
 }
 
@@ -699,7 +964,8 @@ progress_ui_handler_add_completed (NemoProgressUIHandler *self,
     gtk_box_pack_start (GTK_BOX (row), details, FALSE, FALSE, 0);
     gtk_box_pack_start (GTK_BOX (self->priv->completed_list), row, FALSE, FALSE, 0);
     gtk_widget_show_all (row);
-    gtk_widget_show (self->priv->completed_scroll);
+    gtk_widget_show (self->priv->completed_section);
+    gtk_widget_show (self->priv->quiet_check);
     self->priv->completed_count++;
     return row;
 }
@@ -736,7 +1002,7 @@ progress_ui_handler_show_results (GSimpleAction *action,
     }
     self->priv->should_show_status_icon = FALSE;
     progress_ui_handler_hide_status (self);
-    gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+    progress_ui_handler_present (self, TRUE);
 }
 
 static gboolean
@@ -744,10 +1010,20 @@ progress_window_is_visible (NemoProgressUIHandler *self)
 {
     GdkWindow *window;
 
-    if (self->priv->progress_window == NULL ||
-        !gtk_widget_get_visible (self->priv->progress_window))
+    GtkWidget *toplevel = self->priv->dock_window != NULL ?
+        GTK_WIDGET (self->priv->dock_window) : self->priv->progress_window;
+    if (toplevel == NULL || !gtk_widget_get_visible (toplevel) ||
+        (self->priv->dock_area != NULL && !gtk_widget_get_visible (self->priv->dock_area)))
         return FALSE;
-    window = gtk_widget_get_window (self->priv->progress_window);
+    if (self->priv->dock_window != NULL) {
+        if (!gtk_window_is_active (self->priv->dock_window))
+            return FALSE;
+        GtkWidget *paned = gtk_widget_get_parent (self->priv->dock_area);
+        if (GTK_IS_PANED (paned) && gtk_widget_get_allocated_height (paned) > 20 &&
+            gtk_paned_get_position (GTK_PANED (paned)) >= gtk_widget_get_allocated_height (paned) - 20)
+            return FALSE;
+    }
+    window = gtk_widget_get_window (toplevel);
     return window == NULL || !(gdk_window_get_state (window) & GDK_WINDOW_STATE_ICONIFIED);
 }
 
@@ -758,6 +1034,7 @@ operation_finished (NemoProgressInfo *info, OperationWatch *watch)
     NemoProgressResult result;
     gboolean transfer = nemo_progress_info_get_result (info, &result) &&
                         result.operation != NEMO_PROGRESS_OPERATION_UNKNOWN;
+    gboolean report = transfer && show_transfer_result (info);
     g_autofree char *text = transfer ? nemo_progress_info_get_completion_text (info) : NULL;
     g_autofree char *summary = transfer ? nemo_progress_info_get_completion_summary (info) : NULL;
     gboolean visible = progress_window_is_visible (self);
@@ -767,7 +1044,7 @@ operation_finished (NemoProgressInfo *info, OperationWatch *watch)
     self->priv->infos = g_list_remove (self->priv->infos, info);
     /* Generic jobs (permissions, trash, etc.) report errors in their own dialogs;
      * they do not supply a transfer result to preserve in this history. */
-    if (transfer)
+    if (report)
         row = progress_ui_handler_add_completed (self, summary, text,
                                                  result.outcome != NEMO_PROGRESS_OUTCOME_SUCCESS);
     if (self->priv->list != NULL)
@@ -778,11 +1055,11 @@ operation_finished (NemoProgressInfo *info, OperationWatch *watch)
         gtk_window_set_title (GTK_WINDOW (self->priv->progress_window), _("File Operations"));
         xapp_gtk_window_set_progress (XAPP_GTK_WINDOW (self->priv->progress_window), 0);
         if (self->priv->completed_count == 0)
-            gtk_widget_hide (self->priv->progress_window);
+            progress_ui_handler_hide (self);
     } else {
         progress_info_changed_cb (NULL, self);
     }
-    if (transfer && !visible) {
+    if (report && !visible) {
         GNotification *notification = g_notification_new (_("File operation finished"));
         GIcon *icon = g_themed_icon_new ("system-file-manager");
         char *id = g_strdup_printf ("file-operation-%" G_GINT64_FORMAT,
@@ -820,7 +1097,7 @@ operation_show_timeout (gpointer data)
         progress_ui_handler_add_to_window (self, watch->info);
         progress_info_changed_cb (watch->info, self);
         if (first_window || !self->priv->should_show_status_icon)
-            gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+            progress_ui_handler_present (self, FALSE);
         progress_ui_handler_update_status_icon (self);
     }
     return G_SOURCE_REMOVE;
@@ -842,8 +1119,12 @@ progress_info_queued_cb (NemoProgressInfo *info,
                 (result.operation == NEMO_PROGRESS_OPERATION_COPY ||
                  result.operation == NEMO_PROGRESS_OPERATION_MOVE);
     new_batch = self->priv->active_infos == 0;
-    if (new_batch)
+    if (new_batch) {
         self->priv->should_show_status_icon = FALSE;
+        GtkWindow *origin = nemo_progress_info_get_parent_window (info);
+        g_weak_ref_set (&self->priv->preferred_window, origin);
+        g_clear_object (&origin);
+    }
     watch = g_new0 (OperationWatch, 1);
     watch->self = self;
     watch->info = g_object_ref (info);
@@ -856,6 +1137,8 @@ progress_info_queued_cb (NemoProgressInfo *info,
     g_signal_connect (info, "progress-changed", G_CALLBACK (progress_info_changed_cb), self);
     g_signal_connect (info, "changed", G_CALLBACK (progress_info_changed_cb), self);
     if (immediate) {
+        if (nemo_progress_info_get_is_finished (info) && !show_transfer_result (info))
+            return;
         /* Fast jobs can already be finished when their queued signal arrives.
          * Show their summary too, without relying on a tray or notifications. */
         if (!nemo_progress_info_get_is_finished (info))
@@ -863,9 +1146,9 @@ progress_info_queued_cb (NemoProgressInfo *info,
         else
             progress_ui_handler_ensure_window (self);
         progress_info_changed_cb (info, self);
-        if (new_batch || (!gtk_widget_get_visible (self->priv->progress_window) &&
+        if (new_batch || (!progress_window_is_visible (self) &&
                           !self->priv->should_show_status_icon))
-            gtk_window_present (GTK_WINDOW (self->priv->progress_window));
+            progress_ui_handler_present (self, FALSE);
         progress_ui_handler_update_status_icon (self);
     } else {
         progress_info_changed_cb (info, self);
@@ -884,7 +1167,18 @@ progress_info_show_dialog (NemoProgressInfo *info, GtkWindow *dialog,
     /* This also runs before the queued idle when a worker needs input quickly.
      * A later presentation of progress must stay behind the decision dialog. */
     progress_ui_handler_ensure_window (self);
-    gtk_window_set_transient_for (dialog, GTK_WINDOW (self->priv->progress_window));
+    if (self->priv->dock_window == NULL &&
+        g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_DOCK_FILE_TRANSFERS)) {
+        GtkWindow *origin = nemo_progress_info_get_parent_window (info);
+        g_weak_ref_set (&self->priv->preferred_window, origin);
+        g_clear_object (&origin);
+        progress_ui_handler_present (self, FALSE);
+    }
+    if (g_list_find (self->priv->dialogs, dialog) == NULL) {
+        self->priv->dialogs = g_list_prepend (self->priv->dialogs, dialog);
+        g_signal_connect_object (dialog, "destroy", G_CALLBACK (decision_dialog_destroyed), self, 0);
+    }
+    reparent_dialogs (self);
 }
 #endif
 
@@ -908,6 +1202,12 @@ nemo_progress_ui_handler_shutdown (NemoProgressUIHandler *self)
     if (self->priv->shutting_down)
         return;
     self->priv->shutting_down = TRUE;
+    g_signal_handlers_disconnect_by_data (nemo_application_get_singleton (), self);
+    progress_ui_handler_hide (self);
+    progress_ui_handler_undock (self);
+    for (GList *l = self->priv->dialogs; l != NULL; l = l->next)
+        g_signal_handlers_disconnect_by_data (l->data, self);
+    g_clear_pointer (&self->priv->dialogs, g_list_free);
     if (self->priv->manager != NULL) {
         g_signal_handlers_disconnect_by_data (self->priv->manager, self);
         GList *infos = nemo_progress_info_manager_get_all_infos (self->priv->manager);
@@ -955,6 +1255,15 @@ nemo_progress_ui_handler_dispose (GObject *obj)
 }
 
 static void
+nemo_progress_ui_handler_finalize (GObject *obj)
+{
+#ifdef NEMO_SMPL
+    g_weak_ref_clear (&NEMO_PROGRESS_UI_HANDLER (obj)->priv->preferred_window);
+#endif
+    G_OBJECT_CLASS (nemo_progress_ui_handler_parent_class)->finalize (obj);
+}
+
+static void
 nemo_progress_ui_handler_init (NemoProgressUIHandler *self)
 {
 	self->priv = G_TYPE_INSTANCE_GET_PRIVATE (self, NEMO_TYPE_PROGRESS_UI_HANDLER,
@@ -965,6 +1274,13 @@ nemo_progress_ui_handler_init (NemoProgressUIHandler *self)
 			  G_CALLBACK (new_progress_info_cb), self);
     self->priv->should_show_status_icon = FALSE;
 #ifdef NEMO_SMPL
+    g_weak_ref_init (&self->priv->preferred_window, NULL);
+    GApplication *app = G_APPLICATION (nemo_application_get_singleton ());
+    if (GTK_IS_APPLICATION (app)) {
+        g_signal_connect_object (app, "window-added", G_CALLBACK (nemo_window_added), self, 0);
+        for (GList *l = gtk_application_get_windows (GTK_APPLICATION (app)); l != NULL; l = l->next)
+            nemo_window_added (GTK_APPLICATION (app), l->data, self);
+    }
     self->priv->operations = g_hash_table_new_full (g_direct_hash, g_direct_equal,
                                                    NULL, operation_watch_free);
     self->priv->show_action = g_simple_action_new ("show-file-operation-results", G_VARIANT_TYPE_STRING);
@@ -982,6 +1298,7 @@ nemo_progress_ui_handler_class_init (NemoProgressUIHandlerClass *klass)
 
 	oclass = G_OBJECT_CLASS (klass);
 	oclass->dispose = nemo_progress_ui_handler_dispose;
+	oclass->finalize = nemo_progress_ui_handler_finalize;
 	
 	g_type_class_add_private (klass, sizeof (NemoProgressUIHandlerPriv));
 }

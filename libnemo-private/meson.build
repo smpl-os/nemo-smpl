@@ -58,6 +58,7 @@ nemo_private_sources = [
   'nemo-module.c',
   'nemo-monitor.c',
   'nemo-mount-operation.c',
+  'nemo-package-version.c',
   'nemo-placement-grid.c',
   'nemo-places-tree-view.c',
   'nemo-program-choosing.c',

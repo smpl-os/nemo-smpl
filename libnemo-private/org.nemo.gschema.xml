@@ -123,6 +123,16 @@
       <summary>Legacy copy safety preference (deprecated)</summary>
       <description>Retained for compatibility. In nemo-smpl this setting no longer disables staging or durability checks. Copy-and-delete moves always require verification before removing the source. Same-filesystem renames are not checksum verified. Filesystem flushes and checksum comparisons cannot guarantee device hardware behavior; use Eject or Safely Remove before unplugging a device.</description>
     </key>
+    <key name="dock-file-transfers" type="b">
+      <default>false</default>
+      <summary>Dock file operations at the bottom of Nemo</summary>
+      <description>Remember the Dock/Undock button choice for future operations. Closing the hosting Nemo window leaves transfers running in the background; reopening a Nemo window restores the panel.</description>
+    </key>
+    <key name="show-successful-transfer-results" type="b">
+      <default>true</default>
+      <summary>Show completion results for successful copies and moves</summary>
+      <description>When disabled, successful transfers close without a completion summary or notification. Failures, cancellations, partial transfers and retained unverified files are still reported. This does not disable verification or change transfer safety.</description>
+    </key>
     <key name="verify-file-copies" type="b">
       <default>true</default>
       <summary>Verify copied and existing files</summary>
@@ -1193,6 +1203,10 @@
     <key name="open-containing-folder" type="s">
       <default>'&lt;Control&gt;&lt;Alt&gt;o'</default>
       <summary>Open containing folder</summary>
+    </key>
+    <key name="open-containing-folder-other-pane" type="s">
+      <default>'&lt;Control&gt;&lt;Alt&gt;&lt;Shift&gt;o'</default>
+      <summary>Open containing folder in the other pane</summary>
     </key>
     <key name="properties" type="s">
       <default>'&lt;Alt&gt;Return'</default>

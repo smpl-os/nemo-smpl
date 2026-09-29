@@ -1220,6 +1220,9 @@ init_common (gsize job_size,
 
 	}
 	common->progress = nemo_progress_info_new ();
+#ifdef NEMO_SMPL
+	nemo_progress_info_set_parent_window (common->progress, parent_window);
+#endif
 	common->cancellable = nemo_progress_info_get_cancellable (common->progress);
 	common->inhibit_cookie = -1;
     common->monitor_num = 0;

@@ -72,7 +72,7 @@ sudo apt-get install -y \
   build-essential meson ninja-build pkgconf \
   libgtk-3-dev libglib2.0-dev libjson-glib-dev \
   libx11-dev libxapp-dev libcinnamon-desktop-dev \
-  libexif-dev libexempi-dev libgstreamer1.0-dev \
+  libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libgsf-1-dev \
   gobject-introspection libgirepository1.0-dev \
   intltool itstool gtk-doc-tools
@@ -88,7 +88,7 @@ sudo dnf install -y \
   meson ninja-build pkgconfig \
   gtk3-devel glib2-devel json-glib-devel \
   libX11-devel xapp-devel cinnamon-desktop-devel \
-  libexif-devel exempi-devel gstreamer1-devel \
+  libexif-devel LibRaw-devel exempi-devel gstreamer1-devel \
   gstreamer1-plugins-base-devel libgsf-devel \
   gobject-introspection-devel intltool itstool \
   gtk-doc
@@ -103,7 +103,7 @@ sudo dnf install -y \
 sudo pacman -S --needed \
   base-devel meson ninja pkgconf \
   gtk3 glib2 json-glib libx11 xapp cinnamon-desktop \
-  libexif exempi gstreamer gst-plugins-base-libs \
+  libexif libraw exempi gstreamer gst-plugins-base-libs \
   pango gobject-introspection libgsf intltool itstool
 ```
 

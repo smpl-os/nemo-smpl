@@ -96,6 +96,9 @@ void          nemo_progress_info_take_completion_details (NemoProgressInfo *info
 /* Main thread only, before displaying a job's question or error dialog. */
 void          nemo_progress_info_attach_dialog (NemoProgressInfo *info,
                                                GtkWindow *dialog);
+/* Main-thread origin tracking; the getter returns a reference, or NULL. */
+void          nemo_progress_info_set_parent_window (NemoProgressInfo *info, GtkWindow *window);
+GtkWindow *   nemo_progress_info_get_parent_window (NemoProgressInfo *info);
 #endif
 
 GType nemo_progress_info_get_type (void) G_GNUC_CONST;

@@ -23,6 +23,7 @@
 
 #include <glib/gi18n.h>
 #include <string.h>
+#include <math.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #ifdef HAVE_LIBRAW
@@ -39,7 +40,7 @@ struct _NemoImageViewer
 
 	/* Widgets */
 	GtkWidget           *scroll;      /* GtkScrolledWindow */
-	GtkWidget           *image;       /* GtkImage          */
+	GtkWidget           *image;
 	GtkWidget           *ctrl_box;    /* zoom controls     */
 	GtkWidget           *zoom_scale;
 	GtkWidget           *fit_check;
@@ -56,6 +57,12 @@ struct _NemoImageViewer
 	gboolean             fit_to_container;
 	gboolean             show_controls;
 #ifdef NEMO_SMPL
+	gboolean             dragging;
+	double               drag_x, drag_y;
+	double               drag_h, drag_v;
+	gboolean             zoom_pending;
+	double               anchor_x, anchor_y;
+	double               pointer_x, pointer_y;
 	GtkWidget           *status_label;
 	GCancellable        *load_cancel;
 	gboolean             destroyed;
@@ -70,6 +77,11 @@ static void zoom_scale_changed_cb  (GtkRange *range, gpointer user_data);
 static GdkPixbufAnimation *load_animation_file (const gchar *path,
 					       GCancellable *cancellable,
 					       GError **error);
+#ifdef HAVE_LIBRAW
+static GdkPixbufAnimation *load_raw_file (const gchar *path,
+					 GCancellable *cancellable,
+					 GError **error);
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Animation helpers                                                  */
@@ -92,6 +104,10 @@ clear_image_data (NemoImageViewer *self)
 	g_clear_object (&self->animation);
 	g_clear_object (&self->original_pixbuf);
 	self->is_animated = FALSE;
+#ifdef NEMO_SMPL
+	self->dragging = FALSE;
+	self->zoom_pending = FALSE;
+#endif
 }
 
 static GdkPixbuf *
@@ -183,7 +199,10 @@ update_zoom_scale_quietly (NemoImageViewer *self, double value)
 static void
 apply_zoom (NemoImageViewer *self)
 {
-	GdkPixbuf *base, *scaled;
+	GdkPixbuf *base;
+#ifndef NEMO_SMPL
+	GdkPixbuf *scaled;
+#endif
 	int pw, ph, nw, nh, avail_w, avail_h;
 	double z;
 
@@ -195,6 +214,22 @@ apply_zoom (NemoImageViewer *self)
 	ph = gdk_pixbuf_get_height (base);
 	z  = self->zoom_level;
 
+#ifdef NEMO_SMPL
+	if (self->fit_to_container) {
+		avail_w = MAX (gtk_widget_get_allocated_width (self->scroll) - 20, 1);
+		avail_h = MAX (gtk_widget_get_allocated_height (self->scroll) - 20, 1);
+		z = MIN ((double) avail_w / pw, (double) avail_h / ph);
+	}
+	self->zoom_level = z;
+	g_signal_handlers_block_by_func (self->zoom_scale, zoom_scale_changed_cb, self);
+	gtk_range_set_range (GTK_RANGE (self->zoom_scale), MIN (0.01, z), MAX (4.0, z));
+	update_zoom_scale_quietly (self, z);
+	g_signal_handlers_unblock_by_func (self->zoom_scale, zoom_scale_changed_cb, self);
+	nw = self->fit_to_container ? 1 : MAX ((int) ceil (pw * z) + 20, 1);
+	nh = self->fit_to_container ? 1 : MAX ((int) ceil (ph * z) + 20, 1);
+	gtk_widget_set_size_request (self->image, nw, nh);
+	gtk_widget_queue_draw (self->image);
+#else
 	if (self->fit_to_container) {
 		double zw = 1.0, zh = 1.0;
 
@@ -220,7 +255,155 @@ apply_zoom (NemoImageViewer *self)
 	scaled = gdk_pixbuf_scale_simple (base, nw, nh, GDK_INTERP_BILINEAR);
 	gtk_image_set_from_pixbuf (GTK_IMAGE (self->image), scaled);
 	g_object_unref (scaled);
+#endif
 }
+
+#ifdef NEMO_SMPL
+static void
+image_origin (NemoImageViewer *self, GdkPixbuf *base, double *x, double *y)
+{
+	*x = MAX (0, (gtk_widget_get_allocated_width (self->image) -
+		      gdk_pixbuf_get_width (base) * self->zoom_level) / 2);
+	*y = MAX (0, (gtk_widget_get_allocated_height (self->image) -
+		      gdk_pixbuf_get_height (base) * self->zoom_level) / 2);
+}
+
+static gboolean
+image_draw_cb (GtkWidget *widget, cairo_t *cr, NemoImageViewer *self)
+{
+	GdkPixbuf *base = get_base_pixbuf (self);
+	if (base == NULL)
+		return FALSE;
+
+	double x, y;
+	image_origin (self, base, &x, &y);
+	cairo_translate (cr, x, y);
+	cairo_scale (cr, self->zoom_level, self->zoom_level);
+	gdk_cairo_set_source_pixbuf (cr, base, 0, 0);
+	cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_BILINEAR);
+	cairo_pattern_set_extend (cairo_get_source (cr), CAIRO_EXTEND_PAD);
+	cairo_rectangle (cr, 0, 0, gdk_pixbuf_get_width (base), gdk_pixbuf_get_height (base));
+	cairo_fill (cr);
+	return FALSE;
+}
+
+static void
+set_drag_cursor (NemoImageViewer *self, gboolean dragging)
+{
+	GdkWindow *window = gtk_widget_get_window (self->image);
+	if (window != NULL) {
+		GdkCursor *cursor = dragging ?
+			gdk_cursor_new_from_name (gtk_widget_get_display (self->image), "grabbing") : NULL;
+		gdk_window_set_cursor (window, cursor);
+		g_clear_object (&cursor);
+	}
+}
+
+static gboolean
+image_button_press_cb (GtkWidget *widget, GdkEventButton *event, NemoImageViewer *self)
+{
+	if (event->button != GDK_BUTTON_PRIMARY || get_base_pixbuf (self) == NULL ||
+	    self->fit_to_container)
+		return FALSE;
+	self->dragging = TRUE;
+	self->drag_x = event->x_root;
+	self->drag_y = event->y_root;
+	self->drag_h = gtk_adjustment_get_value (
+		gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroll)));
+	self->drag_v = gtk_adjustment_get_value (
+		gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll)));
+	set_drag_cursor (self, TRUE);
+	return TRUE;
+}
+
+static gboolean
+image_motion_cb (GtkWidget *widget, GdkEventMotion *event, NemoImageViewer *self)
+{
+	if (!self->dragging)
+		return FALSE;
+	gtk_adjustment_set_value (
+		gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroll)),
+		self->drag_h - (event->x_root - self->drag_x));
+	gtk_adjustment_set_value (
+		gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll)),
+		self->drag_v - (event->y_root - self->drag_y));
+	return TRUE;
+}
+
+static gboolean
+image_button_release_cb (GtkWidget *widget, GdkEventButton *event, NemoImageViewer *self)
+{
+	if (event->button != GDK_BUTTON_PRIMARY || !self->dragging)
+		return FALSE;
+	self->dragging = FALSE;
+	set_drag_cursor (self, FALSE);
+	return TRUE;
+}
+
+static gboolean
+image_grab_broken_cb (GtkWidget *widget, GdkEventGrabBroken *event, NemoImageViewer *self)
+{
+	self->dragging = FALSE;
+	set_drag_cursor (self, FALSE);
+	return FALSE;
+}
+
+static void
+image_unmap_cb (GtkWidget *widget, NemoImageViewer *self)
+{
+	self->dragging = FALSE;
+	set_drag_cursor (self, FALSE);
+}
+
+static gboolean
+image_scroll_cb (GtkWidget *widget, GdkEventScroll *event, NemoImageViewer *self)
+{
+	GdkPixbuf *base = get_base_pixbuf (self);
+	double delta, dx;
+	if (base == NULL)
+		return FALSE;
+	switch (event->direction) {
+	case GDK_SCROLL_UP: delta = -1; break;
+	case GDK_SCROLL_DOWN: delta = 1; break;
+	case GDK_SCROLL_SMOOTH:
+		if (!gdk_event_get_scroll_deltas ((GdkEvent *) event, &dx, &delta) || delta == 0)
+			return FALSE;
+		break;
+	default:
+		return FALSE;
+	}
+	GtkAdjustment *h = gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroll));
+	GtkAdjustment *v = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll));
+	double zoom = self->zoom_level;
+	double origin_x, origin_y;
+	image_origin (self, base, &origin_x, &origin_y);
+	self->anchor_x = (event->x - origin_x) / zoom;
+	self->anchor_y = (event->y - origin_y) / zoom;
+	self->pointer_x = event->x - gtk_adjustment_get_value (h);
+	self->pointer_y = event->y - gtk_adjustment_get_value (v);
+	nemo_image_viewer_set_zoom (self, zoom * pow (1.2, -CLAMP (delta, -10, 10)));
+	self->zoom_pending = TRUE;
+	gtk_widget_queue_resize (self->scroll);
+	return TRUE;
+}
+
+static void
+apply_zoom_anchor (NemoImageViewer *self)
+{
+	GdkPixbuf *base = get_base_pixbuf (self);
+	if (!self->zoom_pending || base == NULL)
+		return;
+	self->zoom_pending = FALSE;
+	double origin_x, origin_y;
+	image_origin (self, base, &origin_x, &origin_y);
+	gtk_adjustment_set_value (
+		gtk_scrolled_window_get_hadjustment (GTK_SCROLLED_WINDOW (self->scroll)),
+		origin_x + self->anchor_x * self->zoom_level - self->pointer_x);
+	gtk_adjustment_set_value (
+		gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll)),
+		origin_y + self->anchor_y * self->zoom_level - self->pointer_y);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Control callbacks                                                  */
@@ -231,15 +414,7 @@ zoom_scale_changed_cb (GtkRange *range, gpointer user_data)
 {
 	NemoImageViewer *self = NEMO_IMAGE_VIEWER (user_data);
 
-	self->zoom_level = gtk_range_get_value (range);
-
-	if (self->fit_to_container) {
-		self->fit_to_container = FALSE;
-		gtk_toggle_button_set_active (
-			GTK_TOGGLE_BUTTON (self->fit_check), FALSE);
-	}
-
-	apply_zoom (self);
+	nemo_image_viewer_set_zoom (self, gtk_range_get_value (range));
 }
 
 static void
@@ -248,8 +423,13 @@ fit_check_toggled_cb (GtkToggleButton *btn, gpointer user_data)
 	NemoImageViewer *self = NEMO_IMAGE_VIEWER (user_data);
 
 	self->fit_to_container = gtk_toggle_button_get_active (btn);
-	if (self->fit_to_container)
-		apply_zoom (self);
+#ifdef NEMO_SMPL
+	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->scroll),
+		self->fit_to_container ? GTK_POLICY_NEVER : GTK_POLICY_AUTOMATIC,
+		self->fit_to_container ? GTK_POLICY_NEVER : GTK_POLICY_AUTOMATIC);
+	self->zoom_pending = FALSE;
+#endif
+	apply_zoom (self);
 }
 
 static void
@@ -261,6 +441,9 @@ scroll_size_allocate_cb (GtkWidget    *widget,
 
 	if (self->fit_to_container && get_base_pixbuf (self) != NULL)
 		apply_zoom (self);
+#ifdef NEMO_SMPL
+	apply_zoom_anchor (self);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -373,16 +556,22 @@ image_load_thread (GTask *task, gpointer source, gpointer task_data,
 	if (g_task_return_error_if_cancelled (task))
 		return;
 
-	stream = G_INPUT_STREAM (g_file_read (load->file, cancellable, &error));
-	if (stream != NULL) {
-		anim = gdk_pixbuf_animation_new_from_stream (stream, cancellable, &error);
-		g_input_stream_close (stream, NULL, NULL);
-		g_object_unref (stream);
+#ifdef HAVE_LIBRAW
+	gboolean raw_file = nemo_preview_file_is_raw (load->file);
+	/* A TIFF loader can successfully return only a DNG's small thumbnail. */
+	if (!raw_file)
+#endif
+	{
+		stream = G_INPUT_STREAM (g_file_read (load->file, cancellable, &error));
+		if (stream != NULL) {
+			anim = gdk_pixbuf_animation_new_from_stream (stream, cancellable, &error);
+			g_input_stream_close (stream, NULL, NULL);
+			g_object_unref (stream);
+		}
 	}
 
 #ifdef HAVE_LIBRAW
-	if (anim == NULL && load->file != NULL && error != NULL &&
-	    error->domain == GDK_PIXBUF_ERROR &&
+	if (anim == NULL && (raw_file || (error != NULL && error->domain == GDK_PIXBUF_ERROR)) &&
 	    !g_cancellable_is_cancelled (cancellable)) {
 		char *path = g_file_get_path (load->file);
 		GFile *temporary = NULL;
@@ -412,7 +601,7 @@ image_load_thread (GTask *task, gpointer source, gpointer task_data,
 			}
 		}
 		if (path != NULL)
-			anim = load_animation_file (path, cancellable, &raw_error);
+			anim = load_raw_file (path, cancellable, &raw_error);
 		if (temporary != NULL) {
 			GError *cleanup_error = NULL;
 			if (!g_file_delete (temporary, NULL, &cleanup_error)) {
@@ -422,7 +611,7 @@ image_load_thread (GTask *task, gpointer source, gpointer task_data,
 			g_object_unref (temporary);
 		}
 		g_free (path);
-		if (anim == NULL && raw_error != NULL && raw_error->domain == G_IO_ERROR) {
+		if (anim == NULL && raw_error != NULL) {
 			g_clear_error (&error);
 			error = g_steal_pointer (&raw_error);
 		}
@@ -436,6 +625,9 @@ image_load_thread (GTask *task, gpointer source, gpointer task_data,
 		g_clear_error (&error);
 		g_task_return_pointer (task, anim, g_object_unref);
 	} else {
+		if (error == NULL)
+			g_set_error_literal (&error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_FAILED,
+					     _("Unable to decode image."));
 		g_task_return_error (task, error);
 	}
 }
@@ -552,22 +744,43 @@ nemo_image_viewer_init (NemoImageViewer *self)
 		GTK_SCROLLED_WINDOW (self->scroll),
 		GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
 
+#ifdef NEMO_SMPL
+	gtk_scrolled_window_set_kinetic_scrolling (GTK_SCROLLED_WINDOW (self->scroll), FALSE);
+	self->image = gtk_drawing_area_new ();
+	gtk_widget_set_hexpand (self->image, TRUE);
+	gtk_widget_set_vexpand (self->image, TRUE);
+	gtk_widget_add_events (self->image, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK |
+		GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | GDK_POINTER_MOTION_MASK);
+	g_signal_connect (self->image, "draw", G_CALLBACK (image_draw_cb), self);
+	g_signal_connect (self->image, "scroll-event", G_CALLBACK (image_scroll_cb), self);
+	g_signal_connect (self->image, "button-press-event", G_CALLBACK (image_button_press_cb), self);
+	g_signal_connect (self->image, "button-release-event", G_CALLBACK (image_button_release_cb), self);
+	g_signal_connect (self->image, "motion-notify-event", G_CALLBACK (image_motion_cb), self);
+	g_signal_connect (self->image, "grab-broken-event", G_CALLBACK (image_grab_broken_cb), self);
+	g_signal_connect (self->image, "unmap", G_CALLBACK (image_unmap_cb), self);
+#else
 	self->image = gtk_image_new ();
 	gtk_widget_set_halign (self->image, GTK_ALIGN_CENTER);
 	gtk_widget_set_valign (self->image, GTK_ALIGN_CENTER);
 	gtk_widget_set_margin_top (self->image, 8);
 	gtk_widget_set_margin_bottom (self->image, 8);
+#endif
 	gtk_container_add (GTK_CONTAINER (self->scroll), self->image);
+#ifdef NEMO_SMPL
+	GtkWidget *viewport = gtk_bin_get_child (GTK_BIN (self->scroll));
+	gtk_viewport_set_shadow_type (GTK_VIEWPORT (viewport), GTK_SHADOW_NONE);
+#endif
 	gtk_widget_show (self->image);
 
 	gtk_box_pack_start (GTK_BOX (self), self->scroll, TRUE, TRUE, 0);
 	gtk_widget_show (self->scroll);
 
-	g_signal_connect (self->scroll, "size-allocate",
+	g_signal_connect_after (self->scroll, "size-allocate",
 			  G_CALLBACK (scroll_size_allocate_cb), self);
 
 	/* Zoom controls */
 	self->ctrl_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_widget_set_no_show_all (self->ctrl_box, TRUE);
 	gtk_widget_set_margin_start (self->ctrl_box, 4);
 	gtk_widget_set_margin_end   (self->ctrl_box, 4);
 	gtk_widget_set_margin_top   (self->ctrl_box, 2);
@@ -581,7 +794,7 @@ nemo_image_viewer_init (NemoImageViewer *self)
 	gtk_widget_show (self->fit_check);
 
 	self->zoom_scale = gtk_scale_new_with_range (
-		GTK_ORIENTATION_HORIZONTAL, 0.1, 4.0, 0.1);
+		GTK_ORIENTATION_HORIZONTAL, 0.01, 4.0, 0.01);
 	gtk_scale_set_draw_value (GTK_SCALE (self->zoom_scale), TRUE);
 	gtk_scale_set_value_pos  (GTK_SCALE (self->zoom_scale), GTK_POS_RIGHT);
 	gtk_range_set_value (GTK_RANGE (self->zoom_scale), 1.0);
@@ -610,7 +823,80 @@ nemo_image_viewer_new (void)
 static int
 raw_progress_cb (void *data, enum LibRaw_progress stage, int iteration, int expected)
 {
-	return g_cancellable_is_cancelled (data);
+	return data != NULL && g_cancellable_is_cancelled (data);
+}
+
+static GdkPixbufAnimation *
+load_raw_file (const gchar *path, GCancellable *cancellable, GError **error)
+{
+	libraw_data_t *raw = libraw_init (0);
+	libraw_processed_image_t *img = NULL;
+	GdkPixbuf *pixbuf = NULL;
+	GdkPixbufAnimation *anim = NULL;
+	int ret;
+
+	if (raw == NULL) {
+		g_set_error_literal (error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_INSUFFICIENT_MEMORY,
+				     _("Unable to allocate a RAW decoder."));
+		return NULL;
+	}
+
+	libraw_set_progress_handler (raw, raw_progress_cb, cancellable);
+	ret = libraw_open_file (raw, path);
+	if (ret != LIBRAW_SUCCESS)
+		goto out;
+
+	raw->params.half_size = 1;
+	raw->params.use_camera_wb = 1;
+	raw->params.output_bps = 8;
+	raw->params.output_color = 1;
+
+	ret = libraw_unpack (raw);
+	if (ret != LIBRAW_SUCCESS)
+		goto out;
+	ret = libraw_dcraw_process (raw);
+	if (ret != LIBRAW_SUCCESS)
+		goto out;
+	img = libraw_dcraw_make_mem_image (raw, &ret);
+	if (img == NULL || ret != LIBRAW_SUCCESS)
+		goto out;
+
+	if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3 || img->bits != 8 ||
+	    img->width == 0 || img->height == 0 ||
+	    img->data_size < (gsize) img->width * img->height * 3) {
+		g_set_error_literal (error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_FAILED,
+				     _("Unsupported RAW preview format."));
+		goto out;
+	}
+
+	pixbuf = gdk_pixbuf_new (GDK_COLORSPACE_RGB, FALSE, 8, img->width, img->height);
+	if (pixbuf == NULL) {
+		g_set_error_literal (error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_INSUFFICIENT_MEMORY,
+				     _("Unable to allocate a RAW preview."));
+		goto out;
+	}
+	guint8 *dst = gdk_pixbuf_get_pixels (pixbuf);
+	int dst_stride = gdk_pixbuf_get_rowstride (pixbuf);
+	int src_stride = img->width * 3;
+	for (int row = 0; row < img->height; row++)
+		memcpy (dst + row * dst_stride, img->data + row * src_stride, src_stride);
+
+	GdkPixbufSimpleAnim *simple = gdk_pixbuf_simple_anim_new (img->width, img->height, 0.0f);
+	gdk_pixbuf_simple_anim_add_frame (simple, pixbuf);
+	anim = GDK_PIXBUF_ANIMATION (simple);
+
+out:
+	if (ret != LIBRAW_SUCCESS)
+		g_set_error (error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_FAILED,
+			     _("Unable to decode RAW image: %s"), libraw_strerror (ret));
+	else if (anim == NULL && (error == NULL || *error == NULL))
+		g_set_error_literal (error, GDK_PIXBUF_ERROR, GDK_PIXBUF_ERROR_FAILED,
+				     _("Unable to decode RAW image."));
+	if (img != NULL)
+		libraw_dcraw_clear_mem (img);
+	libraw_close (raw);
+	g_clear_object (&pixbuf);
+	return anim;
 }
 #endif
 
@@ -619,105 +905,22 @@ load_animation_file (const gchar *path, GCancellable *cancellable, GError **erro
 {
 	GdkPixbufAnimation *anim;
 
-	anim = gdk_pixbuf_animation_new_from_file (path, error);
-	if (anim != NULL)
-		return anim;
-
 #ifdef HAVE_LIBRAW
-	/* Fallback: try loading as a camera RAW file (DNG, ARW, CR2, NEF, etc.) */
-	{
-		libraw_data_t *raw;
-		libraw_processed_image_t *img;
-		GdkPixbuf *pixbuf;
-		int ret;
-
-		raw = libraw_init (0);
-		if (raw == NULL)
-			return NULL;
-
-		libraw_set_progress_handler (raw, raw_progress_cb, cancellable);
-
-		ret = libraw_open_file (raw, path);
-		if (ret != LIBRAW_SUCCESS) {
-			libraw_close (raw);
-			return NULL;
-		}
-
-		/* Use half-size for faster preview, sRGB output */
-		raw->params.half_size = 1;
-		raw->params.use_camera_wb = 1;
-		raw->params.output_bps = 8;
-		raw->params.output_color = 1; /* sRGB */
-
-		ret = libraw_unpack (raw);
-		if (ret != LIBRAW_SUCCESS) {
-			libraw_close (raw);
-			return NULL;
-		}
-
-		ret = libraw_dcraw_process (raw);
-		if (ret != LIBRAW_SUCCESS) {
-			libraw_close (raw);
-			return NULL;
-		}
-
-		img = libraw_dcraw_make_mem_image (raw, &ret);
-		if (img == NULL || ret != LIBRAW_SUCCESS) {
-			if (img != NULL)
-				libraw_dcraw_clear_mem (img);
-			libraw_close (raw);
-			return NULL;
-		}
-
-		if (img->type != LIBRAW_IMAGE_BITMAP || img->colors != 3) {
-			libraw_dcraw_clear_mem (img);
-			libraw_close (raw);
-			return NULL;
-		}
-
-		/* Create a GdkPixbuf from the RGB data.
-		 * We must copy because libraw owns the buffer. */
-		pixbuf = gdk_pixbuf_new (GDK_COLORSPACE_RGB, FALSE, 8,
-		                         img->width, img->height);
-		if (pixbuf != NULL) {
-			guint8 *dst = gdk_pixbuf_get_pixels (pixbuf);
-			int dst_stride = gdk_pixbuf_get_rowstride (pixbuf);
-			int src_stride = img->width * 3;
-			int row;
-
-			for (row = 0; row < (int) img->height; row++) {
-				memcpy (dst + row * dst_stride,
-				        img->data + row * src_stride,
-				        src_stride);
-			}
-		}
-
-		libraw_dcraw_clear_mem (img);
-		libraw_close (raw);
-
-		if (pixbuf == NULL)
-			return NULL;
-
-		/* Clear previous gdk-pixbuf error since we succeeded via libraw */
-		if (error != NULL)
+	g_autoptr (GFile) file = g_file_new_for_path (path);
+	if (nemo_preview_file_is_raw (file))
+		return load_raw_file (path, cancellable, error);
+#endif
+	anim = gdk_pixbuf_animation_new_from_file (path, error);
+#ifdef HAVE_LIBRAW
+	if (anim == NULL) {
+		GError *raw_error = NULL;
+		anim = load_raw_file (path, cancellable, &raw_error);
+		if (anim != NULL)
 			g_clear_error (error);
-
-		/* Wrap the static pixbuf in a single-frame animation */
-		{
-			GdkPixbufSimpleAnim *simple;
-			simple = gdk_pixbuf_simple_anim_new (
-				gdk_pixbuf_get_width (pixbuf),
-				gdk_pixbuf_get_height (pixbuf),
-				0.0f);
-			gdk_pixbuf_simple_anim_add_frame (simple, pixbuf);
-			anim = GDK_PIXBUF_ANIMATION (simple);
-		}
-		g_object_unref (pixbuf);
-		return anim;
+		g_clear_error (&raw_error);
 	}
-#endif /* HAVE_LIBRAW */
-
-	return NULL;
+#endif
+	return anim;
 }
 
 gboolean
@@ -772,7 +975,13 @@ nemo_image_viewer_clear (NemoImageViewer *self)
 	gtk_widget_hide (self->status_label);
 #endif
 	clear_image_data (self);
+#ifdef NEMO_SMPL
+	set_drag_cursor (self, FALSE);
+	gtk_widget_set_size_request (self->image, 1, 1);
+	gtk_widget_queue_draw (self->image);
+#else
 	gtk_image_clear (GTK_IMAGE (self->image));
+#endif
 }
 
 void
@@ -780,7 +989,17 @@ nemo_image_viewer_set_zoom (NemoImageViewer *self, double zoom)
 {
 	g_return_if_fail (NEMO_IS_IMAGE_VIEWER (self));
 
+#ifdef NEMO_SMPL
+	g_return_if_fail (isfinite (zoom) && zoom > 0);
+	GdkPixbuf *base = get_base_pixbuf (self);
+	/* Keep the scrollable drawing window within X11's coordinate range. */
+	double max_zoom = base != NULL ?
+		32700.0 / MAX (gdk_pixbuf_get_width (base), gdk_pixbuf_get_height (base)) : 4.0;
+	self->zoom_level = CLAMP (zoom, MIN (0.01, self->zoom_level), max_zoom);
+	self->zoom_pending = FALSE;
+#else
 	self->zoom_level = CLAMP (zoom, 0.1, 4.0);
+#endif
 	update_zoom_scale_quietly (self, self->zoom_level);
 
 	if (self->fit_to_container) {

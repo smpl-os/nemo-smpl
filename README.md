@@ -57,6 +57,13 @@ sudo ninja -C build install
 
 See [INSTALLATION.md](INSTALLATION.md) for detailed instructions, build dependencies, and MTP setup.
 
+Use normal patch-version bumps, not package-only test suffixes. Generate local
+package versions from the build metadata rather than maintaining another version value.
+About and `nemo --version` read the version of the installed package owning the
+running executable (pacman, dpkg or RPM), including its package revision.
+Unpackaged source builds are labelled explicitly; upgrading a running binary
+adds a restart reminder instead of silently presenting it as the new code.
+
 ## File Transfer Safety
 
 Hardened builds (`smpl_features=true`, the default) prioritize retaining data over
@@ -81,10 +88,22 @@ writer race, or certify that a remote server committed data to physical media.
 
 See [transfer behavior and recovery limits](FEATURES.md#verify-after-copymove).
 
-The File Operations window shows the transfer result and SHA-256 verification
-summary. Technical notes and recovery locations are under **Details**, expanded
+File Operations shows the transfer result and SHA-256 verification summary.
+Use **Dock** to attach it to a resizable area at the bottom of Nemo, or **Undock**
+to return it to a separate window. Nemo remembers that choice. Closing the
+hosting Nemo window leaves transfers running in the background; reopening a
+Nemo window restores their panel.
+
+Technical notes and recovery locations are under **Details**, expanded
 automatically for incomplete operations. **Enter**, **Escape**, or **Close**
-dismisses the window without cancelling active transfers.
+dismisses the transfer UI without cancelling active transfers. In a docked
+panel, these keys apply while a transfer control has focus.
+
+To avoid successful-completion summaries, disable **Show completion results for
+successful copies and moves** in **Preferences → Behavior**, or check **Don't
+show successful transfers again** in a completion summary. Both change the same
+setting. Errors, incomplete/cancelled transfers and unverified retained files
+are still reported; verification itself is unchanged.
 
 ## Keyboard Shortcuts
 
@@ -97,6 +116,9 @@ dismisses the window without cancelling active transfers.
 | **Ctrl+Shift+K** | Edit keyboard shortcuts |
 | **F5** | Copy dialog |
 | **F6** | Move dialog |
+| **Esc / Backspace in search results** | Return to the folder where the search started |
+| **Ctrl+Alt+O** | Open the selected result's containing folder |
+| **Ctrl+Alt+Shift+O** | Open its containing folder in the other pane, preserving search results |
 | **Ctrl+H** | Show/hide hidden files |
 | **Ctrl+[** / **Ctrl+]** | Shrink / grow Preview Pane |
 | **Ctrl+M** | Mute / unmute preview audio |
@@ -108,8 +130,23 @@ dismisses the window without cancelling active transfers.
 | **< (comma)** | Step back one frame |
 | **> (period)** | Step forward one frame |
 | **F** | Toggle fullscreen |
+| **I** | Toggle file information and GPS map |
+| **Mouse wheel** | Zoom image at the pointer |
+| **Left-button drag** | Pan a zoomed image |
 | **←** / **→** | Previous / next file |
 | **Esc** | Dismiss |
+
+Image **Fit** preserves the aspect ratio and fills the available preview area,
+including small images and camera RAW files. Wheel zoom turns Fit off; check it
+again to restore automatic fitting. The filename remains visible at the bottom.
+The information panel shows available file/camera metadata; GPS maps use cached
+OpenStreetMap tiles and need a network connection for uncached locations.
+
+Backspace still edits text in search/location entries, and Escape still cancels
+renaming or an active filter first. Both containing-folder shortcuts are listed
+under **Preferences → Keyboard Shortcuts → File Operations** and can be changed.
+The other-pane action is also in the result's context menu and opens split view
+automatically if needed.
 
 ## Upstream Relationship
 
@@ -128,8 +165,9 @@ Open PRs to upstream:
 
 `main` is the development and release branch. Pushes to `main` run **Build and
 Release Packages**, which bumps the version once and builds both Arch and Debian
-packages from that same commit. Both package builds run the transfer-safety
-regressions before uploading packages. The old `release` branch is retained for
+packages from that same commit. Both package builds include LibRaw and run the
+transfer-safety and image-preview regressions before uploading packages.
+The old `release` branch is retained for
 history; it is no longer the publishing source. To publish manually, run **Build
 and Release Packages** on `main`; dispatching **Build Debian Package** alone only
 builds an artifact.

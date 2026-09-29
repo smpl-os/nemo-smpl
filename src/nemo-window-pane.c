@@ -26,6 +26,7 @@
  *
  */
 
+#include <config.h>
 #include "nemo-window-pane.h"
 
 #include "nemo-actions.h"
@@ -764,7 +765,9 @@ action_show_hide_search_callback (GtkAction *action,
 				  gpointer user_data)
 {
 	NemoWindowPane *pane = user_data;
+#ifndef NEMO_SMPL
 	NemoWindow *window = pane->window;
+#endif
 	NemoWindowSlot *slot;
 
 	slot = pane->active_slot;
@@ -773,6 +776,11 @@ action_show_hide_search_callback (GtkAction *action,
 	    remember_focus_widget (pane);
 	    nemo_window_slot_set_query_editor_visible (slot, TRUE);
 	} else {
+#ifdef NEMO_SMPL
+		if (nemo_query_editor_get_active (slot->query_editor))
+			restore_focus_widget (pane);
+		nemo_window_slot_cancel_search (slot);
+#else
 		/* Do nothing if the query editor is not visible to begin with,
 		   i.e. if toggle action was due to switching from a search tab */
 		if (nemo_query_editor_get_active (NEMO_QUERY_EDITOR (slot->query_editor))) {
@@ -795,6 +803,7 @@ action_show_hide_search_callback (GtkAction *action,
 
 			nemo_window_slot_set_query_editor_visible (slot, FALSE);
 		}
+#endif
 	}
 }
 
@@ -1255,7 +1264,14 @@ toggle_toolbar_search_button (NemoWindowPane *pane,
 	group = pane->action_group;
 	action = gtk_action_group_get_action (group, NEMO_ACTION_SEARCH);
 
+#ifdef NEMO_SMPL
+	/* Updating a background pane is not a request to make it active. */
+	g_signal_handlers_block_by_func (group, toolbar_action_group_activated_callback, pane);
+#endif
 	gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (action), active);
+#ifdef NEMO_SMPL
+	g_signal_handlers_unblock_by_func (group, toolbar_action_group_activated_callback, pane);
+#endif
 }
 
 void

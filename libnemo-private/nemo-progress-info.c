@@ -70,6 +70,7 @@ struct _NemoProgressInfo
 	gboolean finished_cancelled;
 	char *completion_details;
 	char *completion_context;
+	GWeakRef parent_window;
 #endif
 	
 	GSource *idle_source;
@@ -104,6 +105,7 @@ nemo_progress_info_finalize (GObject *object)
 #ifdef NEMO_SMPL
 	g_free (info->completion_details);
 	g_free (info->completion_context);
+	g_weak_ref_clear (&info->parent_window);
 	g_cond_free (info->cond);
 	g_mutex_clear (&info->info_lock);
 #endif
@@ -197,6 +199,9 @@ nemo_progress_info_init (NemoProgressInfo *info)
 {
 	NemoProgressInfoManager *manager;
 
+#ifdef NEMO_SMPL
+	g_weak_ref_init (&info->parent_window, NULL);
+#endif
 	info->cancellable = g_cancellable_new ();
     info->cond = g_cond_new ();
     info->time = g_timer_new ();
@@ -218,6 +223,21 @@ nemo_progress_info_new (void)
 }
 
 #ifdef NEMO_SMPL
+void
+nemo_progress_info_set_parent_window (NemoProgressInfo *info, GtkWindow *window)
+{
+	g_return_if_fail (NEMO_IS_PROGRESS_INFO (info));
+	g_return_if_fail (window == NULL || GTK_IS_WINDOW (window));
+	g_weak_ref_set (&info->parent_window, window);
+}
+
+GtkWindow *
+nemo_progress_info_get_parent_window (NemoProgressInfo *info)
+{
+	g_return_val_if_fail (NEMO_IS_PROGRESS_INFO (info), NULL);
+	return g_weak_ref_get (&info->parent_window);
+}
+
 void
 nemo_progress_info_attach_dialog (NemoProgressInfo *info, GtkWindow *dialog)
 {

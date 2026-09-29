@@ -36,7 +36,7 @@ jobs:
             meson ninja-build pkgconf intltool itstool \
             libgtk-3-dev libglib2.0-dev libjson-glib-dev \
             libx11-dev libxapp-dev libcinnamon-desktop-dev \
-            libexif-dev libexempi-dev libgstreamer1.0-dev \
+            libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev libgsf-1-dev \
             gobject-introspection libgirepository1.0-dev \
             gtk-doc-tools cinnamon-l10n libgtk-layer-shell-dev \

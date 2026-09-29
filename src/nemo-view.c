@@ -7842,10 +7842,64 @@ action_follow_symlink_callback (GtkAction *action,
     nemo_file_list_free (selection);
 }
 
+#ifdef NEMO_SMPL
+static void
+open_containing_folder (NemoView *view, gboolean other_pane)
+{
+    GList *selection = nemo_view_get_selection (view);
+    if (g_list_length (selection) != 1) {
+        nemo_file_list_free (selection);
+        return;
+    }
+    GFile *location = nemo_file_get_activation_location (selection->data);
+    GFile *parent = location != NULL ? g_file_get_parent (location) : NULL;
+    if (parent == NULL) {
+        eel_show_error_dialog (_("Unable to open the containing folder"),
+                               _("This item has no containing folder."),
+                               nemo_view_get_containing_window (view));
+    } else if (get_is_desktop_view (view)) {
+        if (other_pane)
+            eel_show_error_dialog (_("Unable to open another pane"),
+                                   _("Open a file manager window to use another pane."),
+                                   nemo_view_get_containing_window (view));
+        else
+            nemo_mime_launch_fm_and_select_file (location);
+    } else {
+        NemoWindow *window = nemo_view_get_nemo_window (view);
+        NemoWindowSlot *source = view->details->slot;
+        NemoWindowSlot *target = source;
+        NemoWindowOpenFlags flags = 0;
+        if (other_pane) {
+            nemo_window_slot_make_hosting_pane_active (source);
+            if (!nemo_window_split_view_showing (window))
+                nemo_window_split_view_on (window);
+            target = nemo_window_get_extra_slot (window);
+            flags = NEMO_WINDOW_OPEN_FLAG_SAME_SLOT;
+        }
+        if (target != NULL) {
+            NemoFile *file = nemo_file_get (location);
+            GList highlight = { .data = file };
+            nemo_window_slot_open_location_full (target, parent, flags, &highlight, NULL, NULL);
+            nemo_file_unref (file);
+        } else {
+            eel_show_error_dialog (_("Unable to open another pane"),
+                                   _("No other pane is available."),
+                                   GTK_WINDOW (window));
+        }
+    }
+    g_clear_object (&parent);
+    g_clear_object (&location);
+    nemo_file_list_free (selection);
+}
+#endif
+
 static void
 action_open_containing_folder_callback (GtkAction *action,
                                         gpointer callback_data)
 {
+#ifdef NEMO_SMPL
+    open_containing_folder (NEMO_VIEW (callback_data), FALSE);
+#else
     NemoView *view;
     GList *selection;
     NemoFile *item;
@@ -7871,6 +7925,17 @@ action_open_containing_folder_callback (GtkAction *action,
     nemo_file_unref (location);
     nemo_file_unref (activation_file);
     g_object_unref (activation_location);
+    nemo_file_list_free (selection);
+#endif
+}
+
+static void
+action_open_containing_folder_other_pane_callback (GtkAction *action,
+                                                  gpointer callback_data)
+{
+#ifdef NEMO_SMPL
+    open_containing_folder (NEMO_VIEW (callback_data), TRUE);
+#endif
 }
 
 static void
@@ -8856,9 +8921,13 @@ static const GtkActionEntry directory_view_entries[] = {
   /* tooltip */                  N_("Navigate to the original file that this symbolic link points to"),
                  G_CALLBACK (action_follow_symlink_callback) },
   /* name, stock id */         { NEMO_ACTION_OPEN_CONTAINING_FOLDER, "xsi-go-jump-symbolic",
-  /* label, accelerator */       N_("Open containing folder"), "<control><alt>O",
+  /* label, accelerator */       N_("Open containing folder"), "<control><alt>o",
   /* tooltip */                  N_("Navigate to the folder that the selected item is stored in"),
                  G_CALLBACK (action_open_containing_folder_callback) },
+  { NEMO_ACTION_OPEN_CONTAINING_FOLDER_OTHER_PANE, "xsi-go-jump-symbolic",
+    N_("Open containing folder in other pane"), "<control><alt><shift>o",
+    N_("Open the selected item's folder in the other pane, keeping these search results"),
+    G_CALLBACK (action_open_containing_folder_other_pane_callback) },
   /* name, stock id */         { "OtherApplication1", NULL,
   /* label, accelerator */       N_("Other _Application..."), NULL,
   /* tooltip */                  N_("Choose another application with which to open the selected item"),
@@ -10612,9 +10681,19 @@ real_update_menus (NemoView *view)
     action = gtk_action_group_get_action (view->details->dir_action_group,
                                           NEMO_ACTION_OPEN_CONTAINING_FOLDER);
 
-    gtk_action_set_visible (action,
-                            selection_count == 1 &&
-                            (selection_contains_recent || selection_contains_favorites || showing_search));
+    gboolean can_open_containing = selection_count == 1 &&
+        (selection_contains_recent || selection_contains_favorites || showing_search);
+    gtk_action_set_visible (action, can_open_containing);
+    gtk_action_set_sensitive (action, can_open_containing);
+    action = gtk_action_group_get_action (view->details->dir_action_group,
+                                          NEMO_ACTION_OPEN_CONTAINING_FOLDER_OTHER_PANE);
+#ifdef NEMO_SMPL
+    gtk_action_set_visible (action, can_open_containing && !is_desktop_view);
+    gtk_action_set_sensitive (action, can_open_containing && !is_desktop_view);
+#else
+    gtk_action_set_visible (action, FALSE);
+    gtk_action_set_sensitive (action, FALSE);
+#endif
 
     first_selected_is_pinned = selection_count > 0 &&
                                nemo_file_get_pinning (NEMO_FILE (selection->data));

@@ -102,6 +102,9 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "open-in-new-tab",       "<Actions>/DirViewActions/OpenInNewTab",     N_("Open in New Tab"),            N_("File Operations"), "<Control><Shift>t", NULL, NULL },
 	{ "open-in-terminal",      "<Actions>/DirViewActions/OpenInTerminal",   N_("Open in Terminal"),           N_("File Operations"), "<Shift>F4",         NULL, NULL },
 	{ "open-containing-folder","<Actions>/DirViewActions/OpenContainingFolder", N_("Open Containing Folder"), N_("File Operations"), "<Control><Alt>o",   NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "open-containing-folder-other-pane", "<Actions>/DirViewActions/OpenContainingFolderOtherPane", N_("Open Containing Folder in Other Pane"), N_("File Operations"), "<Control><Alt><Shift>o", NULL, NULL },
+#endif
 	{ "properties",            "<Actions>/DirViewActions/Properties",       N_("Properties"),                 N_("File Operations"), "<Alt>Return",       NULL, NULL },
 	{ "new-folder",            "<Actions>/DirViewActions/New Folder",       N_("New Folder"),                 N_("File Operations"), "<Control><Shift>n", NULL, NULL },
 	{ "new-folder-alt",        NULL,                                        N_("New Folder (alternate)"),      N_("File Operations"), "Insert",             NULL, NULL },
@@ -145,7 +148,7 @@ const gint nemo_keybinding_entries_count = G_N_ELEMENTS (nemo_keybinding_entries
  *   - binding-set entries (binding_set_name != NULL): modify GtkBindingSet
  */
 static void
-apply_keybinding (const NemoKeybindingEntry *entry)
+apply_keybinding (const NemoKeybindingEntry *entry, gboolean setting_changed)
 {
 	g_autofree gchar *accel_string = NULL;
 	guint key = 0;
@@ -206,12 +209,12 @@ apply_keybinding (const NemoKeybindingEntry *entry)
 		return;
 	}
 
-	/* If the value matches the default, don't touch the accel map —
-	 * let the hardcoded GtkActionEntry handle it normally. This avoids
-	 * corrupting the accel map by pre-registering paths before action
-	 * groups exist. */
+	/* Leave initial defaults to GtkActionEntry, but an explicit settings
+	 * reset must replace a previously customized accelerator. */
 	if (g_strcmp0 (accel_string, entry->default_accel) == 0) {
-		return;
+		GtkAccelKey existing;
+		if (!setting_changed || !gtk_accel_map_lookup_entry (entry->accel_path, &existing))
+			return;
 	}
 
 	gtk_accelerator_parse (accel_string, &key, &mods);
@@ -238,7 +241,7 @@ nemo_keybindings_apply_all (void)
 	}
 
 	for (i = 0; i < nemo_keybinding_entries_count; i++) {
-		apply_keybinding (&nemo_keybinding_entries[i]);
+		apply_keybinding (&nemo_keybinding_entries[i], FALSE);
 	}
 }
 
@@ -266,7 +269,7 @@ on_keybinding_changed (GSettings   *settings,
 
 	for (i = 0; i < nemo_keybinding_entries_count; i++) {
 		if (g_strcmp0 (nemo_keybinding_entries[i].settings_key, key) == 0) {
-			apply_keybinding (&nemo_keybinding_entries[i]);
+			apply_keybinding (&nemo_keybinding_entries[i], TRUE);
 			break;
 		}
 	}

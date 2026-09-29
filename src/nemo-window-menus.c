@@ -56,6 +56,7 @@
 
 #include <libnemo-extension/nemo-menu-provider.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-package-version.h>
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-icon-names.h>
 #include <libnemo-private/nemo-ui-utilities.h>
@@ -347,6 +348,44 @@ on_about_key_press (GtkWidget   *widget,
     return GDK_EVENT_PROPAGATE;
 }
 
+#ifdef NEMO_SMPL
+static void
+about_package_version_worker (GTask *task, gpointer source, gpointer data,
+                             GCancellable *cancellable)
+{
+	GError *error = NULL;
+	char *version = nemo_get_package_version (cancellable, &error);
+	if (version != NULL)
+		g_task_return_pointer (task, version, g_free);
+	else
+		g_task_return_error (task, error);
+}
+
+static void
+about_package_version_ready (GObject *source, GAsyncResult *result, gpointer data)
+{
+	GWeakRef *reference = data;
+	GtkAboutDialog *dialog = g_weak_ref_get (reference);
+	GError *error = NULL;
+	char *version = g_task_propagate_pointer (G_TASK (result), &error);
+
+	if (dialog != NULL && !g_cancellable_is_cancelled (g_task_get_cancellable (G_TASK (result)))) {
+		if (version != NULL)
+			gtk_about_dialog_set_version (dialog, version);
+		else {
+			gtk_about_dialog_set_version (dialog, _("Package version unavailable"));
+			g_warning ("Unable to read installed package version: %s", error->message);
+		}
+	}
+	g_clear_object (&dialog);
+	g_clear_error (&error);
+	g_free (version);
+	g_weak_ref_clear (reference);
+	g_free (reference);
+}
+
+#endif
+
 static void
 action_about_nemo_callback (GtkAction *action,
 				gpointer user_data)
@@ -377,7 +416,11 @@ action_about_nemo_callback (GtkAction *action,
 	                       "transient-for", GTK_WINDOW (user_data),
 	                       "modal",          TRUE,
 	                       "program-name",   _("nemo-smpl"),
+#ifdef NEMO_SMPL
+	                       "version",        _("Reading package version…"),
+#else
 	                       "version",        VERSION,
+#endif
 	                       "comments",       _("nemo-smpl lets you organize "
 	                                           "files and folders, both on "
 	                                           "your computer and online. "
@@ -391,6 +434,17 @@ action_about_nemo_callback (GtkAction *action,
 	                  G_CALLBACK (on_about_key_press), NULL);
 	g_signal_connect (dialog, "response",
 	                  G_CALLBACK (gtk_widget_destroy), NULL);
+#ifdef NEMO_SMPL
+	GCancellable *cancellable = g_cancellable_new ();
+	GWeakRef *reference = g_new0 (GWeakRef, 1);
+	g_weak_ref_init (reference, dialog);
+	g_signal_connect_object (dialog, "destroy", G_CALLBACK (g_cancellable_cancel),
+				 cancellable, G_CONNECT_SWAPPED);
+	GTask *task = g_task_new (NULL, cancellable, about_package_version_ready, reference);
+	g_task_run_in_thread (task, about_package_version_worker);
+	g_object_unref (task);
+	g_object_unref (cancellable);
+#endif
 
 	gtk_window_present (GTK_WINDOW (dialog));
 

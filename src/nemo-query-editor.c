@@ -572,7 +572,9 @@ nemo_query_editor_set_query (NemoQueryEditor	*editor,
 	editor->priv->change_frozen = TRUE;
     gtk_entry_set_text (GTK_ENTRY (editor->priv->file_entry), file_pattern);
 	gtk_entry_set_text (GTK_ENTRY (editor->priv->content_entry), content_pattern);
+#ifndef NEMO_SMPL
     gtk_widget_grab_focus (editor->priv->file_entry);
+#endif
 
 	g_free (editor->priv->current_uri);
 	editor->priv->current_uri = NULL;
@@ -640,6 +642,7 @@ nemo_query_editor_set_active (NemoQueryEditor *editor,
         g_signal_handlers_disconnect_by_func (editor->priv->file_entry,
                                               on_key_press_event,
                                               editor);
+        g_clear_handle_id (&editor->priv->typing_timeout_id, g_source_remove);
         g_signal_handlers_disconnect_by_func (editor->priv->content_entry,
                                               on_key_press_event,
                                               editor);

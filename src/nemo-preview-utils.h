@@ -27,6 +27,7 @@ G_BEGIN_DECLS
 
 gboolean nemo_preview_mime_is_image (const gchar *mime_type);
 gboolean nemo_preview_mime_is_raw_image (const gchar *mime_type);
+gboolean nemo_preview_file_is_raw (GFile *file);
 gboolean nemo_preview_mime_is_text  (const gchar *mime_type);
 gboolean nemo_preview_mime_is_video (const gchar *mime_type);
 gboolean nemo_preview_mime_is_audio (const gchar *mime_type);
