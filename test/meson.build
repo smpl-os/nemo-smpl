@@ -16,6 +16,7 @@ if smpl_features_enabled
     args: hardening_runner + [hardening_python.full_path(), files('test-mtp-empty.py')[0]],
     suite: 'mtp-state',
     timeout: 60,
+    is_parallel: false,
   )
 
   test('Icon fallback inventory', hardening_python,
@@ -33,6 +34,7 @@ if smpl_features_enabled
     args: hardening_runner + [icon_fallback_test],
     suite: 'icons',
     timeout: 60,
+    is_parallel: false,
   )
 
   test('Sidebar async hardening', hardening_python,
