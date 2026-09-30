@@ -145,6 +145,7 @@ typedef enum
 #define NEMO_WINDOW_STATE_BOOKMARKS_EXPANDED    "bookmarks-expanded"
 #define NEMO_WINDOW_STATE_DEVICES_EXPANDED      "devices-expanded"
 #define NEMO_WINDOW_STATE_NETWORK_EXPANDED      "network-expanded"
+#define NEMO_WINDOW_STATE_FAVORITES_EXPANDED    "favorites-expanded"
 
 /* Saved session (last closed window) */
 #define NEMO_WINDOW_STATE_SAVED_SPLIT_VIEW      "saved-split-view"
@@ -152,10 +153,13 @@ typedef enum
 #define NEMO_WINDOW_STATE_SAVED_TABS_RIGHT      "saved-tabs-right"
 #define NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_LEFT "saved-active-tab-left"
 #define NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_RIGHT "saved-active-tab-right"
+#define NEMO_WINDOW_STATE_SAVED_ACTIVE_PANE "saved-active-pane"
 
 /* Sorting order */
 #define NEMO_PREFERENCES_SORT_DIRECTORIES_FIRST		"sort-directories-first"
 #define NEMO_PREFERENCES_SORT_FAVORITES_FIRST		"sort-favorites-first"
+#define NEMO_PREFERENCES_FILE_TYPE_COLORS          "file-type-colors"
+#define NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS       "symbolic-file-icons"
 #define NEMO_PREFERENCES_DEFAULT_SORT_ORDER			"default-sort-order"
 #define NEMO_PREFERENCES_DEFAULT_SORT_IN_REVERSE_ORDER	"default-sort-in-reverse-order"
 
@@ -338,6 +342,7 @@ gchar *nemo_global_preferences_get_mono_system_font (void);
 gchar *nemo_global_preferences_get_mono_font_family_match (const gchar *in_family);
 
 extern GSettings *nemo_preferences;
+extern GSettings *nemo_keybinding_settings;
 extern GSettings *nemo_icon_view_preferences;
 extern GSettings *nemo_list_view_preferences;
 extern GSettings *nemo_compact_view_preferences;

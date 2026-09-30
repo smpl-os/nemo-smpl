@@ -29,6 +29,8 @@
 #mesondefine HAVE_GSTREAMER
 // Define to enable libraw camera RAW image support
 #mesondefine HAVE_LIBRAW
+// Define to enable sandboxed native document previews
+#mesondefine HAVE_DOCUMENT_PREVIEW
 
 
 

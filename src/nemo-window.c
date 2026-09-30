@@ -28,6 +28,8 @@
 /* nemo-window.c: Implementation of the main window object */
 
 #include <config.h>
+#include "nemo-query-editor.h"
+#include "nemo-toolbar.h"
 
 #include "nemo-window-private.h"
 
@@ -430,6 +432,9 @@ nemo_window_set_up_sidebar (NemoWindow *window)
 	DEBUG ("Setting up sidebar id %s", window->details->sidebar_id);
 
 	window->details->sidebar = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+#ifdef NEMO_SMPL
+	gtk_widget_set_no_show_all (window->details->sidebar, TRUE);
+#endif
 	gtk_style_context_add_class (gtk_widget_get_style_context (window->details->sidebar),
 				     GTK_STYLE_CLASS_SIDEBAR);
 
@@ -456,7 +461,7 @@ nemo_window_set_up_sidebar (NemoWindow *window)
 
 	gtk_box_pack_start (GTK_BOX (window->details->sidebar), sidebar, TRUE, TRUE, 0);
 	gtk_widget_show (sidebar);
-	gtk_widget_show (GTK_WIDGET (window->details->sidebar));
+	gtk_widget_set_visible (window->details->sidebar, !window->details->zen_mode);
 }
 
 static void
@@ -551,6 +556,16 @@ on_button_press_callback (GtkWidget *widget, GdkEventButton *event, gpointer use
 
     return GDK_EVENT_STOP;
 }
+
+#ifdef NEMO_SMPL
+static void
+transfer_area_visibility_changed (GtkWidget *area, GParamSpec *pspec, NemoWindow *window)
+{
+	if (window->details->transfer_area_container != NULL)
+		gtk_widget_set_visible (window->details->transfer_area_container,
+			!window->details->zen_mode && gtk_widget_get_visible (area));
+}
+#endif
 
 static void
 clear_menu_hide_delay (NemoWindow *window)
@@ -673,7 +688,15 @@ nemo_window_constructed (GObject *self)
                       nemo_window_disable_chrome_mapping, NULL,
                       window, NULL);
 
+#ifdef NEMO_SMPL
+	window->details->menubar_container = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_set_no_show_all (window->details->menubar_container, TRUE);
+	gtk_container_add (GTK_CONTAINER (window->details->menubar_container), menu);
+	gtk_container_add (GTK_CONTAINER (grid), window->details->menubar_container);
+	gtk_widget_show (window->details->menubar_container);
+#else
 	gtk_container_add (GTK_CONTAINER (grid), menu);
+#endif
 
 	/* Set up the toolbar place holder */
 	toolbar_holder = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
@@ -700,7 +723,12 @@ nemo_window_constructed (GObject *self)
 	gtk_paned_pack1 (GTK_PANED (transfer_paned), window->details->content_paned, TRUE, FALSE);
 	window->details->transfer_area = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_set_no_show_all (window->details->transfer_area, TRUE);
-	gtk_paned_pack2 (GTK_PANED (transfer_paned), window->details->transfer_area, FALSE, TRUE);
+	window->details->transfer_area_container = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_set_no_show_all (window->details->transfer_area_container, TRUE);
+	gtk_container_add (GTK_CONTAINER (window->details->transfer_area_container), window->details->transfer_area);
+	g_signal_connect_object (window->details->transfer_area, "notify::visible",
+	                         G_CALLBACK (transfer_area_visibility_changed), window, 0);
+	gtk_paned_pack2 (GTK_PANED (transfer_paned), window->details->transfer_area_container, FALSE, TRUE);
 	gtk_container_add (GTK_CONTAINER (grid), transfer_paned);
 	gtk_widget_show (transfer_paned);
 #else
@@ -714,17 +742,29 @@ nemo_window_constructed (GObject *self)
 	gtk_widget_show (vbox);
 
 	hpaned = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
+#ifdef NEMO_SMPL
+	gtk_paned_set_wide_handle (GTK_PANED (hpaned), TRUE);
+	gtk_style_context_add_class (gtk_widget_get_style_context (hpaned), "nemo-pane-divider");
+#endif
 	gtk_widget_show (hpaned);
 	window->details->split_view_hpane = hpaned;
 
 	/* Preview pane: wrap split_view_hpane inside an outer paned */
 	window->details->preview_hpane = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
+#ifdef NEMO_SMPL
+	gtk_paned_set_wide_handle (GTK_PANED (window->details->preview_hpane), TRUE);
+	gtk_style_context_add_class (gtk_widget_get_style_context (window->details->preview_hpane),
+	                             "nemo-pane-divider");
+#endif
 	gtk_paned_pack1 (GTK_PANED (window->details->preview_hpane), hpaned, TRUE, FALSE);
 	gtk_box_pack_start (GTK_BOX (vbox), window->details->preview_hpane, TRUE, TRUE, 0);
 	gtk_widget_show (window->details->preview_hpane);
 
 	window->details->preview_pane = nemo_preview_pane_new ();
 	g_object_ref_sink (window->details->preview_pane);
+#ifdef NEMO_SMPL
+	gtk_widget_set_no_show_all (window->details->preview_pane, TRUE);
+#endif
 	window->details->preview_pane_visible = FALSE;
 
 	pane = nemo_window_pane_new (window);
@@ -737,14 +777,22 @@ nemo_window_constructed (GObject *self)
     window->details->nemo_status_bar = nemo_statusbar;
 
     GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
-    gtk_container_add (GTK_CONTAINER (grid), sep);
+    GtkWidget *status_container = grid;
+#ifdef NEMO_SMPL
+    window->details->statusbar_container = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_no_show_all (window->details->statusbar_container, TRUE);
+    gtk_container_add (GTK_CONTAINER (grid), window->details->statusbar_container);
+    gtk_widget_show (window->details->statusbar_container);
+    status_container = window->details->statusbar_container;
+#endif
+    gtk_container_add (GTK_CONTAINER (status_container), sep);
     gtk_widget_show (sep);
 
     GtkWidget *eb;
 
     eb = gtk_event_box_new ();
     gtk_container_add (GTK_CONTAINER (eb), nemo_statusbar);
-    gtk_container_add (GTK_CONTAINER (grid), eb);
+    gtk_container_add (GTK_CONTAINER (status_container), eb);
     gtk_widget_show (eb);
 
     window->details->statusbar = nemo_status_bar_get_real_statusbar (NEMO_STATUS_BAR (nemo_statusbar));
@@ -884,6 +932,8 @@ nemo_window_destroy (GtkWidget *object)
 
 #ifdef NEMO_SMPL
 	window->details->transfer_area = NULL;
+	window->details->transfer_area_container = NULL;
+	window->details->zen_updating = TRUE;
 #endif
 	GTK_WIDGET_CLASS (nemo_window_parent_class)->destroy (object);
 }
@@ -1052,7 +1102,9 @@ nemo_window_close_pane (NemoWindow *window,
 
 	/* Required really. Destroying the NemoWindowPane still leaves behind the toolbar.
 	 * This kills it off. Do it before we call gtk_widget_destroy for safety. */
-	gtk_container_remove (GTK_CONTAINER (window->details->toolbar_holder), GTK_WIDGET (pane->tool_bar));
+	GtkWidget *toolbar_parent = gtk_widget_get_parent (pane->tool_bar);
+	if (toolbar_parent != NULL)
+		gtk_container_remove (GTK_CONTAINER (toolbar_parent), pane->tool_bar);
 
 	window->details->panes = g_list_remove (window->details->panes, pane);
 
@@ -1127,7 +1179,8 @@ nemo_window_set_active_slot (NemoWindow *window, NemoWindowSlot *new_slot)
 		if (old_slot->content_view != NULL) {
 			nemo_window_disconnect_content_view (window, old_slot->content_view);
 		}
-		gtk_widget_hide (GTK_WIDGET (old_slot->pane->tool_bar));
+		if (!window->details->zen_mode)
+			gtk_widget_hide (GTK_WIDGET (old_slot->pane->tool_bar));
 		/* inform slot & view */
 		g_signal_emit_by_name (old_slot, "inactive");
 	}
@@ -1155,7 +1208,7 @@ nemo_window_set_active_slot (NemoWindow *window, NemoWindowSlot *new_slot)
 		gboolean show_toolbar;
 		show_toolbar = g_settings_get_boolean (nemo_window_state, NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
 
-		if ( show_toolbar) {
+		if (show_toolbar || window->details->zen_mode) {
 			gtk_widget_show (GTK_WIDGET (new_slot->pane->tool_bar));
 		}
 
@@ -1180,7 +1233,7 @@ toggle_menubar (NemoWindow *window, gint action)
     default_visible = g_settings_get_boolean (nemo_window_state,
                                               NEMO_WINDOW_STATE_START_WITH_MENU_BAR);
 
-    if (default_visible || window->details->disable_chrome) {
+    if (default_visible || window->details->disable_chrome || window->details->zen_mode) {
         return;
     }
 
@@ -1243,6 +1296,10 @@ nemo_window_key_press_event (GtkWidget *widget,
 
 #ifdef NEMO_SMPL
 	focus_widget = gtk_window_get_focus (GTK_WINDOW (window));
+	if (window->details->preview_pane_visible && focus_widget != NULL &&
+	    gtk_widget_is_ancestor (focus_widget, GTK_WIDGET (window->details->preview_pane)) &&
+	    nemo_preview_pane_handle_key_event (NEMO_PREVIEW_PANE (window->details->preview_pane), event))
+		return TRUE;
 	if (window->details->transfer_area != NULL && focus_widget != NULL &&
 	    gtk_widget_is_ancestor (focus_widget, window->details->transfer_area)) {
 		/* Dock controls get their keys before file-list shortcuts (notably
@@ -1280,6 +1337,11 @@ nemo_window_key_press_event (GtkWidget *widget,
                return FALSE;
 	}
 
+#ifdef NEMO_SMPL
+	if (view != NULL && nemo_view_get_type_jump_active (view) &&
+	    gtk_window_propagate_key_event (GTK_WINDOW (window), event))
+		return TRUE;
+#endif
 	focus_widget = gtk_window_get_focus (GTK_WINDOW (window));
 	if (view != NULL && focus_widget != NULL &&
 	    GTK_IS_EDITABLE (focus_widget)) {
@@ -1289,6 +1351,16 @@ nemo_window_key_press_event (GtkWidget *widget,
 		if (gtk_window_propagate_key_event (GTK_WINDOW (window), event)) {
 			return TRUE;
 		}
+#ifdef NEMO_SMPL
+		/* Single-line entries may leave Ctrl+Up/Down unhandled. Keep
+		 * editing arrows from falling through to folder navigation. */
+		if ((event->state & gtk_accelerator_get_default_mod_mask ()) == GDK_CONTROL_MASK &&
+		    (event->keyval == GDK_KEY_Left || event->keyval == GDK_KEY_Right ||
+		     event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_Down ||
+		     event->keyval == GDK_KEY_KP_Left || event->keyval == GDK_KEY_KP_Right ||
+		     event->keyval == GDK_KEY_KP_Up || event->keyval == GDK_KEY_KP_Down))
+			return TRUE;
+#endif
 	}
 
 #ifdef NEMO_SMPL
@@ -2034,17 +2106,14 @@ window_set_search_action_text (NemoWindow *window,
 
 static void
 center_pane_divider (GtkWidget  *paned,
-                     GParamSpec *pspec,
+                     GtkAllocation *allocation,
                      gpointer    user_data)
 {
-    /* Make the paned think it's been manually resized, otherwise
-     * things like the trash bar will force unwanted resizes */
-
-    g_object_set (G_OBJECT (paned),
-                  "position", gtk_widget_get_allocated_width (paned) / 2,
-                  NULL);
-
+    if (allocation->width <= 1)
+        return;
+    /* Center on the first allocation, not the first user drag. */
     g_signal_handlers_disconnect_by_func (G_OBJECT (paned), center_pane_divider, NULL);
+    gtk_paned_set_position (GTK_PANED (paned), allocation->width / 2);
 }
 
 static NemoWindowSlot *
@@ -2061,7 +2130,7 @@ create_extra_pane (NemoWindow *window)
 	paned = GTK_PANED (window->details->split_view_hpane);
 
     g_signal_connect_after (paned,
-                            "notify::position",
+                            "size-allocate",
                             G_CALLBACK(center_pane_divider),
                             NULL);
 
@@ -2237,27 +2306,24 @@ real_get_icon (NemoWindow *window,
 }
 
 static gboolean
-uri_is_native_session_uri (const char *uri)
+uri_is_session_uri (const char *uri)
 {
 	GFile *file;
-	gboolean is_native;
+	gboolean restorable;
 
 	if (uri == NULL || uri[0] == '\0') {
 		return FALSE;
 	}
 
-	file = g_file_new_for_uri (uri);
-
-	/* skip searches and non-native locations for this simple session restore */
-	if (g_file_has_uri_scheme (file, "x-nemo-search")) {
-		g_object_unref (file);
+	g_autofree char *scheme = g_uri_parse_scheme (uri);
+	if (scheme == NULL)
 		return FALSE;
-	}
 
-	is_native = g_file_is_native (file);
+	file = g_file_new_for_uri (uri);
+	restorable = !g_file_has_uri_scheme (file, "x-nemo-search");
 	g_object_unref (file);
 
-	return is_native;
+	return restorable;
 }
 
 static char **
@@ -2296,8 +2362,12 @@ collect_pane_saved_tab_uris (NemoWindowPane *pane, gint *active_index_out)
 
 		slot = NEMO_WINDOW_SLOT (page);
 		uri = nemo_window_slot_get_location_uri (slot);
+		if (slot->location != NULL && g_file_has_uri_scheme (slot->location, "x-nemo-search")) {
+			g_free (uri);
+			uri = g_strdup (nemo_query_editor_get_base_uri (slot->query_editor));
+		}
 
-		if (uri_is_native_session_uri (uri)) {
+		if (uri_is_session_uri (uri)) {
 			if (i == current_page) {
 				saved_active_index = saved_index;
 			}
@@ -2334,7 +2404,8 @@ nemo_window_save_session_state (NemoWindow *window)
 	g_return_if_fail (NEMO_IS_WINDOW (window));
 
 	/* Do not store session state for the desktop window */
-	if (nemo_window_is_desktop (window)) {
+	if (nemo_window_is_desktop (window) ||
+	    !g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP)) {
 		return;
 	}
 
@@ -2354,6 +2425,9 @@ nemo_window_save_session_state (NemoWindow *window)
 	g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_RIGHT, (const gchar * const *) right_uris);
 	g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_LEFT, left_active);
 	g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_RIGHT, right_active);
+	g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_PANE,
+	                   right_pane != NULL && window->details->active_pane == right_pane ? 1 : 0);
+	g_settings_sync ();
 
 	g_strfreev (left_uris);
 	g_strfreev (right_uris);
@@ -2411,7 +2485,7 @@ open_uri_list_in_pane (NemoWindowPane *pane, char **uris)
 		NemoWindowSlot *slot;
 		GFile *location;
 
-		if (!uri_is_native_session_uri (uris[i])) {
+		if (!uri_is_session_uri (uris[i])) {
 			continue;
 		}
 
@@ -2433,7 +2507,7 @@ open_uri_list_in_pane (NemoWindowPane *pane, char **uris)
 		}
 
 		location = g_file_new_for_uri (uris[i]);
-		nemo_window_slot_open_location (slot, location, 0);
+		nemo_window_slot_open_location (slot, location, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
 		g_object_unref (location);
 	}
 }
@@ -2453,7 +2527,8 @@ nemo_window_restore_saved_tabs (NemoWindow *window)
 	g_return_val_if_fail (NEMO_IS_WINDOW (window), FALSE);
 
 	/* Never restore tabs for the desktop window */
-	if (nemo_window_is_desktop (window)) {
+	if (nemo_window_is_desktop (window) ||
+	    !g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP)) {
 		return FALSE;
 	}
 
@@ -2496,7 +2571,7 @@ nemo_window_restore_saved_tabs (NemoWindow *window)
 	if (left_uris == NULL || left_uris[0] == NULL) {
 		GFile *home = g_file_new_for_path (g_get_home_dir ());
 		if (left_pane != NULL && left_pane->active_slot != NULL) {
-			nemo_window_slot_open_location (left_pane->active_slot, home, 0);
+			nemo_window_slot_open_location (left_pane->active_slot, home, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
 		}
 		g_object_unref (home);
 	} else {
@@ -2522,8 +2597,10 @@ nemo_window_restore_saved_tabs (NemoWindow *window)
 		}
 	}
 
-	/* Make the left pane active for a predictable starting point */
-	if (left_pane != NULL) {
+	if (right_pane != NULL &&
+	    g_settings_get_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_PANE) == 1) {
+		nemo_window_set_active_pane (window, right_pane);
+	} else if (left_pane != NULL) {
 		nemo_window_set_active_pane (window, left_pane);
 	}
 
@@ -2818,7 +2895,7 @@ preview_selection_changed_cb (NemoView *view, gpointer user_data)
 	GList *selection;
 	NemoFile *file;
 
-	if (!window->details->preview_pane_visible) {
+	if (!window->details->preview_pane_visible || window->details->zen_mode) {
 		return;
 	}
 
@@ -3045,6 +3122,133 @@ nemo_window_set_show_sidebar (NemoWindow *window,
 
         g_object_notify_by_pspec (G_OBJECT (window), properties[PROP_SHOW_SIDEBAR]);
     }
+}
+
+gboolean
+nemo_window_get_zen_mode (NemoWindow *window)
+{
+	g_return_val_if_fail (NEMO_IS_WINDOW (window), FALSE);
+	return window->details->zen_mode;
+}
+
+void
+nemo_window_sync_zen_mode (NemoWindow *window)
+{
+#ifdef NEMO_SMPL
+	g_return_if_fail (NEMO_IS_WINDOW (window));
+	if (window->details->zen_updating || window->details->toolbar_holder == NULL ||
+	    gtk_widget_in_destruction (GTK_WIDGET (window)))
+		return;
+	window->details->zen_updating = TRUE;
+	gboolean zen = window->details->zen_mode;
+	gboolean toolbar = g_settings_get_boolean (nemo_window_state, NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
+	gboolean labels = nemo_window_split_view_showing (window) &&
+		g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_DUAL_PANE_LOCATION_LABELS);
+
+	if (window->details->menubar_container != NULL)
+		gtk_widget_set_visible (window->details->menubar_container, !zen);
+	if (window->details->statusbar_container != NULL)
+		gtk_widget_set_visible (window->details->statusbar_container, !zen);
+	if (window->details->sidebar != NULL)
+		gtk_widget_set_visible (window->details->sidebar, !zen);
+	if (window->details->preview_pane != NULL)
+		gtk_widget_set_visible (window->details->preview_pane,
+			!zen && window->details->preview_pane_visible);
+	if (window->details->transfer_area != NULL)
+		transfer_area_visibility_changed (window->details->transfer_area, NULL, window);
+	gtk_widget_set_visible (window->details->toolbar_holder, !zen && !window->details->disable_chrome);
+
+	for (GList *l = window->details->panes; l != NULL; l = l->next) {
+		NemoWindowPane *pane = l->data;
+		GtkWidget *parent = gtk_widget_get_parent (pane->tool_bar);
+		GtkWidget *destination = zen ? GTK_WIDGET (pane) : window->details->toolbar_holder;
+		if (parent != destination) {
+			g_object_ref (pane->tool_bar);
+			if (parent != NULL)
+				gtk_container_remove (GTK_CONTAINER (parent), pane->tool_bar);
+			gtk_box_pack_start (GTK_BOX (destination), pane->tool_bar, !zen, TRUE, 0);
+			if (zen)
+				gtk_box_reorder_child (GTK_BOX (destination), pane->tool_bar, 0);
+			g_object_unref (pane->tool_bar);
+		}
+		nemo_toolbar_set_location_only (NEMO_TOOLBAR (pane->tool_bar), zen);
+		if (zen || toolbar)
+			nemo_toolbar_set_show_main_bar (NEMO_TOOLBAR (pane->tool_bar), TRUE);
+		gtk_widget_set_visible (pane->tool_bar, !window->details->disable_chrome &&
+			(zen || (pane == window->details->active_pane && (toolbar || pane->temporary_navigation_bar))));
+		nemo_window_pane_set_location_label_visible (pane, labels && !zen);
+		nemo_notebook_set_zen_mode (NEMO_NOTEBOOK (pane->notebook), zen);
+	}
+	const char *chrome_actions[] = {
+		NEMO_ACTION_SHOW_HIDE_TOOLBAR, NEMO_ACTION_SHOW_HIDE_STATUSBAR,
+		NEMO_ACTION_SHOW_HIDE_MENUBAR, NEMO_ACTION_SHOW_HIDE_SIDEBAR,
+		NEMO_ACTION_SHOW_HIDE_PREVIEW_PANE, NEMO_ACTION_SHOW_PLACES, NEMO_ACTION_SHOW_TREEVIEW
+	};
+	for (guint i = 0; i < G_N_ELEMENTS (chrome_actions); i++) {
+		GtkAction *action = gtk_action_group_get_action (window->details->main_action_group, chrome_actions[i]);
+		if (action != NULL)
+			gtk_action_set_sensitive (action, !zen && !window->details->disable_chrome);
+	}
+	GtkAction *action = gtk_action_group_get_action (window->details->main_action_group, NEMO_ACTION_ZEN_MODE);
+	if (action != NULL) {
+		gtk_action_block_activate (action);
+		gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (action), zen);
+		gtk_action_unblock_activate (action);
+	}
+	window->details->zen_updating = FALSE;
+#endif
+}
+
+#ifdef NEMO_SMPL
+static void
+restore_zen_preview_width (GtkWidget *paned, GtkAllocation *allocation, NemoWindow *window)
+{
+	g_signal_handlers_disconnect_by_func (paned, restore_zen_preview_width, window);
+	if (!window->details->zen_mode && window->details->preview_pane_visible &&
+	    !window->details->zen_updating && window->details->zen_preview_width > 0)
+		gtk_paned_set_position (GTK_PANED (paned),
+			MAX (0, allocation->width - window->details->zen_preview_width));
+}
+#endif
+
+void
+nemo_window_set_zen_mode (NemoWindow *window, gboolean enabled)
+{
+	g_return_if_fail (NEMO_IS_WINDOW (window));
+#ifdef NEMO_SMPL
+	enabled = !!enabled;
+	if (window->details->disable_chrome || window->details->zen_mode == enabled ||
+	    gtk_widget_in_destruction (GTK_WIDGET (window)))
+		return;
+	g_signal_handlers_disconnect_by_func (window->details->preview_hpane, restore_zen_preview_width, window);
+	if (enabled) {
+		window->details->zen_preview_width = window->details->preview_pane_visible ?
+			gtk_widget_get_allocated_width (window->details->preview_hpane) -
+			gtk_paned_get_position (GTK_PANED (window->details->preview_hpane)) : 0;
+	}
+	window->details->zen_mode = enabled;
+	window->details->menu_show_queued = FALSE;
+	window->details->menu_skip_release = TRUE;
+	if (enabled)
+		nemo_preview_pane_clear (NEMO_PREVIEW_PANE (window->details->preview_pane));
+	nemo_window_sync_menu_bar (window);
+	nemo_window_sync_zen_mode (window);
+	if (!enabled) {
+		if (window->details->sidebar != NULL)
+			gtk_paned_set_position (GTK_PANED (window->details->content_paned), window->details->side_pane_width);
+		if (window->details->preview_pane_visible) {
+			g_signal_connect_object (window->details->preview_hpane, "size-allocate",
+				G_CALLBACK (restore_zen_preview_width), window, G_CONNECT_AFTER);
+			gtk_widget_queue_resize (window->details->preview_hpane);
+			NemoWindowSlot *slot = nemo_window_get_active_slot (window);
+			if (slot != NULL && slot->content_view != NULL)
+				preview_selection_changed_cb (slot->content_view, window);
+		}
+	}
+	NemoWindowSlot *slot = nemo_window_get_active_slot (window);
+	if (slot != NULL && slot->content_view != NULL)
+		nemo_view_grab_focus (slot->content_view);
+#endif
 }
 
 gboolean

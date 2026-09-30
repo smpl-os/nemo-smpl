@@ -40,4 +40,7 @@ GtkAction * nemo_action_from_menu_item         (NemoMenuItem  *item,
 GdkPixbuf * nemo_ui_get_menu_icon              (const char        *icon_name,
                                                 GtkWidget         *parent_widget);
 gchar     * nemo_make_action_uuid_for_path     (const gchar *path);
+gboolean    nemo_ui_get_background_color       (GtkStyleContext *context,
+                                                GtkStateFlags state,
+                                                GdkRGBA *color);
 #endif /* NEMO_UI_UTILITIES_H */

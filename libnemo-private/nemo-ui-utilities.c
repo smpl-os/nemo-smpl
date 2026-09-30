@@ -30,6 +30,43 @@
 #include <gtk/gtk.h>
 #include <eel/eel-debug.h>
 
+static void
+composite_background (GdkRGBA *result, const GdkRGBA *background)
+{
+    double opacity = background->alpha * (1.0 - result->alpha);
+    result->red += opacity * background->red;
+    result->green += opacity * background->green;
+    result->blue += opacity * background->blue;
+    result->alpha += opacity;
+}
+
+gboolean
+nemo_ui_get_background_color (GtkStyleContext *context, GtkStateFlags state, GdkRGBA *result)
+{
+    g_return_val_if_fail (GTK_IS_STYLE_CONTEXT (context) && result != NULL, FALSE);
+    *result = (GdkRGBA) { 0 };
+    for (GtkStyleContext *parent = context; parent != NULL; parent = gtk_style_context_get_parent (parent)) {
+        GdkRGBA layer;
+        gtk_style_context_get_background_color (parent,
+            parent == context ? state : gtk_style_context_get_state (parent), &layer);
+        composite_background (result, &layer);
+        if (result->alpha >= 0.999)
+            break;
+    }
+    if (result->alpha < 0.999) {
+        GdkRGBA base;
+        if (gtk_style_context_lookup_color (context, "theme_base_color", &base))
+            composite_background (result, &base);
+    }
+    if (result->alpha < 0.999)
+        return FALSE;
+    result->red /= result->alpha;
+    result->green /= result->alpha;
+    result->blue /= result->alpha;
+    result->alpha = 1.0;
+    return TRUE;
+}
+
 void
 nemo_ui_unmerge_ui (GtkUIManager *ui_manager,
 			guint *merge_id,

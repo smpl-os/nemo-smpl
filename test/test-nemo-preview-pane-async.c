@@ -4,6 +4,9 @@
 #include <glib/gstdio.h>
 #include <unistd.h>
 #include "../src/nemo-preview-pane.c"
+#ifdef HAVE_DOCUMENT_PREVIEW
+#include "document-preview-fixture.h"
+#endif
 
 typedef struct {
 	GAsyncReadyCallback callback;
@@ -186,6 +189,82 @@ test_details_ownership (void)
 	g_object_unref (file);
 }
 
+#ifdef HAVE_DOCUMENT_PREVIEW
+static void
+document_file_ready (NemoFile *file, gpointer data)
+{
+	*(gboolean *) data = TRUE;
+}
+
+static void
+test_rich_document_pane (void)
+{
+	gboolean sandbox = document_sandbox_available ();
+	char *directory = g_dir_make_tmp ("nemo-pane-document-XXXXXX", NULL);
+	char *path = g_build_filename (directory, "book.md", NULL);
+	GString *contents = g_string_new ("# Native right-pane preview\n\n");
+	for (guint i = 0; i < 60; i++)
+		g_string_append_printf (contents, "## Section %u\n\n"
+			"This document is rendered in the right preview pane without taking focus.\n\n", i);
+	g_assert_true (g_file_set_contents (path, contents->str, contents->len, NULL));
+	g_string_free (contents, TRUE);
+	GFile *location = g_file_new_for_path (path);
+	NemoFile *file = nemo_file_get (location);
+	gboolean ready = FALSE;
+	nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_INFO, document_file_ready, &ready);
+	gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while (!ready && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (ready);
+	NemoPreviewPane *pane = new_test_pane ();
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	GtkWidget *entry = gtk_entry_new ();
+	gtk_container_add (GTK_CONTAINER (window), box);
+	gtk_box_pack_start (GTK_BOX (box), entry, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (box), GTK_WIDGET (pane), TRUE, TRUE, 0);
+	gtk_window_set_default_size (GTK_WINDOW (window), 800, 600);
+	gtk_widget_show_all (window);
+	gtk_widget_grab_focus (entry);
+	DocumentResult result = { 0 };
+	g_signal_connect (pane->document_viewer, "load-finished", G_CALLBACK (document_finished_cb), &result);
+	nemo_preview_pane_set_file (pane, file);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "document");
+	deadline = g_get_monotonic_time () + 20 * G_TIME_SPAN_SECOND;
+	while (!result.finished && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (result.finished);
+	g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == entry);
+	if (sandbox) {
+		g_assert_no_error (result.error);
+		g_assert_cmpuint (nemo_document_viewer_get_page_count (pane->document_viewer), >, 1);
+		GdkEventKey page = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Page_Down };
+		g_assert_true (nemo_preview_pane_handle_key_event (pane, &page));
+		g_assert_true (pane->current_file == file);
+	} else {
+		g_assert_nonnull (result.error);
+		g_assert_cmpuint (nemo_document_viewer_get_page_count (pane->document_viewer), ==, 0);
+	}
+	g_signal_handlers_disconnect_by_data (pane->document_viewer, &result);
+	g_clear_error (&result.error);
+	nemo_preview_pane_clear (pane);
+	g_assert_cmpuint (nemo_document_viewer_get_page_count (pane->document_viewer), ==, 0);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "empty");
+	gtk_widget_destroy (window);
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_remove (path), ==, 0);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (path);
+	g_free (directory);
+}
+#endif
+
 #ifdef HAVE_GSTREAMER
 static GThread *test_main_thread;
 
@@ -306,6 +385,9 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview-pane/destroy-pending", test_destroy_pending);
 	g_test_add_func ("/preview-pane/thumbnail-worker", test_thumbnail_worker);
 	g_test_add_func ("/preview-pane/details-ownership", test_details_ownership);
+#ifdef HAVE_DOCUMENT_PREVIEW
+	g_test_add_func ("/preview-pane/rich-document", test_rich_document_pane);
+#endif
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview-pane/media-frame-lifetime", test_media_frame_lifetime);
 #endif

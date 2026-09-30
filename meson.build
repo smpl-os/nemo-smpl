@@ -1,7 +1,7 @@
 # Meson build file
 
 # https://github.com/linuxmint/nemo
-project('nemo', 'c', version : '1.4.53', meson_version : '>=0.64.0')
+project('nemo', 'c', version : '1.4.62', meson_version : '>=0.64.0')
 
 # 1. If the library code has changed at all since last release, then increment revision.
 # 2. If any interfaces have been added, then increment current and set revision to 0.
@@ -170,6 +170,15 @@ if libraw_enabled
 endif
 conf.set('HAVE_LIBRAW', libraw_enabled)
 
+document_preview_enabled = smpl_features_enabled and get_option('document_preview')
+if document_preview_enabled
+  md4c_html = dependency('md4c-html', version: '>=0.4.8')
+  poppler_glib = dependency('poppler-glib', version: '>=21.12')
+  document_mutool = find_program('mutool')
+  document_bwrap = find_program('bwrap')
+endif
+conf.set('HAVE_DOCUMENT_PREVIEW', document_preview_enabled)
+
 # make sure pango development files are installed
 pango = dependency('pango', version: '>=1.44.0')
 
@@ -236,6 +245,7 @@ message('\n'.join(['',
 '    compiler:               @0@'.format(cc.get_id()),
 '    libexif support:        @0@'.format(libexif_enabled),
 '    GStreamer support:      @0@'.format(gstreamer_enabled),
+'    Document preview:       @0@'.format(document_preview_enabled),
 '    exempi  support:        @0@'.format(exempi_enabled),
 '    Tracker support:        @0@'.format(tracker_enabled),
 '    Wayland support:        @0@'.format(cc.has_header('gdk/gdkwayland.h', dependencies: gtk)),

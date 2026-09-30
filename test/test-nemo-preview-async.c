@@ -150,7 +150,6 @@ test_raw_open (libraw_data_t *raw, const char *path)
 
 /* The directory analyzer's desktop navigation callbacks are not exercised. */
 #include "../src/nemo-window-slot.h"
-GSettings *nemo_keybinding_settings;
 GType nemo_window_get_type (void) { return GTK_TYPE_WINDOW; }
 NemoWindowSlot *nemo_window_get_active_slot (NemoWindow *window)
 {
@@ -497,6 +496,83 @@ test_quick_image_information (void)
 }
 
 static void
+test_quick_page_keys (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-page-keys-XXXXXX", NULL);
+	char *path = g_build_filename (directory, "first.txt", NULL);
+	char *other_path = g_build_filename (directory, "second.txt", NULL);
+	GString *text = g_string_new (NULL);
+	for (guint i = 0; i < 1000; i++)
+		g_string_append_printf (text, "Line %u: page navigation fixture\n", i);
+	g_assert_true (g_file_set_contents (path, text->str, text->len, NULL));
+	g_assert_true (g_file_set_contents (other_path, text->str, text->len, NULL));
+	g_string_free (text, TRUE);
+	GFile *file = g_file_new_for_path (path);
+	GFile *other = g_file_new_for_path (other_path);
+	NemoQuickPreview *preview = g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL);
+	g_object_ref_sink (preview);
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->mode == PREVIEW_TEXT && preview->dir_files != NULL);
+	GList *children = gtk_container_get_children (GTK_CONTAINER (preview->paged_viewer));
+	GtkAdjustment *adjustment = NULL;
+	for (GList *l = children; l != NULL; l = l->next)
+		if (GTK_IS_SCROLLBAR (l->data))
+			adjustment = gtk_range_get_adjustment (GTK_RANGE (l->data));
+	g_list_free (children);
+	g_assert_nonnull (adjustment);
+	WAIT_UNTIL (gtk_adjustment_get_upper (adjustment) > 100);
+	gtk_widget_grab_focus (preview->next_button);
+	GdkEventKey event = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Page_Down };
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	WAIT_UNTIL (gtk_adjustment_get_value (adjustment) > 0);
+	g_assert_true (g_file_equal (preview->current_file, file));
+	event.keyval = GDK_KEY_KP_Page_Up;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	WAIT_UNTIL (gtk_adjustment_get_value (adjustment) == 0);
+	event.keyval = GDK_KEY_Right;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	g_assert_true (g_file_equal (preview->current_file, file));
+	event.state = GDK_CONTROL_MASK;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	WAIT_UNTIL (g_file_equal (preview->current_file, other));
+	g_settings_set_string (nemo_keybinding_settings, "quick-preview-previous-file", "<Control><Alt>p");
+	g_autofree char *label = gtk_accelerator_get_label (GDK_KEY_p, GDK_CONTROL_MASK | GDK_MOD1_MASK);
+	g_autofree char *tooltip = gtk_widget_get_tooltip_text (preview->prev_button);
+	g_assert_nonnull (strstr (tooltip, label));
+	event.keyval = GDK_KEY_Left;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	event.keyval = GDK_KEY_p;
+	event.state = GDK_CONTROL_MASK | GDK_MOD1_MASK;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	WAIT_UNTIL (g_file_equal (preview->current_file, file));
+	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (preview->search_bar), TRUE);
+	gtk_widget_grab_focus (preview->search_entry);
+	event.keyval = GDK_KEY_Right;
+	event.state = GDK_CONTROL_MASK;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	event.keyval = GDK_KEY_space;
+	event.state = 0;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	g_assert_true (g_file_equal (preview->current_file, file));
+	gtk_widget_grab_focus (preview->next_button);
+	g_settings_set_string (nemo_keybinding_settings, "quick-preview-next-file", "");
+	event.keyval = GDK_KEY_Right;
+	event.state = GDK_CONTROL_MASK;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &event, NULL));
+	g_settings_reset (nemo_keybinding_settings, "quick-preview-next-file");
+	g_settings_reset (nemo_keybinding_settings, "quick-preview-previous-file");
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	iterate_for (100);
+	remove_fixture (file);
+	remove_fixture (other);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (path);
+	g_free (other_path);
+	g_free (directory);
+}
+
+static void
 test_quick_text_search_and_modes (void)
 {
 	char *directory = g_dir_make_tmp ("nemo-text-async-XXXXXX", NULL);
@@ -539,6 +615,78 @@ test_quick_text_search_and_modes (void)
 	g_free (path);
 	g_free (directory);
 }
+
+#ifdef HAVE_DOCUMENT_PREVIEW
+#include "document-preview-fixture.h"
+
+static void
+test_quick_rich_document (void)
+{
+	gboolean sandbox = document_sandbox_available ();
+	char *directory = g_dir_make_tmp ("nemo-rich-preview-XXXXXX", NULL);
+	char *path = g_build_filename (directory, "book.md", NULL);
+	char *other_path = g_build_filename (directory, "next.txt", NULL);
+	GString *markdown = g_string_new ("# Native document preview\n");
+	for (guint i = 0; i < 48; i++)
+		g_string_append_printf (markdown, "\n\n## Section %u\n\n"
+			"Readable native document content with **bold words**, tables and paging.\n\n"
+			"| Name | Value |\n| --- | --- |\n| Entry | %u |\n", i, i);
+	g_string_append (markdown, "\n\nunique document needle\n");
+	g_assert_true (g_file_set_contents (path, markdown->str, markdown->len, NULL));
+	g_string_free (markdown, TRUE);
+	g_assert_true (g_file_set_contents (other_path, "Another file", -1, NULL));
+	GFile *file = g_file_new_for_path (path);
+	GFile *other = g_file_new_for_path (other_path);
+	NemoQuickPreview *preview = g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL);
+	g_object_ref_sink (preview);
+	DocumentResult result = { 0 };
+	g_signal_connect (preview->document_viewer, "load-finished", G_CALLBACK (document_finished_cb), &result);
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->mode == PREVIEW_DOCUMENT);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (preview->stack)), ==, "document");
+	WAIT_UNTIL (result.finished);
+	if (!sandbox) {
+		g_assert_nonnull (result.error);
+		g_assert_cmpuint (nemo_document_viewer_get_page_count (preview->document_viewer), ==, 0);
+	} else {
+		g_assert_no_error (result.error);
+		g_assert_true (preview->document_ready);
+		g_assert_cmpuint (nemo_document_viewer_get_page_count (preview->document_viewer), >, 1);
+		gtk_widget_grab_focus (preview->next_button);
+		GdkEventKey event = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Page_Down };
+		for (guint i = 0; i < 12 && nemo_document_viewer_get_page (preview->document_viewer) == 0; i++) {
+			g_assert_true (on_key_press (GTK_WIDGET (preview), &event, NULL));
+			iterate_for (250);
+		}
+		WAIT_UNTIL (nemo_document_viewer_get_page (preview->document_viewer) > 0);
+		g_assert_true (g_file_equal (preview->current_file, file));
+		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (preview->search_bar), TRUE);
+		gtk_entry_set_text (GTK_ENTRY (preview->search_entry), "unique document needle");
+		on_search_changed (GTK_SEARCH_ENTRY (preview->search_entry), preview);
+		WAIT_UNTIL (!nemo_document_viewer_search_is_pending (preview->document_viewer) &&
+		            nemo_document_viewer_search_has_match (preview->document_viewer));
+		iterate_for (500);
+		g_assert_false (nemo_document_viewer_search_is_pending (preview->document_viewer));
+	}
+	WAIT_UNTIL (preview->dir_files != NULL);
+	gtk_widget_grab_focus (preview->next_button);
+	GdkEventKey next = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Right, .state = GDK_CONTROL_MASK };
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &next, NULL));
+	WAIT_UNTIL (g_file_equal (preview->current_file, other) && preview->mode == PREVIEW_TEXT);
+	g_assert_cmpuint (nemo_document_viewer_get_page_count (preview->document_viewer), ==, 0);
+	g_signal_handlers_disconnect_by_data (preview->document_viewer, &result);
+	g_clear_error (&result.error);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	iterate_for (100);
+	remove_fixture (file);
+	remove_fixture (other);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (path);
+	g_free (other_path);
+	g_free (directory);
+}
+#endif
 
 #ifdef HAVE_GSTREAMER
 static void
@@ -708,6 +856,10 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/quick/metadata-navigation-races", test_quick_navigation_races);
 	g_test_add_func ("/preview/quick/filename-image-information", test_quick_image_information);
 	g_test_add_func ("/preview/quick/text-search-hex-folder", test_quick_text_search_and_modes);
+	g_test_add_func ("/preview/quick/page-and-file-shortcuts", test_quick_page_keys);
+#ifdef HAVE_DOCUMENT_PREVIEW
+	g_test_add_func ("/preview/quick/rich-document", test_quick_rich_document);
+#endif
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview/media/bounded-delayed-stop", test_bounded_media_stop);
 	g_test_add_func ("/preview/media/quick-close-loading", test_quick_close_while_media_loading);

@@ -89,6 +89,12 @@ NemoIconInfo *    nemo_icon_info_new_for_pixbuf               (GdkPixbuf        
 NemoIconInfo *    nemo_icon_info_lookup                       (GIcon             *icon,
                                                                int                size,
                                                                int                scale);
+/* Symbolic file-view icons use GTK's context/color-aware cache, not the
+ * context-free Nemo cache. The context's current state supplies the palette. */
+NemoIconInfo *    nemo_icon_info_lookup_for_context           (GIcon             *icon,
+                                                               int                size,
+                                                               int                scale,
+                                                               GtkStyleContext   *context);
 NemoIconInfo *    nemo_icon_info_lookup_from_name             (const char        *name,
                                                                int                size,
                                                                int                scale);
@@ -108,6 +114,7 @@ GdkPixbuf *           nemo_icon_info_get_desktop_pixbuf_at_size (NemoIconInfo  *
 const char *          nemo_icon_info_get_used_name                (NemoIconInfo  *icon);
 
 void                  nemo_icon_info_clear_caches                 (void);
+void                  nemo_icon_info_invalidate_icon              (GIcon         *icon);
 
 /* Relationship between zoom levels and icons sizes. */
 guint nemo_get_icon_size_for_zoom_level          (NemoZoomLevel  zoom_level);
@@ -127,4 +134,3 @@ GIcon * nemo_user_special_directory_get_gicon (GUserDirectory directory);
 G_END_DECLS
 
 #endif /* NEMO_ICON_INFO_H */
-

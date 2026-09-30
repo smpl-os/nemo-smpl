@@ -41,6 +41,11 @@ struct NemoWindowDetails
 {
         GtkWidget *statusbar;
         GtkWidget *menubar;
+        GtkWidget *menubar_container;
+        GtkWidget *statusbar_container;
+        gboolean zen_mode;
+        gboolean zen_updating;
+        gint zen_preview_width;
 
         GtkWidget *nemo_status_bar;
 
@@ -74,6 +79,7 @@ struct NemoWindowDetails
         GtkWidget *content_paned;
         /* Keep this layout independent of whether config.h was included first. */
         GtkWidget *transfer_area;
+        GtkWidget *transfer_area_container;
         NemoNavigationState *nav_state;
         
         /* Side Pane */
@@ -185,6 +191,7 @@ void               nemo_window_initialize_menus                      (NemoWindow
 void               nemo_window_finalize_menus                        (NemoWindow    *window);
 
 void               nemo_window_update_show_hide_ui_elements           (NemoWindow     *window);
+void               nemo_window_sync_zen_mode                          (NemoWindow     *window);
 
 /* window toolbar */
 void               nemo_window_close_pane                            (NemoWindow    *window,

@@ -296,7 +296,8 @@ path_bar_button_pressed_callback (GtkWidget *widget,
 			   GINT_TO_POINTER (TRUE));
 
 	if (event->button == GDK_BUTTON_SECONDARY) {
-		slot = nemo_window_get_active_slot (pane->window);
+		nemo_window_set_active_pane (pane->window, pane);
+		slot = pane->active_slot;
 		view = slot->content_view;
 		if (view != NULL) {
 			button_location = nemo_path_bar_get_path_for_button (
@@ -885,6 +886,11 @@ only_show_active_pane_toolbar_mapping (GValue *value,
 {
     NemoWindowPane *pane = user_data;
 
+    if (nemo_window_get_zen_mode (pane->window)) {
+        g_value_set_boolean (value, !pane->window->details->disable_chrome);
+        return TRUE;
+    }
+
     if (nemo_window_disable_chrome_mapping (value,
                                             variant,
                                             pane->window)) {
@@ -1316,6 +1322,12 @@ nemo_window_pane_close_slot (NemoWindowPane *pane,
 	if (!window)
 		return;
 
+	/* Save the last tab before removing its location and destroying the pane. */
+	if (!nemo_window_split_view_showing (window) && g_list_length (pane->slots) == 1) {
+		nemo_window_close (window);
+		return;
+	}
+
 	if (pane->active_slot == slot) {
 		NemoWindowSlot *next_slot;
 		next_slot = get_next_or_previous_slot (NEMO_WINDOW_PANE (pane));
@@ -1375,8 +1387,8 @@ nemo_window_pane_ensure_location_bar (NemoWindowPane *pane)
 {
     gboolean show_location, use_temp_toolbars;
 
-    use_temp_toolbars = !g_settings_get_boolean (nemo_window_state,
-                     NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
+    use_temp_toolbars = !nemo_window_get_zen_mode (pane->window) &&
+                       !g_settings_get_boolean (nemo_window_state, NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
     show_location = nemo_toolbar_get_show_location_entry (NEMO_TOOLBAR (pane->tool_bar));
 
     if (use_temp_toolbars) {
@@ -1423,7 +1435,7 @@ nemo_window_pane_remove_slot_unsafe (NemoWindowPane *pane,
 					   G_CALLBACK (notebook_switch_page_cb),
 					   pane);
 
-	gtk_notebook_set_show_tabs (notebook,
+	nemo_notebook_set_show_tabs (NEMO_NOTEBOOK (notebook),
 				    gtk_notebook_get_n_pages (notebook) > 1);
 	pane->slots = g_list_remove (pane->slots, slot);
 }

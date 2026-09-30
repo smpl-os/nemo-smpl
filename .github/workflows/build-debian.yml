@@ -43,7 +43,8 @@ jobs:
             libpango1.0-dev libatk1.0-dev libgail-3-dev \
             libxext-dev libxrender-dev libwayland-dev \
             python3 python3-gi x11proto-dev \
-            dbus-daemon xvfb xauth
+            dbus-daemon xvfb xauth \
+            libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap
 
       - name: Build Debian package
         run: |

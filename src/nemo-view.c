@@ -40,6 +40,7 @@
 #include "nemo-previewer.h"
 #include "nemo-properties-window.h"
 #include "nemo-bookmark-list.h"
+#include "nemo-window-bookmarks.h"
 #include "nemo-directory-private.h"
 
 #include <sys/stat.h>
@@ -52,6 +53,7 @@
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
 #include <gio/gio.h>
+#include <libxapp/xapp-favorites.h>
 #include <math.h>
 
 #include <eel/eel-glib-extensions.h>
@@ -1696,6 +1698,48 @@ action_favorite_unfavorite_file_callback (GtkAction *action,
     }
 
     nemo_file_list_free (selection);
+}
+
+#ifdef NEMO_SMPL
+static gboolean
+folder_can_be_favorited (NemoFile *file)
+{
+    return file != NULL && nemo_file_is_directory (file) &&
+           !nemo_file_is_in_trash (file) && !nemo_file_is_in_recent (file) &&
+           !nemo_file_is_in_favorites (file) && !nemo_file_is_in_search (file);
+}
+
+static gboolean
+folder_is_favorite (NemoFile *file)
+{
+    g_autofree char *uri = nemo_file_get_uri (file);
+    return xapp_favorites_find_by_uri (xapp_favorites_get_default (), uri) != NULL;
+}
+#endif
+
+static void
+action_add_folder_favorite_callback (GtkAction *action, gpointer callback_data)
+{
+#ifdef NEMO_SMPL
+    NemoView *view = NEMO_VIEW (callback_data);
+    NemoFile *file = g_str_equal (gtk_action_get_name (action), NEMO_ACTION_ADD_FAVORITE) ?
+        view->details->directory_as_file : view->details->location_popup_directory_as_file;
+    g_return_if_fail (folder_can_be_favorited (file));
+    nemo_file_set_is_favorite (file, TRUE);
+#endif
+}
+
+static void
+action_location_add_bookmark_callback (GtkAction *action, gpointer callback_data)
+{
+#ifdef NEMO_SMPL
+    NemoView *view = NEMO_VIEW (callback_data);
+    NemoFile *file = view->details->location_popup_directory_as_file;
+    g_return_if_fail (NEMO_IS_FILE (file));
+    GFile *location = nemo_file_get_location (file);
+    nemo_window_add_bookmark_for_location (view->details->window, location);
+    g_object_unref (location);
+#endif
 }
 
 static void
@@ -7930,6 +7974,22 @@ action_open_containing_folder_callback (GtkAction *action,
 }
 
 static void
+action_open_selected_folder_callback (GtkAction *action, gpointer callback_data)
+{
+#ifdef NEMO_SMPL
+    NemoView *view = NEMO_VIEW (callback_data);
+    GList *selection = nemo_view_get_selection (view);
+    if (g_list_length (selection) == 1 &&
+        nemo_file_is_directory (selection->data) && !get_is_desktop_view (view)) {
+        GFile *location = nemo_file_get_activation_location (selection->data);
+        nemo_window_slot_open_location (view->details->slot, location, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+        g_object_unref (location);
+    }
+    nemo_file_list_free (selection);
+#endif
+}
+
+static void
 action_open_containing_folder_other_pane_callback (GtkAction *action,
                                                   gpointer callback_data)
 {
@@ -8928,6 +8988,10 @@ static const GtkActionEntry directory_view_entries[] = {
     N_("Open containing folder in other pane"), "<control><alt><shift>o",
     N_("Open the selected item's folder in the other pane, keeping these search results"),
     G_CALLBACK (action_open_containing_folder_other_pane_callback) },
+  { NEMO_ACTION_OPEN_SELECTED_FOLDER, "xsi-go-down-symbolic",
+    N_("Open Selected Folder"), "<control>Down",
+    N_("Open the selected folder in the current pane"),
+    G_CALLBACK (action_open_selected_folder_callback) },
   /* name, stock id */         { "OtherApplication1", NULL,
   /* label, accelerator */       N_("Other _Application..."), NULL,
   /* tooltip */                  N_("Choose another application with which to open the selected item"),
@@ -9097,6 +9161,18 @@ static const GtkActionEntry directory_view_entries[] = {
   /* tooltip */                  N_("Move or copy files previously selected by a Cut or Copy command into this folder"),
 				 G_CALLBACK (action_location_paste_files_into_callback) },
 
+  { NEMO_ACTION_ADD_FAVORITE, NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES,
+    N_("Add Current Folder to _Favorites"), "<control><alt>b",
+    N_("Add the current pane's folder to Favorites"),
+    G_CALLBACK (action_add_folder_favorite_callback) },
+  { NEMO_ACTION_LOCATION_FAVORITE, NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES,
+    N_("Add to _Favorites"), NULL,
+    N_("Add this folder to Favorites"),
+    G_CALLBACK (action_add_folder_favorite_callback) },
+  { NEMO_ACTION_LOCATION_BOOKMARK, "xsi-bookmark-new-symbolic",
+    N_("Add _Bookmark"), NULL,
+    N_("Add a bookmark for this folder"),
+    G_CALLBACK (action_location_add_bookmark_callback) },
   /* name, stock id */         { NEMO_ACTION_LOCATION_TRASH, NULL,
   /* label, accelerator */       N_("Mo_ve to Trash"), "",
   /* tooltip */                  N_("Move this folder to the Trash"),
@@ -9280,6 +9356,9 @@ real_merge_menus (NemoView *view)
 	g_object_unref (action_group); /* owned by ui manager */
 
     view->details->dir_merge_id = gtk_ui_manager_add_ui_from_resource (ui_manager, "/org/nemo/nemo-directory-view-ui.xml", NULL);
+#ifdef NEMO_SMPL
+    nemo_keybindings_apply_all ();
+#endif
 
 	view->details->scripts_invalid = TRUE;
 	view->details->templates_invalid = TRUE;
@@ -10113,6 +10192,29 @@ real_update_location_menu (NemoView *view)
 						NEMO_FILE_ATTRIBUTE_MOUNT |
 						NEMO_FILE_ATTRIBUTE_FILESYSTEM_INFO));
 
+    action = gtk_action_group_get_action (view->details->dir_action_group, NEMO_ACTION_LOCATION_FAVORITE);
+#ifdef NEMO_SMPL
+    gboolean can_favorite = !get_is_desktop_view (view) && folder_can_be_favorited (file);
+    gtk_action_set_visible (action, can_favorite);
+    gtk_action_set_sensitive (action, can_favorite && !folder_is_favorite (file));
+#else
+    gtk_action_set_visible (action, FALSE);
+    gtk_action_set_sensitive (action, FALSE);
+#endif
+    action = gtk_action_group_get_action (view->details->dir_action_group, NEMO_ACTION_LOCATION_BOOKMARK);
+#ifdef NEMO_SMPL
+    gboolean can_bookmark = !get_is_desktop_view (view) && nemo_file_is_directory (file) &&
+                            !nemo_file_is_in_search (file);
+    GFile *location = nemo_file_get_location (file);
+    gtk_action_set_visible (action, can_bookmark);
+    gtk_action_set_sensitive (action, can_bookmark &&
+                             !nemo_window_location_is_bookmarked (view->details->window, location));
+    g_object_unref (location);
+#else
+    gtk_action_set_visible (action, FALSE);
+    gtk_action_set_sensitive (action, FALSE);
+#endif
+
 	is_special_link = NEMO_IS_DESKTOP_ICON_FILE (file);
 	is_desktop_or_home_dir = nemo_file_is_home (file)
 		|| nemo_file_is_desktop_directory (file);
@@ -10423,6 +10525,14 @@ real_update_menus (NemoView *view)
                           NEMO_ACTION_OPEN);
     gtk_action_set_sensitive (action, selection_count != 0);
 
+    GtkAction *open_folder = gtk_action_group_get_action (view->details->dir_action_group,
+                                                         NEMO_ACTION_OPEN_SELECTED_FOLDER);
+#ifdef NEMO_SMPL
+    gtk_action_set_sensitive (open_folder, selection_count == 1 && selection_contains_directory && !is_desktop_view);
+#else
+    gtk_action_set_sensitive (open_folder, FALSE);
+#endif
+
     g_object_set (action, "label",
               label_with_underscore ? label_with_underscore : _("_Open"),
               NULL);
@@ -10697,6 +10807,17 @@ real_update_menus (NemoView *view)
 
     first_selected_is_pinned = selection_count > 0 &&
                                nemo_file_get_pinning (NEMO_FILE (selection->data));
+
+    action = gtk_action_group_get_action (view->details->dir_action_group, NEMO_ACTION_ADD_FAVORITE);
+#ifdef NEMO_SMPL
+    NemoFile *current_folder = view->details->directory_as_file;
+    gboolean can_favorite_folder = !is_desktop_view && folder_can_be_favorited (current_folder);
+    gtk_action_set_visible (action, can_favorite_folder);
+    gtk_action_set_sensitive (action, can_favorite_folder && !folder_is_favorite (current_folder));
+#else
+    gtk_action_set_visible (action, FALSE);
+    gtk_action_set_sensitive (action, FALSE);
+#endif
 
     action = gtk_action_group_get_action (view->details->dir_action_group,
                                           NEMO_ACTION_PIN_FILE);
@@ -11523,6 +11644,14 @@ nemo_view_get_filter_active (NemoView *view)
 {
     g_return_val_if_fail (NEMO_IS_VIEW (view), FALSE);
     return view->details->filter_active;
+}
+
+gboolean
+nemo_view_get_type_jump_active (NemoView *view)
+{
+    g_return_val_if_fail (NEMO_IS_VIEW (view), FALSE);
+    NemoViewClass *klass = NEMO_VIEW_CLASS (G_OBJECT_GET_CLASS (view));
+    return klass->get_type_jump_active != NULL && klass->get_type_jump_active (view);
 }
 
 const char *

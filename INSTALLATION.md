@@ -74,6 +74,7 @@ sudo apt-get install -y \
   libx11-dev libxapp-dev libcinnamon-desktop-dev \
   libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libgsf-1-dev \
+  libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap \
   gobject-introspection libgirepository1.0-dev \
   intltool itstool gtk-doc-tools
 ```
@@ -89,6 +90,7 @@ sudo dnf install -y \
   gtk3-devel glib2-devel json-glib-devel \
   libX11-devel xapp-devel cinnamon-desktop-devel \
   libexif-devel LibRaw-devel exempi-devel gstreamer1-devel \
+  md4c-devel poppler-glib-devel mupdf bubblewrap \
   gstreamer1-plugins-base-devel libgsf-devel \
   gobject-introspection-devel intltool itstool \
   gtk-doc
@@ -104,12 +106,32 @@ sudo pacman -S --needed \
   base-devel meson ninja pkgconf \
   gtk3 glib2 json-glib libx11 xapp cinnamon-desktop \
   libexif libraw exempi gstreamer gst-plugins-base-libs \
+  md4c poppler-glib mupdf-tools bubblewrap \
   pango gobject-introspection libgsf intltool itstool
 ```
 
 </details>
 
 ---
+
+## Native document preview dependencies
+
+Document previews are enabled by default in smpl builds. They require
+`md4c-html` (0.4.8 or newer), `poppler-glib` (21.12 or newer), the stock
+`mutool` executable from `mupdf-tools` (`mupdf` on Fedora), and `bubblewrap`. Distribution packages
+install these dependencies; MuPDF remains a separate program and is not linked
+into Nemo. No proprietary reader, web service, or DRM component is used.
+
+The renderer is installed under the configured Meson `libexecdir`; packaging
+must include `nemo-document-renderer` as well as the main executable. Bubblewrap
+must be permitted to create its restricted namespaces. If system policy blocks
+that sandbox, the preview reports the error rather than bypassing isolation.
+Use `-Ddocument_preview=false` for a build without this optional feature.
+
+Markdown, EPUB, plain UTF-8 FB2 without DTDs, basic unencrypted/PalmDOC MOBI, PDF and CBZ are the
+supported preview formats. Advanced Kindle variants, DRM and external Markdown
+images are not supported. Native conversion and rendered-page limits may reject
+oversized or unusually complex documents.
 
 ## 📱 Android/Phone File Transfer (MTP Setup)
 

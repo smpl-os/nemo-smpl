@@ -132,6 +132,30 @@ nemo_bookmarks_exiting (void)
 	}
 }
 
+gboolean
+nemo_window_location_is_bookmarked (NemoWindow *window, GFile *location)
+{
+	g_return_val_if_fail (NEMO_IS_WINDOW (window), FALSE);
+	g_return_val_if_fail (G_IS_FILE (location), FALSE);
+	g_autofree char *uri = g_file_get_uri (location);
+	GList *matches = nemo_bookmark_list_get_for_uri (window->details->bookmark_list, uri);
+	gboolean found = matches != NULL;
+	g_list_free (matches);
+	return found;
+}
+
+void
+nemo_window_add_bookmark_for_location (NemoWindow *window, GFile *location)
+{
+	g_return_if_fail (NEMO_IS_WINDOW (window));
+	g_return_if_fail (G_IS_FILE (location));
+	if (!nemo_window_location_is_bookmarked (window, location)) {
+		NemoBookmark *bookmark = nemo_bookmark_new (location, NULL, NULL, NULL);
+		nemo_bookmark_list_append (window->details->bookmark_list, bookmark);
+		g_object_unref (bookmark);
+	}
+}
+
 /**
  * add_bookmark_for_current_location
  * 
@@ -149,9 +173,12 @@ nemo_window_add_bookmark_for_current_location (NemoWindow *window)
 	bookmark = slot->current_location_bookmark;
 	list = window->details->bookmark_list;
 
-	if (!nemo_bookmark_list_contains (list, bookmark)) {
+	g_return_if_fail (NEMO_IS_BOOKMARK (bookmark));
+	GFile *location = nemo_bookmark_get_location (bookmark);
+	if (!nemo_window_location_is_bookmarked (window, location)) {
 		nemo_bookmark_list_append (list, bookmark); 
 	}
+	g_object_unref (location);
 }
 
 void

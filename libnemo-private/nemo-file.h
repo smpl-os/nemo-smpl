@@ -493,6 +493,14 @@ NemoIconInfo *      nemo_file_get_icon                          (NemoFile       
                                      int                             max_width,
                                      int                             scale,
 									 NemoFileIconFlags           flags);
+/* File views opt into preference-controlled symbolic fallbacks; custom art
+* and thumbnails keep their priority. NULL context preserves the legacy API. */
+NemoIconInfo *      nemo_file_get_icon_for_context              (NemoFile                   *file,
+                                                                int                         size,
+                                                                int                         max_width,
+                                                                int                         scale,
+                                                                NemoFileIconFlags           flags,
+                                                                GtkStyleContext            *context);
 GdkPixbuf *             nemo_file_get_icon_pixbuf                   (NemoFile                   *file,
 									 int                             size,
 									 gboolean                        force_size,

@@ -22,6 +22,8 @@
  */
 
 #include <config.h>
+#include <libnemo-private/nemo-global-preferences.h>
+#include "nemo-document-viewer.h"
 #include "nemo-quick-preview.h"
 #include "nemo-paged-viewer.h"
 #include "nemo-image-viewer.h"
@@ -55,6 +57,7 @@
 typedef enum {
 	PREVIEW_NONE,
 	PREVIEW_TEXT,
+	PREVIEW_DOCUMENT,
 	PREVIEW_IMAGE,
 	PREVIEW_MEDIA,
 	PREVIEW_HEX,
@@ -73,6 +76,8 @@ struct _NemoQuickPreview {
 
 	/* Paged viewer (text + hex, lazy-loaded) */
 	NemoPagedViewer *paged_viewer;
+	NemoDocumentViewer *document_viewer;
+	gboolean document_ready;
 
 	/* Image page (shared widget) */
 	NemoImageViewer *image_viewer;
@@ -125,7 +130,7 @@ struct _NemoQuickPreview {
 	GtkWidget   *next_button;
 	GtkWidget   *counter_label;
 
-	/* In-window search bar (text/hex modes) */
+	/* In-window search bar (text/hex and rendered documents) */
 	GtkWidget   *search_bar;
 	GtkWidget   *search_entry;
 	GtkWidget   *search_prev_button;
@@ -257,8 +262,49 @@ key_matches (const GdkEventKey *event, const gchar *settings_key)
 		return FALSE;
 
 	state = event->state & gtk_accelerator_get_default_mod_mask ();
-	return event->keyval == key && state == mods;
+	return gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (key) && state == mods;
 }
+
+static void
+preview_search_set_needle (NemoQuickPreview *self, const char *needle)
+{
+	if (self->mode == PREVIEW_DOCUMENT)
+		nemo_document_viewer_search_set_needle (self->document_viewer, needle);
+	else
+		nemo_paged_viewer_search_set_needle (self->paged_viewer, needle);
+}
+
+static gboolean
+preview_search_find (NemoQuickPreview *self, gboolean backwards)
+{
+	if (self->mode == PREVIEW_DOCUMENT)
+		return backwards ? nemo_document_viewer_search_find_prev (self->document_viewer) :
+		                   nemo_document_viewer_search_find_next (self->document_viewer);
+	return backwards ? nemo_paged_viewer_search_find_prev (self->paged_viewer) :
+	                   nemo_paged_viewer_search_find_next (self->paged_viewer);
+}
+
+#ifdef NEMO_SMPL
+static void
+navigation_shortcuts_changed (GSettings *settings, const char *key, NemoQuickPreview *self)
+{
+	if (self->destroyed)
+		return;
+	GtkWidget *buttons[] = { self->prev_button, self->next_button };
+	const char *keys[] = { "quick-preview-previous-file", "quick-preview-next-file" };
+	const char *descriptions[] = { _("Previous file"), _("Next file") };
+	for (guint i = 0; i < G_N_ELEMENTS (buttons); i++) {
+		g_autofree char *value = g_settings_get_string (settings, keys[i]);
+		guint keyval;
+		GdkModifierType modifiers;
+		gtk_accelerator_parse (value, &keyval, &modifiers);
+		g_autofree char *label = keyval != 0 ? gtk_accelerator_get_label (keyval, modifiers) : NULL;
+		g_autofree char *text = label != NULL ?
+			g_strdup_printf (_("%s\nShortcut: %s"), descriptions[i], label) : g_strdup (descriptions[i]);
+		gtk_widget_set_tooltip_text (buttons[i], text);
+	}
+}
+#endif
 
 static void
 update_search_match_label (NemoQuickPreview *self, gboolean found)
@@ -269,15 +315,22 @@ update_search_match_label (NemoQuickPreview *self, gboolean found)
 	ctx = gtk_widget_get_style_context (self->search_match_label);
 	needle = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
 #ifdef NEMO_SMPL
-	const GError *error = nemo_paged_viewer_search_get_error (self->paged_viewer);
+	const GError *error = self->mode == PREVIEW_DOCUMENT ?
+		nemo_document_viewer_search_get_error (self->document_viewer) :
+		nemo_paged_viewer_search_get_error (self->paged_viewer);
 	gtk_widget_set_tooltip_text (self->search_match_label, error != NULL ? error->message : NULL);
 	if (error != NULL) {
 		gtk_label_set_text (GTK_LABEL (self->search_match_label), _("Search failed"));
 		gtk_style_context_add_class (ctx, "search-no-match");
 		return;
 	}
-	found = nemo_paged_viewer_search_has_match (self->paged_viewer);
-	if (nemo_paged_viewer_search_is_pending (self->paged_viewer)) {
+	found = self->mode == PREVIEW_DOCUMENT ?
+		nemo_document_viewer_search_has_match (self->document_viewer) :
+		nemo_paged_viewer_search_has_match (self->paged_viewer);
+	gboolean pending = self->mode == PREVIEW_DOCUMENT ?
+		nemo_document_viewer_search_is_pending (self->document_viewer) :
+		nemo_paged_viewer_search_is_pending (self->paged_viewer);
+	if (pending) {
 		gtk_label_set_text (GTK_LABEL (self->search_match_label), _("Searching..."));
 		gtk_style_context_remove_class (ctx, "search-no-match");
 		return;
@@ -312,6 +365,27 @@ paged_load_finished (NemoPagedViewer *viewer, GError *error, NemoQuickPreview *s
 			nemo_paged_viewer_search_find_next (viewer);
 	}
 }
+
+static void
+document_search_changed (NemoDocumentViewer *viewer, NemoQuickPreview *self)
+{
+	update_search_match_label (self, nemo_document_viewer_search_has_match (viewer));
+}
+
+static void
+document_load_finished (NemoDocumentViewer *viewer, GError *error, NemoQuickPreview *self)
+{
+	if (error == NULL && self->mode == PREVIEW_DOCUMENT && !self->document_ready) {
+		self->document_ready = TRUE;
+		gtk_widget_show (self->search_header_btn);
+		if (gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
+			const char *text = gtk_entry_get_text (GTK_ENTRY (self->search_entry));
+			nemo_document_viewer_search_set_needle (viewer, text);
+			if (text[0] != '\0')
+				nemo_document_viewer_search_find_next (viewer);
+		}
+	}
+}
 #endif
 
 static void
@@ -321,14 +395,14 @@ on_search_changed (GtkSearchEntry *entry, gpointer data)
 	const gchar *text;
 	gboolean found;
 
-	if (self->mode != PREVIEW_TEXT && self->mode != PREVIEW_HEX)
+	if (self->mode != PREVIEW_TEXT && self->mode != PREVIEW_HEX && self->mode != PREVIEW_DOCUMENT)
 		return;
 
 	text = gtk_entry_get_text (GTK_ENTRY (entry));
-	nemo_paged_viewer_search_set_needle (self->paged_viewer, text);
+	preview_search_set_needle (self, text);
 
 	if (text && text[0] != '\0') {
-		found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+		found = preview_search_find (self, FALSE);
 		update_search_match_label (self, found);
 	} else {
 		gtk_label_set_text (GTK_LABEL (self->search_match_label), "");
@@ -339,7 +413,7 @@ static void
 on_search_prev_clicked (GtkButton *button, gpointer data)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
-	gboolean found = nemo_paged_viewer_search_find_prev (self->paged_viewer);
+	gboolean found = preview_search_find (self, TRUE);
 	update_search_match_label (self, found);
 }
 
@@ -347,7 +421,7 @@ static void
 on_search_next_clicked (GtkButton *button, gpointer data)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
-	gboolean found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+	gboolean found = preview_search_find (self, FALSE);
 	update_search_match_label (self, found);
 }
 
@@ -399,8 +473,8 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 	}
 #endif
 
-	/* ── Search key bindings (text/hex modes only) ── */
-	if (self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX) {
+	/* Search keys apply to the active text or document viewer. */
+	if (self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX || self->mode == PREVIEW_DOCUMENT) {
 		if (key_matches (event, "quick-preview-search")) {
 			gtk_search_bar_set_search_mode (
 				GTK_SEARCH_BAR (self->search_bar), TRUE);
@@ -408,16 +482,44 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			return GDK_EVENT_STOP;
 		}
 		if (key_matches (event, "quick-preview-search-next")) {
-			gboolean found = nemo_paged_viewer_search_find_next (self->paged_viewer);
+			gboolean found = preview_search_find (self, FALSE);
 			update_search_match_label (self, found);
 			return GDK_EVENT_STOP;
 		}
 		if (key_matches (event, "quick-preview-search-prev")) {
-			gboolean found = nemo_paged_viewer_search_find_prev (self->paged_viewer);
+			gboolean found = preview_search_find (self, TRUE);
 			update_search_match_label (self, found);
 			return GDK_EVENT_STOP;
 		}
 	}
+
+#ifdef NEMO_SMPL
+	gboolean editing = GTK_IS_EDITABLE (gtk_window_get_focus (GTK_WINDOW (self)));
+	if (!editing && key_matches (event, "quick-preview-previous-file")) {
+		navigate_to_offset (self, -1);
+		return GDK_EVENT_STOP;
+	}
+	if (!editing && key_matches (event, "quick-preview-next-file")) {
+		navigate_to_offset (self, 1);
+		return GDK_EVENT_STOP;
+	}
+	GdkModifierType modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+	gboolean page_up = event->keyval == GDK_KEY_Page_Up || event->keyval == GDK_KEY_KP_Page_Up;
+	gboolean page_down = event->keyval == GDK_KEY_Page_Down || event->keyval == GDK_KEY_KP_Page_Down;
+	gboolean page_space = !editing && event->keyval == GDK_KEY_space;
+	if ((self->mode == PREVIEW_TEXT || self->mode == PREVIEW_HEX || self->mode == PREVIEW_DOCUMENT) &&
+	    ((modifiers == 0 && (page_up || page_down || page_space)) ||
+	     (page_space && modifiers == GDK_SHIFT_MASK))) {
+		gboolean forward = !page_up && modifiers != GDK_SHIFT_MASK;
+		if (self->mode == PREVIEW_DOCUMENT)
+			nemo_document_viewer_scroll_page (self->document_viewer, forward);
+		else
+			nemo_paged_viewer_scroll_page (self->paged_viewer, forward);
+		return GDK_EVENT_STOP;
+	}
+	if (editing && event->keyval != GDK_KEY_Escape)
+		return GDK_EVENT_PROPAGATE;
+#endif
 
 	switch (event->keyval) {
 	case GDK_KEY_Escape:
@@ -431,6 +533,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 		return GDK_EVENT_STOP;
 	case GDK_KEY_Left:
 	case GDK_KEY_Right: {
+#ifdef NEMO_SMPL
+		if (modifiers != 0)
+			return GDK_EVENT_PROPAGATE;
+#endif
 #ifdef HAVE_GSTREAMER
 		/* In video preview: Left/Right seek ±20s, clamped to [0, duration]. */
 		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
@@ -464,9 +570,14 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			return GDK_EVENT_STOP;
 		}
 #endif
+#ifdef NEMO_SMPL
+		return GDK_EVENT_PROPAGATE;
+#else
 		navigate_to_offset (self, (event->keyval == GDK_KEY_Right) ? 1 : -1);
 		return GDK_EVENT_STOP;
+#endif
 	}
+#ifndef NEMO_SMPL
 	case GDK_KEY_Page_Up:
 	case GDK_KEY_KP_Page_Up:
 		navigate_to_offset (self, -1);
@@ -475,16 +586,21 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 	case GDK_KEY_KP_Page_Down:
 		navigate_to_offset (self, 1);
 		return GDK_EVENT_STOP;
+#endif
 	case GDK_KEY_space:
+#ifdef HAVE_GSTREAMER
 		if (self->mode == PREVIEW_MEDIA && self->play_btn != NULL) {
 			g_signal_emit_by_name (self->play_btn, "clicked");
 		}
+#endif
 		return GDK_EVENT_STOP;
 	case GDK_KEY_m:
 	case GDK_KEY_M:
+#ifdef HAVE_GSTREAMER
 		if (self->mode == PREVIEW_MEDIA && self->mute_btn != NULL) {
 			g_signal_emit_by_name (self->mute_btn, "clicked");
 		}
+#endif
 		return GDK_EVENT_STOP;
 	case GDK_KEY_f:
 	case GDK_KEY_F:
@@ -613,6 +729,9 @@ on_next_clicked (GtkButton *button, gpointer data)
 static void
 nemo_quick_preview_init (NemoQuickPreview *self)
 {
+#ifdef NEMO_SMPL
+	nemo_global_preferences_init ();
+#endif
 	self->mode = PREVIEW_NONE;
 	self->parent_window = NULL;
 	self->current_file = NULL;
@@ -679,6 +798,13 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	g_signal_connect (self->next_button, "clicked",
 	                  G_CALLBACK (on_next_clicked), self);
 	gtk_header_bar_pack_start (GTK_HEADER_BAR (self->header_bar), self->next_button);
+#ifdef NEMO_SMPL
+	g_signal_connect_object (nemo_keybinding_settings, "changed::quick-preview-previous-file",
+	                         G_CALLBACK (navigation_shortcuts_changed), self, 0);
+	g_signal_connect_object (nemo_keybinding_settings, "changed::quick-preview-next-file",
+	                         G_CALLBACK (navigation_shortcuts_changed), self, 0);
+	navigation_shortcuts_changed (nemo_keybinding_settings, NULL, self);
+#endif
 
 	/* Fullscreen toggle button on the right side */
 	{
@@ -814,6 +940,16 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 #endif
 	gtk_stack_add_named (GTK_STACK (self->stack),
 	                     GTK_WIDGET (self->paged_viewer), "paged");
+	self->document_viewer = nemo_document_viewer_new ();
+#ifdef NEMO_SMPL
+	g_signal_connect (self->document_viewer, "search-changed",
+	                  G_CALLBACK (document_search_changed), self);
+	g_signal_connect (self->document_viewer, "load-finished",
+	                  G_CALLBACK (document_load_finished), self);
+#endif
+	gtk_stack_add_named (GTK_STACK (self->stack),
+	                     GTK_WIDGET (self->document_viewer), "document");
+	gtk_widget_show (GTK_WIDGET (self->document_viewer));
 
 	/* --- Image page — shared NemoImageViewer widget --- */
 	self->image_viewer = nemo_image_viewer_new ();
@@ -944,7 +1080,9 @@ nemo_quick_preview_destroy (GtkWidget *widget)
 
 	if (!self->destroyed) {
 		self->destroyed = TRUE;
+		g_signal_handlers_disconnect_by_func (nemo_keybinding_settings, navigation_shortcuts_changed, self);
 		g_signal_handlers_disconnect_by_data (self->paged_viewer, self);
+		g_signal_handlers_disconnect_by_data (self->document_viewer, self);
 		g_signal_handlers_disconnect_by_data (self->image_viewer, self);
 		g_signal_handlers_disconnect_by_data (self->dir_analyzer, self);
 		preview_clear (self);
@@ -1005,6 +1143,9 @@ preview_clear (NemoQuickPreview *self)
 
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
+	nemo_document_viewer_close (self->document_viewer);
+	self->document_ready = FALSE;
+	gtk_widget_hide (self->search_header_btn);
 	nemo_dir_analyzer_cancel (self->dir_analyzer);
 	nemo_dir_analyzer_clear (self->dir_analyzer);
 
@@ -1298,7 +1439,12 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 	g_free (subtitle);
 
 	/* Decide which view to use */
-	if (nemo_preview_mime_is_image (content_type) || nemo_preview_file_is_raw (file)) {
+	if (nemo_document_viewer_supports_file (file, content_type)) {
+		self->mode = PREVIEW_DOCUMENT;
+		gtk_widget_hide (self->search_header_btn);
+		gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "document");
+		nemo_document_viewer_load_file (self->document_viewer, file, content_type);
+	} else if (nemo_preview_mime_is_image (content_type) || nemo_preview_file_is_raw (file)) {
 		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
 		preview_show_image (self, file);
 	}

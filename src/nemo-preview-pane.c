@@ -24,6 +24,7 @@
 /* nemo-preview-pane.c - embedded file-preview panel for Nemo */
 
 #include <config.h>
+#include "nemo-document-viewer.h"
 #include "nemo-preview-pane.h"
 #include "nemo-preview-details.h"
 #include "nemo-preview-utils.h"
@@ -56,6 +57,7 @@ struct _NemoPreviewPane
 
 	/* Text page (shared paged viewer — handles files of any size) */
 	NemoPagedViewer	*paged_viewer;
+	NemoDocumentViewer *document_viewer;
 
 #ifdef HAVE_GSTREAMER
 	/* Video page */
@@ -948,6 +950,7 @@ refresh_file_preview (NemoPreviewPane *self, NemoFile *file)
 
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
+	nemo_document_viewer_close (self->document_viewer);
 
 #ifdef HAVE_GSTREAMER
 	if (!nemo_preview_mime_is_video (mime) &&
@@ -955,8 +958,12 @@ refresh_file_preview (NemoPreviewPane *self, NemoFile *file)
 		stop_video (self);
 #endif
 
+	GFile *location = nemo_file_get_location (file);
 	if (nemo_file_is_directory (file)) {
 		show_info_preview (self, file);
+	} else if (nemo_document_viewer_supports_file (location, mime)) {
+		gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "document");
+		nemo_document_viewer_load_file (self->document_viewer, location, mime);
 #ifdef HAVE_GSTREAMER
 	} else if (nemo_preview_mime_is_video (mime)) {
 		if (self->pipeline == NULL)
@@ -974,6 +981,7 @@ refresh_file_preview (NemoPreviewPane *self, NemoFile *file)
 	}
 
 	g_free (mime);
+	g_object_unref (location);
 }
 
 static void
@@ -1035,6 +1043,27 @@ nemo_preview_pane_set_file (NemoPreviewPane *self,
 	refresh_file_preview (self, file);
 }
 
+gboolean
+nemo_preview_pane_handle_key_event (NemoPreviewPane *self, GdkEventKey *event)
+{
+	g_return_val_if_fail (NEMO_IS_PREVIEW_PANE (self), FALSE);
+	g_return_val_if_fail (event != NULL, FALSE);
+	if (self->destroyed || (event->state & gtk_accelerator_get_default_mod_mask ()) != 0)
+		return FALSE;
+	gboolean up = event->keyval == GDK_KEY_Page_Up || event->keyval == GDK_KEY_KP_Page_Up;
+	gboolean down = event->keyval == GDK_KEY_Page_Down || event->keyval == GDK_KEY_KP_Page_Down;
+	if (!up && !down)
+		return FALSE;
+	const char *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+	if (g_strcmp0 (page, "document") == 0)
+		nemo_document_viewer_scroll_page (self->document_viewer, down);
+	else if (g_strcmp0 (page, "text") == 0)
+		nemo_paged_viewer_scroll_page (self->paged_viewer, down);
+	else
+		return FALSE;
+	return TRUE;
+}
+
 void
 nemo_preview_pane_clear (NemoPreviewPane *self)
 {
@@ -1046,6 +1075,7 @@ nemo_preview_pane_clear (NemoPreviewPane *self)
 
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
+	nemo_document_viewer_close (self->document_viewer);
 
 #ifdef HAVE_GSTREAMER
 	stop_video (self);
@@ -1076,6 +1106,7 @@ nemo_preview_pane_shutdown (NemoPreviewPane *self)
 	nemo_preview_details_clear (self->details);
 	nemo_image_viewer_clear (self->image_viewer);
 	nemo_paged_viewer_close_file (self->paged_viewer);
+	nemo_document_viewer_close (self->document_viewer);
 
 #ifdef HAVE_GSTREAMER
 	stop_video (self);
@@ -1210,6 +1241,9 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 	gtk_widget_show (self->vpaned);
 
 	self->stack = gtk_stack_new ();
+#ifdef NEMO_SMPL
+	gtk_stack_set_homogeneous (GTK_STACK (self->stack), FALSE);
+#endif
 	gtk_stack_set_transition_type (GTK_STACK (self->stack),
 				      GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_set_transition_duration (GTK_STACK (self->stack), 150);
@@ -1328,6 +1362,9 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 	gtk_stack_add_named (GTK_STACK (self->stack),
 			     GTK_WIDGET (self->paged_viewer), "text");
 	gtk_widget_show (GTK_WIDGET (self->paged_viewer));
+	self->document_viewer = nemo_document_viewer_new ();
+	gtk_stack_add_named (GTK_STACK (self->stack), GTK_WIDGET (self->document_viewer), "document");
+	gtk_widget_show (GTK_WIDGET (self->document_viewer));
 
 	/* Info page (icon only, for non-previewable files) */
 	info_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);

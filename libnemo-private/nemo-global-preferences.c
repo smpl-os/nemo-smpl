@@ -40,6 +40,7 @@
 #include <libnemo-private/nemo-debug.h>
 
 GSettings *nemo_preferences;
+GSettings *nemo_keybinding_settings;
 GSettings *nemo_icon_view_preferences;
 GSettings *nemo_list_view_preferences;
 GSettings *nemo_compact_view_preferences;
@@ -462,6 +463,8 @@ nemo_global_preferences_init (void)
 	initialized = TRUE;
 
 	nemo_preferences = g_settings_new("org.nemo.preferences");
+	if (nemo_keybinding_settings == NULL)
+		nemo_keybinding_settings = g_settings_new ("org.nemo.keybindings");
 	nemo_window_state = g_settings_new("org.nemo.window-state");
 	nemo_icon_view_preferences = g_settings_new("org.nemo.icon-view");
 	nemo_list_view_preferences = g_settings_new("org.nemo.list-view");

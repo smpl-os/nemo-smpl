@@ -432,6 +432,8 @@
     <file alias="nemo-auto-arrange-symbolic.svg" compressed="true">../data/icons/hicolor/actions/scalable/nemo-auto-arrange-symbolic.svg</file>
     <file alias="nemo-cd-burner.svg" compressed="true">default-icons/icons/regular/nemo-cd-burner.svg</file>
     <file alias="nemo-desktop-scale-symbolic.svg" compressed="true">../data/icons/hicolor/actions/scalable/nemo-desktop-scale-symbolic.svg</file>
+    <file alias="nemo-folder-desktop-symbolic.svg" compressed="true">../data/icons/hicolor/places/scalable/nemo-folder-desktop-symbolic.svg</file>
+    <file alias="nemo-folder-favorites-symbolic.svg" compressed="true">../data/icons/hicolor/places/scalable/nemo-folder-favorites-symbolic.svg</file>
     <file alias="nemo-horizontal-layout-symbolic.svg" compressed="true">../data/icons/hicolor/actions/scalable/nemo-horizontal-layout-symbolic.svg</file>
     <file alias="nemo-horizontal-layout-wide-symbolic.svg" compressed="true">../data/icons/hicolor/actions/scalable/nemo-horizontal-layout-wide-symbolic.svg</file>
     <file alias="nemo-location-symbolic.svg" compressed="true">../data/icons/hicolor/actions/scalable/nemo-location-symbolic.svg</file>

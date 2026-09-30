@@ -32,18 +32,22 @@ These features are developed for nemo-smpl and are not expected to be accepted u
 Double Commander-style instant file viewer:
 
 - Text, image (including animated GIFs and camera RAW: DNG, ARW, CR2, NEF…), audio/video (GStreamer), and hex dump modes
+- Native paged Markdown, EPUB, plain UTF-8 FB2, basic DRM-free MOBI, PDF and CBZ previews, shared with the right preview pane; document paging, zoom and F3 search
+- Reflowable book previews follow the active theme's paper/text colors; PDFs and comics retain their original appearance, and embedded images are not inverted
 - Directory analysis: F3 on a folder shows Pareto bar chart + ranked biggest-files list
 - Paged text/hex viewer using `pread()` + LRU cache — handles multi-GB files with ~512 KB resident
 - **Timecode display**: live `hh:mm:ss:ff` timestamp (monospace) with auto-detected framerate
 - **Frame stepping**: `<` (comma) steps back one frame, `>` (period) steps forward — pauses playback automatically, like YouTube
-- **Keyboard media controls**: Space = play/pause, M = mute/unmute, F = fullscreen, ← → = navigate files
+- **Keyboard controls**: PgUp/PgDn scroll the current document; configurable Ctrl+Left/Right switch files. In media, Space = play/pause, M = mute/unmute, and Left/Right seek. F toggles fullscreen outside text entry.
 - **Image controls**: Fit fills the preview without distorting the image; wheel zoom anchors at the pointer, and left-button dragging pans zoomed images without allocating a full zoomed bitmap
 - **RAW previews**: camera RAW files are decoded with LibRaw rather than accepting an embedded TIFF thumbnail
 - **Filename footer**: the current filename stays visible at the bottom, including fullscreen
 - **File information (I)**: toggle file and available camera metadata, with an OpenStreetMap location map when GPS coordinates exist (uncached tiles require network access)
 - Escape to dismiss; singleton window reused across invocations
 - Split view moved to Ctrl+F3
-- Modular architecture: `NemoImageViewer`, `NemoPreviewDetails`, `NemoPagedViewer`, `NemoPreviewUtils` shared between sidebar pane and quick preview
+- File-pane and right-preview dividers use a theme-aware 1-pixel line with a wider invisible resize target
+- Modular architecture: `NemoImageViewer`, `NemoPreviewDetails`, `NemoPagedViewer`, `NemoDocumentViewer`, `NemoPreviewUtils` shared between sidebar pane and quick preview
+- Document converters run offline in a restricted Bubblewrap process. No DRM, browser scripts, or unsandboxed conversion fallback; unsupported variants and limits are reported explicitly.
 
 ### Shared Directory Analyzer Widget
 
@@ -171,8 +175,17 @@ Double Commander-style instant file viewer:
 
 ### Other Enhancements
 
+- **Zen mode (Alt+Z)** — per-window panes and location bars only, with normal layout restoration and no changes to saved visibility preferences. Its shortcut is configurable; the pane context menu also provides an exit. Active transfers continue in the background.
+- **Theme-aware file appearance** — optional, default-on filename colors for common file types with background-adjusted contrast, plus outline-style file icons and distinct standard-folder icons. Selection and high-contrast text colors, thumbnails, cover art and custom icons are preserved. Both preferences update live in Views.
+- **Expandable Favorites sidebar** — list every saved file and folder beneath Favorites, with live updates, name sorting, keyboard navigation and a remembered expanded/collapsed state.
+- **Remember folders by default** — reopen the last closed window's folders, tabs and split-pane state, including its active pane; configurable in Behavior preferences. Search tabs remember their starting folder, and explicit folder launches override restoration.
+- **Breadcrumb favorites and bookmarks** — right-click any breadcrumb directory to save that location without navigating there. Ctrl+D bookmarks the current folder; Ctrl+Alt+B adds it to Favorites. Both shortcuts are configurable.
 - **Configurable Keyboard Shortcuts** — edit all keybindings via preferences, including media controls (`toggle-mute`, `toggle-play`)
+- **Live toolbar shortcut hints** — hover over a toolbar button to see its action and current shortcuts on separate lines; changes in shortcut preferences are reflected immediately.
+- **Ctrl+arrow folder navigation** — Ctrl+Left/Right move through visited folders, Ctrl+Up opens the parent, and Ctrl+Down opens the selected folder in the current pane without launching files. All four are configurable; existing Alt navigation and text-entry editing are preserved, and new defaults do not overwrite assigned chords.
 - **Substring Search** — match anywhere in filename, not just prefix
+- **Type-to-jump ranking** — consecutive, case-insensitive filename matches; prefixes come before infix matches without reordering or filtering the panel. Matching text is bold while the query is active, including Unicode filenames.
+- **Type-to-jump navigation** — Up/Left move to the previous match, Down/Right to the next; Ctrl+G and Ctrl+Shift+G remain available. All are configurable in the Type to Jump keyboard-shortcut category and apply only during typing mode.
 - Search empty-state messages appear only after an empty search completes and clear when results arrive or a new search starts
 - **Search return navigation**: Escape and non-editing Backspace leave search results and return to the starting folder, including cancellation while a search is still loading.
 - **Containing folders**: Ctrl+Alt+O opens a selected result's folder and highlights the item; Ctrl+Alt+Shift+O opens it in the other pane without replacing the search. Both actions are available in the context menu and configurable in Keyboard Shortcuts.

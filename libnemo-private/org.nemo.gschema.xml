@@ -115,7 +115,7 @@
     <key name="interactive-search-mode" enum="org.nemo.InteractiveSearchMode">
       <default>'substring'</default>
       <summary>Behavior when typing letters inside a folder view</summary>
-      <description>Selects how "type-to-find" works in icon and list views. "prefix" is the historical Nemo behavior (select files whose name starts with the typed text). "substring" (smplOS default) selects files whose name contains the typed text anywhere. "filter" uses the upstream 6.7 filter bar with fuzzy (fzy) matching that hides non-matching files.</description>
+      <description>Selects how "type-to-find" works in icon and list views. "prefix" selects filenames starting with the typed text. "substring" (smplOS default) uses consecutive, case-insensitive characters anywhere in the filename, prioritizing matches at the beginning. Matching text is highlighted while typing. "filter" uses the fuzzy (fzy) filter bar and hides non-matching files.</description>
     </key>
     <!-- smplOS: safe cross-filesystem copy (removable / slow media) -->
     <key name="safe-cross-fs-copy" type="b">
@@ -314,6 +314,16 @@
       <summary>Show favorites first in windows</summary>
       <description>If set to true, then Nemo shows favorites prior to other files in the icon and list views.</description>
     </key>
+    <key name="file-type-colors" type="b">
+      <default>true</default>
+      <summary>Use theme-aware file-type colors for filenames</summary>
+      <description>Distinguish folders and common file types using colors adjusted for the view background. Dark backgrounds use brighter non-green colors and neutral grey file details. Selected and insensitive items and high-contrast themes keep their normal theme colors.</description>
+    </key>
+    <key name="symbolic-file-icons" type="b">
+      <default>true</default>
+      <summary>Use outline-style file and folder icons</summary>
+      <description>Use theme-aware symbolic icons for files and standard folders while preserving thumbnails, folder cover art and custom icons.</description>
+    </key>
     <key name="show-preview-pane" type="b">
       <default>false</default>
       <summary>Show the preview pane by default in newly visited folders</summary>
@@ -403,9 +413,9 @@
       <description>If set to true, each pane in dual-pane mode will show a compact path label above its file list</description>
     </key>
     <key name="restore-tabs-on-startup" type="b">
-      <default>false</default>
-      <summary>Restore the previous window tabs on startup</summary>
-      <description>If set to true, Nemo will restore the last saved window tab state when launched without explicit locations.</description>
+      <default>true</default>
+      <summary>Remember folders, tabs and panes when closing Nemo</summary>
+      <description>If set to true, Nemo saves the last closed window's folders, tabs and active pane and restores them when launched without explicit locations. Search tabs reopen their starting folder rather than temporary search results. Explicitly requested locations are opened normally.</description>
     </key>
     <key name="ignore-view-metadata" type="b">
       <default>false</default>
@@ -750,6 +760,11 @@
       <summary>Expand Network section in places sidebar</summary>
       <description>View state storage for My Computer in places sidebar</description>
     </key>
+    <key name="favorites-expanded" type="b">
+      <default>true</default>
+      <summary>Expand Favorites in the Places sidebar</summary>
+      <description>Remember whether the saved files and folders beneath Favorites are visible.</description>
+    </key>
     <key name="side-pane-view" type="s">
       <choices>
 	<choice value='places'/>
@@ -789,6 +804,11 @@
       <default>0</default>
       <summary>Index of the active tab in the right pane</summary>
       <description>Internal setting used to restore which tab was active in the right pane.</description>
+    </key>
+    <key name="saved-active-pane" type="i">
+      <range min="0" max="1"/>
+      <default>0</default>
+      <summary>Active pane in the last closed window (left or right)</summary>
     </key>
   </schema>
 
@@ -1020,6 +1040,22 @@
       <default>'&lt;Alt&gt;Up'</default>
       <summary>Go to parent folder</summary>
     </key>
+    <key name="go-back-alt" type="s">
+      <default>'&lt;Control&gt;Left'</default>
+      <summary>Go back in directory history (alternate)</summary>
+    </key>
+    <key name="go-forward-alt" type="s">
+      <default>'&lt;Control&gt;Right'</default>
+      <summary>Go forward in directory history (alternate)</summary>
+    </key>
+    <key name="go-up-secondary" type="s">
+      <default>'&lt;Control&gt;Up'</default>
+      <summary>Go to parent folder (second alternate)</summary>
+    </key>
+    <key name="go-down" type="s">
+      <default>'&lt;Control&gt;Down'</default>
+      <summary>Open the selected folder in the current pane</summary>
+    </key>
     <key name="go-home" type="s">
       <default>'&lt;Alt&gt;Home'</default>
       <summary>Go to home folder</summary>
@@ -1066,6 +1102,10 @@
       <default>'F9'</default>
       <summary>Toggle sidebar</summary>
     </key>
+    <key name="toggle-zen-mode" type="s">
+      <default>'&lt;Alt&gt;z'</default>
+      <summary>Toggle Zen mode (file panes and location bars only)</summary>
+    </key>
     <key name="split-view" type="s">
       <default>'&lt;Control&gt;F3'</default>
       <summary>Toggle split view</summary>
@@ -1111,6 +1151,40 @@
     <key name="quick-preview-search-prev" type="s">
       <default>'&lt;Shift&gt;F3'</default>
       <summary>Previous search match in Quick Preview</summary>
+    </key>
+    <key name="quick-preview-previous-file" type="s">
+      <default>'&lt;Control&gt;Left'</default>
+      <summary>Previous file in Quick Preview</summary>
+    </key>
+    <key name="quick-preview-next-file" type="s">
+      <default>'&lt;Control&gt;Right'</default>
+      <summary>Next file in Quick Preview</summary>
+    </key>
+
+    <!-- Contextual navigation while typing a filename -->
+    <key name="type-jump-next" type="s">
+      <default>'Down'</default>
+      <summary>Next matching filename while typing</summary>
+    </key>
+    <key name="type-jump-previous" type="s">
+      <default>'Up'</default>
+      <summary>Previous matching filename while typing</summary>
+    </key>
+    <key name="type-jump-next-alt" type="s">
+      <default>'Right'</default>
+      <summary>Next matching filename with the right arrow</summary>
+    </key>
+    <key name="type-jump-previous-alt" type="s">
+      <default>'Left'</default>
+      <summary>Previous matching filename with the left arrow</summary>
+    </key>
+    <key name="type-jump-next-secondary" type="s">
+      <default>'&lt;Control&gt;g'</default>
+      <summary>Next matching filename (alternate)</summary>
+    </key>
+    <key name="type-jump-previous-secondary" type="s">
+      <default>'&lt;Control&gt;&lt;Shift&gt;g'</default>
+      <summary>Previous matching filename (alternate)</summary>
     </key>
 
     <!-- Tabs -->
@@ -1165,6 +1239,10 @@
     <key name="add-bookmark" type="s">
       <default>'&lt;Control&gt;d'</default>
       <summary>Add bookmark</summary>
+    </key>
+    <key name="add-favorite" type="s">
+      <default>'&lt;Control&gt;&lt;Alt&gt;b'</default>
+      <summary>Add the current folder to Favorites</summary>
     </key>
     <key name="edit-bookmarks" type="s">
       <default>'&lt;Control&gt;b'</default>

@@ -75,7 +75,8 @@ jobs:
                 gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop \
                 libexif libraw exempi gstreamer gst-plugins-base-libs \
                 pango gobject-introspection libgsf python zstd \
-                dbus xorg-server-xvfb xorg-xauth
+                dbus xorg-server-xvfb xorg-xauth \
+                md4c poppler-glib mupdf-tools bubblewrap
 
               meson setup build \
                 --prefix=/usr \
@@ -115,7 +116,7 @@ jobs:
             gdk-pixbuf2 glib2 glibc gtk3 gvfs gvfs-mtp hicolor-icon-theme
             json-glib libexif libx11 libxmlb pango python python-cairo
             python-gobject xapp gstreamer gst-plugins-base gst-plugins-good
-            webp-pixbuf-loader libraw
+            webp-pixbuf-loader libraw md4c poppler-glib mupdf-tools bubblewrap
           )
           provides=(nemo)
           conflicts=(nemo)

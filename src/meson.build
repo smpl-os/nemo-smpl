@@ -55,7 +55,6 @@ nemoCommon_sources = [
   'nemo-overview.c',
   'nemo-dir-analyzer.c',
   'nemo-pathbar.c',
-  'nemo-places-sidebar.c',
   'nemo-plugin-manager.c',
   'nemo-previewer.c',
   'nemo-preview-pane.c',
@@ -64,6 +63,7 @@ nemoCommon_sources = [
   'nemo-image-viewer.c',
   'nemo-quick-preview.c',
   'nemo-paged-viewer.c',
+  'nemo-document-viewer.c',
   'nemo-progress-info-widget.c',
   'nemo-progress-ui-handler.c',
   'nemo-properties-window.c',
@@ -111,6 +111,8 @@ nemoDesktop_headers = [
 if enableEmptyView
   nemoCommon_sources += 'nemo-empty-view.c'
 endif
+sidebar_favorites_test_sources = nemoCommon_sources + ['nemo-main-application.c', 'nemo-view.c']
+nemoCommon_sources += 'nemo-places-sidebar.c'
 
 nemo_deps = [ cinnamon, gail, glib, gtk, math,
   egg, nemo_extension, nemo_private, xapp ]
@@ -136,6 +138,17 @@ endif
 
 if libraw_enabled
   nemo_deps += libraw
+endif
+
+if document_preview_enabled
+  document_renderer = executable('nemo-document-renderer',
+    'nemo-document-renderer.c',
+    include_directories: [rootInclude],
+    c_args: nemo_definitions,
+    dependencies: [md4c_html, poppler_glib, gio, json, math],
+    install: true,
+    install_dir: get_option('libexecdir'),
+  )
 endif
 
 nemo = executable('nemo',

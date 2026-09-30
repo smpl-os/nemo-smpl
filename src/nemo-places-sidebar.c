@@ -59,6 +59,7 @@
 #include "nemo-actions.h"
 #include "nemo-application.h"
 #include "nemo-bookmark-list.h"
+#include "nemo-mime-actions.h"
 #include "nemo-places-sidebar.h"
 #include "nemo-properties-window.h"
 #include "nemo-window.h"
@@ -67,7 +68,9 @@
 #define DEBUG_FLAG NEMO_DEBUG_PLACES
 #include <libnemo-private/nemo-debug.h>
 
+#ifndef NEMO_SMPL
 #define EXPANDER_PAD_COLUMN_WIDTH 4
+#endif
 #define EJECT_COLUMN_MIN_WIDTH 22
 #define EJECT_COLUMN_MAX_WIDTH 60
 #define DRAG_EXPAND_CATEGORY_DELAY 500
@@ -85,6 +88,7 @@ static gint menu_icon_pixels = 16;
 typedef struct {
 	GtkScrolledWindow  parent;
 	GtkTreeView        *tree_view;
+    GtkTreeViewColumn  *name_column;
     GtkTreeViewColumn  *eject_column;
     GtkCellRenderer    *eject_icon_cell_renderer;
     GtkCellRenderer    *editable_renderer;
@@ -134,6 +138,9 @@ typedef struct {
     gboolean bookmarks_expanded;
     gboolean devices_expanded;
     gboolean network_expanded;
+#ifdef NEMO_SMPL
+    gboolean favorites_expanded;
+#endif
 
     gboolean updating_sidebar;
 
@@ -210,6 +217,8 @@ typedef enum {
 	PLACES_MOUNTED_VOLUME,
 	PLACES_BOOKMARK,
 	PLACES_HEADING,
+	PLACES_FAVORITES,
+	PLACES_FAVORITE,
 } PlaceType;
 
 typedef enum {
@@ -452,7 +461,7 @@ free_place_info (PlaceInfo *info)
 }
 
 static GtkTreeIter
-add_place (NemoPlacesSidebar *sidebar,
+add_place_row (NemoPlacesSidebar *sidebar,
 	   PlaceType place_type,
 	   SectionType section_type,
 	   const char *name,
@@ -471,8 +480,6 @@ add_place (NemoPlacesSidebar *sidebar,
     GIcon *gicon;
 	gboolean show_eject, show_unmount;
 	gboolean show_eject_button;
-
-	cat_iter = check_heading_for_devices (sidebar, section_type, cat_iter);
 
 	check_unmount_and_eject (mount, volume, drive,
 				 &show_unmount, &show_eject);
@@ -512,8 +519,57 @@ add_place (NemoPlacesSidebar *sidebar,
 
     g_clear_object (&gicon);
 
+    return iter;
+}
+
+static GtkTreeIter
+add_place (NemoPlacesSidebar *sidebar,
+           PlaceType place_type, SectionType section_type,
+           const char *name, const char *icon_name, const char *uri,
+           GDrive *drive, GVolume *volume, GMount *mount,
+           int index, const char *tooltip, int df_percent,
+           gboolean show_df_percent, GtkTreeIter cat_iter)
+{
+    cat_iter = check_heading_for_devices (sidebar, section_type, cat_iter);
+    add_place_row (sidebar, place_type, section_type, name, icon_name, uri,
+                   drive, volume, mount, index, tooltip, df_percent,
+                   show_df_percent, cat_iter);
     return cat_iter;
 }
+
+#ifdef NEMO_SMPL
+static gint
+compare_favorites (gconstpointer a, gconstpointer b)
+{
+    const XAppFavoriteInfo *first = a, *second = b;
+    gint order = g_utf8_collate (first->display_name, second->display_name);
+    return order != 0 ? order : g_strcmp0 (first->uri, second->uri);
+}
+
+static void
+add_favorites (NemoPlacesSidebar *sidebar, GtkTreeIter parent)
+{
+    GtkTreeIter favorites = add_place_row (sidebar, PLACES_FAVORITES, SECTION_COMPUTER,
+        _("Favorites"), NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES, "favorites:///",
+        NULL, NULL, NULL, -1, _("Favorite files and folders"), 0, FALSE, parent);
+    GList *items = xapp_favorites_get_favorites (xapp_favorites_get_default (), NULL);
+    items = g_list_sort (items, compare_favorites);
+    for (GList *l = items; l != NULL; l = l->next) {
+        XAppFavoriteInfo *info = l->data;
+        GFile *location = g_file_new_for_uri (info->uri);
+        g_autofree char *tooltip = g_file_get_parse_name (location);
+        GtkTreeIter item = add_place_row (sidebar, PLACES_FAVORITE, SECTION_COMPUTER,
+            info->display_name, NULL, info->uri, NULL, NULL, NULL, -1,
+            tooltip, 0, FALSE, favorites);
+        GIcon *icon = g_content_type_get_symbolic_icon (info->cached_mimetype != NULL ?
+                                                      info->cached_mimetype : "application/octet-stream");
+        gtk_tree_store_set (sidebar->store, &item, PLACES_SIDEBAR_COLUMN_GICON, icon, -1);
+        g_object_unref (icon);
+        g_object_unref (location);
+    }
+    g_list_free_full (items, (GDestroyNotify) xapp_favorite_info_free);
+}
+#endif
 
 typedef struct {
 	const gchar *location;
@@ -559,6 +615,14 @@ restore_expand_state_foreach (GtkTreeModel *model,
                 PLACES_SIDEBAR_COLUMN_SECTION_TYPE, &section_type,
                 -1);
 
+#ifdef NEMO_SMPL
+    if (place_type == PLACES_FAVORITES && sidebar->my_computer_expanded) {
+        if (sidebar->favorites_expanded)
+            gtk_tree_view_expand_row (sidebar->tree_view, path, FALSE);
+        else
+            gtk_tree_view_collapse_row (sidebar->tree_view, path);
+    }
+#endif
     if (place_type == PLACES_HEADING) {
         if (section_type == SECTION_COMPUTER) {
             if (sidebar->my_computer_expanded)
@@ -1598,7 +1662,11 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
         /* desktop */
         desktop_path = nemo_get_desktop_directory ();
         mount_uri = g_filename_to_uri (desktop_path, NULL, NULL);
+#ifdef NEMO_SMPL
+        icon = g_strdup (NEMO_ICON_SYMBOLIC_DESKTOP);
+#else
         icon = get_icon_name (mount_uri);
+#endif
         cat_iter = add_place (sidebar, PLACES_BUILT_IN,
                                SECTION_COMPUTER,
                                _("Desktop"), icon,
@@ -1653,12 +1721,16 @@ gvfs_mtp_available = (g_file_test ("/usr/lib/gvfsd-mtp", G_FILE_TEST_EXISTS) ||
 
         if (n > 0) {
             mount_uri = (char *)"favorites:///"; /* No need to strdup */
+#ifdef NEMO_SMPL
+            add_favorites (sidebar, cat_iter);
+#else
             icon = "xsi-user-favorites-symbolic";
             cat_iter = add_place (sidebar, PLACES_BUILT_IN,
                                   SECTION_COMPUTER,
                                   _("Favorites"), icon, mount_uri,
                                   NULL, NULL, NULL, 0,
                                   _("Favorite files"), 0, FALSE, cat_iter);
+#endif
 
             sidebar->bottom_bookend_uri = g_strdup (mount_uri);
         }
@@ -2600,7 +2672,7 @@ compute_drop_position (GtkTreeView *tree_view,
         }
         CategoryExpandPayload *payload;
         GtkTreeViewColumn *col;
-        col = gtk_tree_view_get_column (GTK_TREE_VIEW (tree_view), 2);
+        col = sidebar->name_column;
         payload = g_new0 (CategoryExpandPayload, 1);
         payload->sidebar = sidebar;
         gtk_tree_view_get_cell_area (tree_view,
@@ -2639,9 +2711,20 @@ compute_drop_position (GtkTreeView *tree_view,
         goto fail;
     }
 
+#ifdef NEMO_SMPL
+    if (place_type == PLACES_FAVORITE) {
+        XAppFavoriteInfo *info = xapp_favorites_find_by_uri (xapp_favorites_get_default (), drop_target_uri);
+        if (info == NULL || g_strcmp0 (info->cached_mimetype, "inode/directory") != 0)
+            goto fail;
+        *pos = GTK_TREE_VIEW_DROP_INTO_OR_BEFORE;
+        g_free (drop_target_uri);
+        return TRUE;
+    }
+#endif
+
     GdkRectangle rect;
     GtkTreeViewColumn *col;
-    col = gtk_tree_view_get_column (GTK_TREE_VIEW (tree_view), 1);
+    col = sidebar->name_column;
     gtk_tree_view_get_cell_area (tree_view,
                                      *path,
                                      col,
@@ -3461,6 +3544,19 @@ open_selected_bookmark (NemoPlacesSidebar *sidebar,
 	gtk_tree_model_get (model, iter, PLACES_SIDEBAR_COLUMN_URI, &uri, -1);
 
 	if (uri != NULL) {
+#ifdef NEMO_SMPL
+        PlaceType type;
+        gtk_tree_model_get (model, iter, PLACES_SIDEBAR_COLUMN_ROW_TYPE, &type, -1);
+        if (type == PLACES_FAVORITE) {
+            NemoFile *file = nemo_file_get_by_uri (uri);
+            nemo_mime_activate_file (GTK_WINDOW (sidebar->window),
+                                    nemo_window_get_active_slot (sidebar->window),
+                                    file, NULL, flags);
+            nemo_file_unref (file);
+            g_free (uri);
+            return;
+        }
+#endif
         if (g_str_has_prefix (uri, "mtp-hint://")) {
             eel_show_error_dialog (_("MTP support not installed"),
                            _("Install gvfs-mtp to access phones over USB (MTP).\n\nIf your phone is connected, unlock it and choose \"File Transfer\" (MTP), then try again."),
@@ -3624,7 +3720,7 @@ rename_selected_bookmark (NemoPlacesSidebar *sidebar)
 		}
 
 		path = gtk_tree_model_get_path (GTK_TREE_MODEL (sidebar->store_filter), &iter);
-		column = gtk_tree_view_get_column (GTK_TREE_VIEW (sidebar->tree_view), 2);
+		column = sidebar->name_column;
 		g_object_set (sidebar->editable_renderer, "editable", TRUE, NULL);
 		gtk_tree_view_set_cursor_on_cell (GTK_TREE_VIEW (sidebar->tree_view),
 						path, column, sidebar->editable_renderer, TRUE);
@@ -4144,78 +4240,50 @@ find_prev_or_next_row (NemoPlacesSidebar *sidebar,
 		       gboolean go_up)
 {
 	GtkTreeModel *model = GTK_TREE_MODEL (sidebar->store_filter);
-	GtkTreeIter saved = *iter;
-	gboolean res;
-	int place_type;
-	int section_type;
+	GtkTreePath *path = gtk_tree_model_get_path (model, iter);
+	GtkTreeIter candidate;
+	gboolean found = FALSE;
 
-	if (go_up) {
-		res = gtk_tree_model_iter_previous (model, iter);
-	} else {
-		res = gtk_tree_model_iter_next (model, iter);
-	}
-
-	if (res) {
-		gtk_tree_model_get (model, iter,
-				    PLACES_SIDEBAR_COLUMN_ROW_TYPE, &place_type,
-				    -1);
-		if (place_type == PLACES_HEADING) {
-			if (go_up) {
-				res = gtk_tree_model_iter_previous (model, iter);
-			} else {
-				res = gtk_tree_model_iter_next (model, iter);
-			}
-		}
-		return res;
-	}
-
-	/* iter is now invalid after failed iter_next/iter_previous.
-	 * Restore from saved copy so we can look up the parent. */
-	*iter = saved;
-
-	/* No more siblings — cross into the next/previous section.
-	 * Walk up to the parent heading, move to the adjacent heading,
-	 * then descend into its first (down) or last (up) child. */
-	{
-		GtkTreeIter parent;
-		if (!gtk_tree_model_iter_parent (model, &parent, iter)) {
-			return FALSE; /* already at top level */
-		}
-
+	while (gtk_tree_path_get_depth (path) > 0) {
 		if (go_up) {
-			/* Move to the previous heading */
-			while (gtk_tree_model_iter_previous (model, &parent)) {
-				gtk_tree_model_get (model, &parent,
-						    PLACES_SIDEBAR_COLUMN_ROW_TYPE, &place_type,
-						    PLACES_SIDEBAR_COLUMN_SECTION_TYPE, &section_type,
-						    -1);
-				if (place_type == PLACES_HEADING &&
-				    cat_is_expanded (sidebar, (SectionType) section_type)) {
-					int n = gtk_tree_model_iter_n_children (model, &parent);
-					if (n > 0) {
-						gtk_tree_model_iter_nth_child (model, iter, &parent, n - 1);
-						return TRUE;
-					}
+			if (gtk_tree_path_prev (path)) {
+				gtk_tree_model_get_iter (model, &candidate, path);
+				while (gtk_tree_view_row_expanded (sidebar->tree_view, path)) {
+					int count = gtk_tree_model_iter_n_children (model, &candidate);
+					if (count == 0)
+						break;
+					gtk_tree_path_append_index (path, count - 1);
+					gtk_tree_model_get_iter (model, &candidate, path);
 				}
+			} else if (!gtk_tree_path_up (path) || gtk_tree_path_get_depth (path) == 0) {
+				break;
 			}
+		} else if (gtk_tree_view_row_expanded (sidebar->tree_view, path)) {
+			gtk_tree_path_down (path);
 		} else {
-			/* Move to the next heading */
-			while (gtk_tree_model_iter_next (model, &parent)) {
-				gtk_tree_model_get (model, &parent,
-						    PLACES_SIDEBAR_COLUMN_ROW_TYPE, &place_type,
-						    PLACES_SIDEBAR_COLUMN_SECTION_TYPE, &section_type,
-						    -1);
-				if (place_type == PLACES_HEADING &&
-				    cat_is_expanded (sidebar, (SectionType) section_type)) {
-					if (gtk_tree_model_iter_children (model, iter, &parent)) {
-						return TRUE;
-					}
-				}
+			/* Climb out of nested Favorites before advancing to the next section. */
+			while (gtk_tree_path_get_depth (path) > 0) {
+				gtk_tree_path_next (path);
+				if (gtk_tree_model_get_iter (model, &candidate, path))
+					break;
+				gtk_tree_path_up (path);
 			}
+			if (gtk_tree_path_get_depth (path) == 0)
+				break;
+		}
+
+		if (!gtk_tree_model_get_iter (model, &candidate, path))
+			break;
+		PlaceType type;
+		gtk_tree_model_get (model, &candidate, PLACES_SIDEBAR_COLUMN_ROW_TYPE, &type, -1);
+		if (type != PLACES_HEADING) {
+			*iter = candidate;
+			found = TRUE;
+			break;
 		}
 	}
-
-	return FALSE;
+	gtk_tree_path_free (path);
+	return found;
 }
 
 static gboolean
@@ -4596,6 +4664,7 @@ bookmarks_button_release_event_cb (GtkWidget *widget,
 	GtkTreeIter iter;
 	GtkTreeModel *model;
 	GtkTreeView *tree_view;
+	GtkTreeViewColumn *column;
 	gboolean res;
 
 	path = NULL;
@@ -4621,7 +4690,7 @@ bookmarks_button_release_event_cb (GtkWidget *widget,
 		}
 
 		res = gtk_tree_view_get_path_at_pos (tree_view, (int) event->x, (int) event->y,
-						     &path, NULL, NULL, NULL);
+						     &path, &column, NULL, NULL);
 
 		if (!res) {
 			return FALSE;
@@ -4629,7 +4698,16 @@ bookmarks_button_release_event_cb (GtkWidget *widget,
 
 		gtk_tree_model_get_iter (model, &iter, path);
 
-		open_selected_bookmark (sidebar, model, &iter, 0);
+		gboolean on_expander = FALSE;
+		if (column == gtk_tree_view_get_expander_column (tree_view)) {
+			GdkRectangle cell;
+			gtk_tree_view_get_cell_area (tree_view, path, column, &cell);
+			/* GTK excludes the arrow/indentation from this rectangle, in
+			 * both text directions. The rest of the row still opens it. */
+			on_expander = event->x < cell.x || event->x >= cell.x + cell.width;
+		}
+		if (!on_expander)
+			open_selected_bookmark (sidebar, model, &iter, 0);
 
 		gtk_tree_path_free (path);
 	}
@@ -4874,12 +4952,21 @@ update_expanded_state (GtkTreeView *tree_view,
         return;
 
     SectionType type;
-    GtkTreeIter heading_iter;
+    PlaceType place_type;
     GtkTreeModel *model = gtk_tree_view_get_model (tree_view);
-    gtk_tree_model_get_iter (GTK_TREE_MODEL (model), &heading_iter, path);
     gtk_tree_model_get (model, iter,
                     PLACES_SIDEBAR_COLUMN_SECTION_TYPE, &type,
+                    PLACES_SIDEBAR_COLUMN_ROW_TYPE, &place_type,
                     -1);
+#ifdef NEMO_SMPL
+    if (place_type == PLACES_FAVORITES) {
+        sidebar->favorites_expanded = expanded;
+        g_settings_set_boolean (nemo_window_state, NEMO_WINDOW_STATE_FAVORITES_EXPANDED, expanded);
+        return;
+    }
+#endif
+    if (place_type != PLACES_HEADING)
+        return;
     if (type == SECTION_COMPUTER) {
         sidebar->my_computer_expanded = expanded;
         g_settings_set_boolean (nemo_window_state, NEMO_WINDOW_STATE_MY_COMPUTER_EXPANDED, expanded);
@@ -4920,6 +5007,11 @@ row_expanded_cb (GtkTreeView *tree_view,
                            path,
                            user_data,
                            TRUE);
+#ifdef NEMO_SMPL
+    NemoPlacesSidebar *sidebar = NEMO_PLACES_SIDEBAR (user_data);
+    if (!sidebar->updating_sidebar)
+        restore_expand_state (sidebar);
+#endif
 }
 
 static void
@@ -5079,6 +5171,9 @@ padding_cell_renderer_func (GtkTreeViewColumn *column,
 	} else {
 		g_object_set (cell,
 			      "visible", TRUE,
+#ifdef NEMO_SMPL
+			      "xpad", 0,
+#endif
 			      "ypad", 3,
 			      NULL);
 	}
@@ -5139,7 +5234,10 @@ static void
 nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
 {
 	GtkTreeView       *tree_view;
-	GtkTreeViewColumn *primary_column, *expander_column, *expander_pad_column;
+	GtkTreeViewColumn *primary_column;
+#ifndef NEMO_SMPL
+	GtkTreeViewColumn *expander_column, *expander_pad_column;
+#endif
 	GtkCellRenderer   *cell;
 	GtkTreeSelection  *selection;
 	GtkStyleContext   *style_context;
@@ -5173,6 +5271,10 @@ nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
                                                         NEMO_WINDOW_STATE_DEVICES_EXPANDED);
     sidebar->network_expanded = g_settings_get_boolean (nemo_window_state,
                                                         NEMO_WINDOW_STATE_NETWORK_EXPANDED);
+#ifdef NEMO_SMPL
+    sidebar->favorites_expanded = g_settings_get_boolean (nemo_window_state,
+                                                          NEMO_WINDOW_STATE_FAVORITES_EXPANDED);
+#endif
 
     gtk_widget_set_size_request (GTK_WIDGET (sidebar), 140, -1);
 
@@ -5195,6 +5297,7 @@ nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
 	gtk_tree_view_set_headers_visible (tree_view, FALSE);
 
     primary_column = GTK_TREE_VIEW_COLUMN (gtk_tree_view_column_new ());
+    sidebar->name_column = primary_column;
     gtk_tree_view_column_set_max_width (GTK_TREE_VIEW_COLUMN (primary_column), NEMO_ICON_SIZE_SMALLER);
     gtk_tree_view_column_set_expand (primary_column, TRUE);
 
@@ -5307,6 +5410,7 @@ nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
         g_object_set (cell, "width", 2, NULL);
     }
 
+#ifndef NEMO_SMPL
     expander_pad_column = GTK_TREE_VIEW_COLUMN (gtk_tree_view_column_new());
     gtk_tree_view_column_set_sizing (expander_pad_column, GTK_TREE_VIEW_COLUMN_FIXED);
     gtk_tree_view_column_set_fixed_width (expander_pad_column, EXPANDER_PAD_COLUMN_WIDTH);
@@ -5320,10 +5424,15 @@ nemo_places_sidebar_init (NemoPlacesSidebar *sidebar)
 
     gtk_tree_view_append_column (tree_view, expander_pad_column);
     gtk_tree_view_append_column (tree_view, expander_column);
+#endif
 	gtk_tree_view_append_column (tree_view, primary_column);
     gtk_tree_view_append_column (tree_view, sidebar->eject_column);
 
+#ifdef NEMO_SMPL
+    gtk_tree_view_set_expander_column (tree_view, primary_column);
+#else
     gtk_tree_view_set_expander_column (tree_view, expander_column);
+#endif
 
 	sidebar->store = nemo_shortcuts_model_new (sidebar);
 	gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (sidebar->store),

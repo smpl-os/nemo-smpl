@@ -33,7 +33,7 @@
 #define NEMO_ICON_BURN		"nemo-cd-burner"
 
 #define NEMO_ICON_SYMBOLIC_COMPUTER      "xsi-computer-symbolic"
-#define NEMO_ICON_SYMBOLIC_DESKTOP       "xsi-user-desktop-symbolic"
+#define NEMO_ICON_SYMBOLIC_DESKTOP       "nemo-folder-desktop-symbolic"
 #define NEMO_ICON_SYMBOLIC_FILESYSTEM    "xsi-drive-harddisk-symbolic"
 #define NEMO_ICON_SYMBOLIC_FOLDER        "xsi-folder-symbolic"
 #define NEMO_ICON_SYMBOLIC_FOLDER_REMOTE "xsi-folder-remote-symbolic"
@@ -52,7 +52,7 @@
 #define NEMO_ICON_SYMBOLIC_FOLDER_VIDEOS     "xsi-folder-videos-symbolic"
 #define NEMO_ICON_SYMBOLIC_FOLDER_SAVED_SEARCH "xsi-folder-saved-search-symbolic"
 #define NEMO_ICON_SYMBOLIC_FOLDER_RECENT "xsi-folder-recent-symbolic"
-#define NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES "xsi-user-favorites-symbolic"
+#define NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES "nemo-folder-favorites-symbolic"
 
 #define NEMO_ICON_SYMBOLIC_MISSING_BOOKMARK "xsi-folder-warning-symbolic"
 
@@ -64,4 +64,3 @@
 
 
 #endif /* NEMO_ICON_NAMES_H */
-

@@ -46,6 +46,7 @@ typedef struct _NemoNotebook		NemoNotebook;
 struct _NemoNotebook
 {
 	GtkNotebook parent;
+	gboolean zen_mode;
 };
 
 struct _NemoNotebookClass
@@ -69,6 +70,7 @@ gint		nemo_notebook_find_tab_num_at_pos (NemoNotebook *nb,
 	
 void		nemo_notebook_set_show_tabs	(NemoNotebook *nb,
 						 gboolean show_tabs);
+void            nemo_notebook_set_zen_mode       (NemoNotebook *nb, gboolean zen_mode);
 
 void		nemo_notebook_set_dnd_enabled (NemoNotebook *nb,
 						   gboolean enabled);
@@ -92,4 +94,3 @@ gboolean        nemo_notebook_can_set_current_page_relative (NemoNotebook *noteb
 G_END_DECLS
 
 #endif /* NEMO_NOTEBOOK_H */
-

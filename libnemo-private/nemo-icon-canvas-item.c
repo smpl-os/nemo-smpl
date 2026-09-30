@@ -32,6 +32,7 @@
 #include "nemo-global-preferences.h"
 #include "nemo-icon-private.h"
 #include "nemo-fzy-utils.h"
+#include "nemo-type-jump.h"
 #include <eel/eel-art-extensions.h>
 #include <eel/eel-gdk-extensions.h>
 #include <eel/eel-glib-extensions.h>
@@ -78,6 +79,7 @@ struct NemoIconCanvasItemDetails {
     cairo_surface_t *rendered_surface;
 	char *editable_text;		/* Text that can be modified by a renaming function */
 	char *additional_text;		/* Text that cannot be modifed, such as file size, etc. */
+	NemoFileColorKind file_color_kind;
 
 	/* Size of the text at current font. */
 	int text_dx;
@@ -1006,6 +1008,31 @@ measure_label_text (NemoIconCanvasItem *item)
 }
 
 static void
+render_label (GtkStyleContext *context, cairo_t *cr, double x, double y,
+              PangoLayout *layout, const GdkRGBA *color)
+{
+	PangoAttrList *original = NULL;
+	if (color != NULL) {
+		original = pango_layout_get_attributes (layout);
+		if (original != NULL)
+			pango_attr_list_ref (original);
+		PangoAttrList *attrs = original != NULL ? pango_attr_list_copy (original) : pango_attr_list_new ();
+		pango_attr_list_change (attrs, pango_attr_foreground_new (
+			(guint16) (color->red * 65535), (guint16) (color->green * 65535),
+			(guint16) (color->blue * 65535)));
+		pango_attr_list_change (attrs, pango_attr_foreground_alpha_new ((guint16) (color->alpha * 65535)));
+		pango_layout_set_attributes (layout, attrs);
+		pango_attr_list_unref (attrs);
+	}
+	gtk_render_layout (context, cr, x, y, layout);
+	if (color != NULL) {
+		pango_layout_set_attributes (layout, original);
+		if (original != NULL)
+			pango_attr_list_unref (original);
+	}
+}
+
+static void
 draw_label_text (NemoIconCanvasItem *item,
                  cairo_t *cr,
 		 EelIRect icon_rect)
@@ -1125,9 +1152,15 @@ draw_label_text (NemoIconCanvasItem *item,
 		gtk_style_context_save (context);
 		gtk_style_context_set_state (context, state);
 
-		gtk_render_layout (context, cr,
-				   x, y,
-				   editable_layout);
+		const GdkRGBA *color = NULL;
+#ifdef NEMO_SMPL
+		GdkRGBA type_color;
+		if (!nemo_icon_container_get_is_desktop (container) && !details->fav_unavailable &&
+			!details->is_highlighted_for_clipboard &&
+			nemo_file_color_for_kind (details->file_color_kind, context, state, &type_color))
+			color = &type_color;
+#endif
+		render_label (context, cr, x, y, editable_layout, color);
 
 		gtk_style_context_restore (context);
 	}
@@ -1147,9 +1180,16 @@ draw_label_text (NemoIconCanvasItem *item,
 		gtk_style_context_set_state (context, state);
 		gtk_style_context_add_class (context, "dim-label");
 
-		gtk_render_layout (context, cr,
-				   x, y + details->editable_text_height + LABEL_LINE_SPACING,
-				   additional_layout);
+		const GdkRGBA *color = NULL;
+#ifdef NEMO_SMPL
+		GdkRGBA detail_color;
+		if (!nemo_icon_container_get_is_desktop (container) && !details->fav_unavailable &&
+		    !details->is_highlighted_for_clipboard &&
+		    nemo_file_color_for_kind (NEMO_FILE_COLOR_DEFAULT, context, state, &detail_color))
+			color = &detail_color;
+#endif
+		render_label (context, cr, x, y + details->editable_text_height + LABEL_LINE_SPACING,
+		              additional_layout, color);
         gtk_style_context_restore (context);
 	}
 
@@ -1177,6 +1217,17 @@ draw_label_text (NemoIconCanvasItem *item,
 
 	if (additional_layout != NULL) {
 		g_object_unref (additional_layout);
+	}
+}
+
+void
+nemo_icon_canvas_item_set_file_color_kind (NemoIconCanvasItem *item, NemoFileColorKind kind)
+{
+	g_return_if_fail (NEMO_IS_ICON_CANVAS_ITEM (item));
+	g_return_if_fail (kind >= NEMO_FILE_COLOR_DEFAULT && kind < NEMO_FILE_COLOR_COUNT);
+	if (item->details->file_color_kind != kind) {
+		item->details->file_color_kind = kind;
+		eel_canvas_item_request_update (EEL_CANVAS_ITEM (item));
 	}
 }
 
@@ -1398,6 +1449,55 @@ nemo_icon_canvas_item_draw (EelCanvasItem *item,
 
 #define ZERO_WIDTH_SPACE "\xE2\x80\x8B"
 
+static gboolean
+label_has_wrap_opportunity (const char *p)
+{
+	return *p == '_' || *p == '-' || (*p == '.' && !g_ascii_isdigit (p[1]));
+}
+
+#ifdef NEMO_SMPL
+static guint
+zeroified_text_index (const char *text, guint index)
+{
+	guint result = 0;
+
+	for (guint i = 0; text[i] != '\0' && i < index; i++) {
+		result++;
+		if (label_has_wrap_opportunity (text + i)) {
+			result += strlen (ZERO_WIDTH_SPACE);
+		}
+	}
+	return result;
+}
+
+static void
+add_type_jump_highlight_attrs (PangoAttrList *attr_list,
+                               const char *text,
+                               NemoIconContainer *container)
+{
+	gboolean prefix_only;
+	const char *query = nemo_icon_container_get_type_jump_text (container, &prefix_only);
+	PangoAttrList *matches = nemo_type_jump_match_attrs (query, text, prefix_only);
+	PangoAttrIterator *iter;
+
+	if (matches == NULL) {
+		return;
+	}
+	iter = pango_attr_list_get_iterator (matches);
+	do {
+		PangoAttribute *attr = pango_attr_iterator_get (iter, PANGO_ATTR_WEIGHT);
+		if (attr != NULL) {
+			PangoAttribute *copy = pango_attribute_copy (attr);
+			/* Matching uses filenames; Pango offsets include synthetic wrapping spaces. */
+			copy->start_index = zeroified_text_index (text, attr->start_index);
+			copy->end_index = zeroified_text_index (text, attr->end_index);
+			pango_attr_list_change (attr_list, copy);
+		}
+	} while (pango_attr_iterator_next (iter));
+	pango_attr_iterator_destroy (iter);
+	pango_attr_list_unref (matches);
+}
+#endif
 
 static void
 add_filter_highlight_attrs (PangoAttrList *attr_list,
@@ -1431,7 +1531,8 @@ add_filter_highlight_attrs (PangoAttrList *attr_list,
 
 static PangoLayout *
 create_label_layout (NemoIconCanvasItem *item,
-		     const char *text)
+		     const char *text,
+		     gboolean filename)
 {
 	PangoLayout *layout;
 	PangoContext *context;
@@ -1458,7 +1559,7 @@ create_label_layout (NemoIconCanvasItem *item,
 		for (p = text; *p != '\0'; p++) {
 			str = g_string_append_c (str, *p);
 
-			if (*p == '_' || *p == '-' || (*p == '.' && !g_ascii_isdigit(*(p+1)))) {
+			if (label_has_wrap_opportunity (p)) {
 				/* Ensure that we allow to break after '_' or '.' characters,
 				 * if they are not followed by a number */
 				str = g_string_append (str, ZERO_WIDTH_SPACE);
@@ -1488,6 +1589,11 @@ create_label_layout (NemoIconCanvasItem *item,
 
 	add_filter_highlight_attrs (attr_list, zeroified_text,
 	                            nemo_icon_container_get_filter_highlight (container));
+#ifdef NEMO_SMPL
+	if (filename) {
+		add_type_jump_highlight_attrs (attr_list, text, container);
+	}
+#endif
 
 	pango_layout_set_attributes (layout, attr_list);
 
@@ -1531,7 +1637,8 @@ get_label_layout (PangoLayout **layout_cache,
 		return g_object_ref (*layout_cache);
 	}
 
-	layout = create_label_layout (item, text);
+	layout = create_label_layout (item, text,
+	                              layout_cache == &item->details->editable_text_layout);
 
 	if (item->details->is_visible) {
 		*layout_cache = g_object_ref (layout);
@@ -2071,7 +2178,7 @@ nemo_icon_canvas_item_get_fixed_text_height_for_layout (NemoIconCanvasItem *item
     lines = nemo_icon_container_get_max_layout_lines (container);
     lines += nemo_icon_container_get_additional_text_line_count (container);
 
-    layout = create_label_layout (item, "-");
+    layout = create_label_layout (item, "-", FALSE);
     pango_layout_get_pixel_size (layout, NULL, &line_height);
 
     total_height = (line_height * lines) + (LABEL_LINE_SPACING * (lines - 1));

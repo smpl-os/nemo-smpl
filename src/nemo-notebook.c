@@ -387,6 +387,21 @@ build_tab_label (NemoNotebook *nb, NemoWindowSlot *slot)
 	return hbox;
 }
 
+void
+nemo_notebook_set_show_tabs (NemoNotebook *notebook, gboolean show_tabs)
+{
+	g_return_if_fail (NEMO_IS_NOTEBOOK (notebook));
+	gtk_notebook_set_show_tabs (GTK_NOTEBOOK (notebook), show_tabs && !notebook->zen_mode);
+}
+
+void
+nemo_notebook_set_zen_mode (NemoNotebook *notebook, gboolean zen_mode)
+{
+	g_return_if_fail (NEMO_IS_NOTEBOOK (notebook));
+	notebook->zen_mode = zen_mode;
+	nemo_notebook_set_show_tabs (notebook, gtk_notebook_get_n_pages (GTK_NOTEBOOK (notebook)) > 1);
+}
+
 static int
 nemo_notebook_insert_page (GtkNotebook *gnotebook,
 			       GtkWidget *tab_widget,
@@ -402,7 +417,7 @@ nemo_notebook_insert_page (GtkNotebook *gnotebook,
 										     menu_label,
 										     position);
 
-	gtk_notebook_set_show_tabs (gnotebook,
+	nemo_notebook_set_show_tabs (NEMO_NOTEBOOK (gnotebook),
 				    gtk_notebook_get_n_pages (gnotebook) > 1);
 	gtk_notebook_set_tab_reorderable (gnotebook, tab_widget, TRUE);
 	gtk_notebook_set_tab_detachable (gnotebook, tab_widget, TRUE);
@@ -459,7 +474,7 @@ nemo_notebook_remove (GtkContainer *container,
 	GtkNotebook *gnotebook = GTK_NOTEBOOK (container);
 	GTK_CONTAINER_CLASS (nemo_notebook_parent_class)->remove (container, tab_widget);
 
-	gtk_notebook_set_show_tabs (gnotebook,
+	nemo_notebook_set_show_tabs (NEMO_NOTEBOOK (gnotebook),
 				    gtk_notebook_get_n_pages (gnotebook) > 1);
 
 }
@@ -546,4 +561,3 @@ nemo_notebook_can_set_current_page_relative (NemoNotebook *notebook,
 	return nemo_notebook_is_valid_relative_position (
 		notebook, page_num, offset);
 }
-

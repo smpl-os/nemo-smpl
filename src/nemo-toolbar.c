@@ -31,6 +31,7 @@
 #include "nemo-pathbar.h"
 #include "nemo-window-private.h"
 #include "nemo-actions.h"
+#include "nemo-keybindings.h"
 #include "nemo-file-utilities.h"
 #include <glib/gi18n.h>
 #include <libnemo-private/nemo-global-preferences.h>
@@ -38,6 +39,9 @@
 
 struct _NemoToolbarPriv {
 	GtkWidget *toolbar;
+	GtkWidget *left_controls;
+	GtkWidget *right_controls;
+	gboolean location_only;
 
 	GtkActionGroup *action_group;
 	GtkUIManager *ui_manager;
@@ -116,7 +120,9 @@ toolbar_update_appearance (NemoToolbar *self)
 	show_location_entry = self->priv->show_location_entry;
 
 	gtk_widget_set_visible (GTK_WIDGET(self->priv->toolbar),
-				self->priv->show_main_bar);
+				self->priv->show_main_bar || self->priv->location_only);
+	gtk_widget_set_visible (self->priv->left_controls, !self->priv->location_only);
+	gtk_widget_set_visible (self->priv->right_controls, !self->priv->location_only);
 
     if (show_location_entry) {
         gtk_stack_set_visible_child_name (GTK_STACK (self->priv->stack), "location_bar");
@@ -220,6 +226,40 @@ setup_root_info_bar (NemoToolbar *self) {
     gtk_box_pack_start (GTK_BOX (self), self->priv->root_bar, TRUE, TRUE, 0);
 }
 
+#ifdef NEMO_SMPL
+static gboolean
+toolbar_query_tooltip (GtkWidget *button, gint x, gint y, gboolean keyboard,
+                        GtkTooltip *tooltip, gpointer data)
+{
+    GtkAction *action = gtk_activatable_get_related_action (GTK_ACTIVATABLE (button));
+    if (action == NULL)
+        return FALSE;
+    g_autofree char *text = nemo_keybindings_get_action_tooltip (action);
+    gtk_tooltip_set_text (tooltip, text);
+    return TRUE;
+}
+
+static void
+toolbar_action_tooltip_changed (GtkAction *action, GParamSpec *pspec, GtkWidget *button)
+{
+    gtk_widget_set_has_tooltip (button, TRUE);
+    gtk_tooltip_trigger_tooltip_query (gtk_widget_get_display (button));
+}
+
+static void
+toolbar_shortcuts_changed (GSettings *settings, const char *key, NemoToolbar *self)
+{
+    gtk_tooltip_trigger_tooltip_query (gtk_widget_get_display (GTK_WIDGET (self)));
+}
+
+static void
+toolbar_accel_map_changed (GtkAccelMap *map, const char *path, guint key,
+                           GdkModifierType modifiers, NemoToolbar *self)
+{
+    gtk_tooltip_trigger_tooltip_query (gtk_widget_get_display (GTK_WIDGET (self)));
+}
+#endif
+
 static GtkWidget *
 toolbar_create_toolbutton (NemoToolbar *self,
                 gboolean create_toggle,
@@ -243,6 +283,12 @@ toolbar_create_toolbutton (NemoToolbar *self,
     gtk_activatable_set_related_action (GTK_ACTIVATABLE (button), action);
     gtk_button_set_label (GTK_BUTTON (button), NULL);
     gtk_widget_set_tooltip_text (button, gtk_action_get_tooltip (action));
+#ifdef NEMO_SMPL
+    gtk_widget_set_has_tooltip (button, TRUE);
+    g_signal_connect (button, "query-tooltip", G_CALLBACK (toolbar_query_tooltip), NULL);
+    g_signal_connect_object (action, "notify::tooltip",
+                             G_CALLBACK (toolbar_action_tooltip_changed), button, G_CONNECT_AFTER);
+#endif
     gtk_widget_set_can_focus (button, FALSE);
     gtk_style_context_add_class (gtk_widget_get_style_context (button), GTK_STYLE_CLASS_FLAT);
 
@@ -260,6 +306,12 @@ nemo_toolbar_constructed (GObject *obj)
 	GtkStyleContext *context;
 
 	G_OBJECT_CLASS (nemo_toolbar_parent_class)->constructed (obj);
+#ifdef NEMO_SMPL
+    g_signal_connect_object (nemo_keybinding_settings, "changed",
+                             G_CALLBACK (toolbar_shortcuts_changed), self, 0);
+    g_signal_connect_object (gtk_accel_map_get (), "changed",
+                             G_CALLBACK (toolbar_accel_map_changed), self, 0);
+#endif
 
 	gtk_style_context_set_junction_sides (gtk_widget_get_style_context (GTK_WIDGET (self)),
 					      GTK_JUNCTION_BOTTOM);
@@ -279,6 +331,7 @@ nemo_toolbar_constructed (GObject *obj)
 
     /* Left side of the toolbar */
     tool_box = gtk_tool_item_new ();
+    self->priv->left_controls = GTK_WIDGET (tool_box);
     box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
 
     self->priv->previous_button = toolbar_create_toolbutton (self, FALSE, NEMO_ACTION_BACK);
@@ -303,6 +356,7 @@ nemo_toolbar_constructed (GObject *obj)
     gtk_container_add (GTK_CONTAINER (self->priv->toolbar), GTK_WIDGET (tool_box));
 
     gtk_widget_show_all (GTK_WIDGET (tool_box));
+    gtk_widget_set_no_show_all (GTK_WIDGET (tool_box), TRUE);
     gtk_widget_set_margin_right (GTK_WIDGET (tool_box), 6);
 
     /* Container to hold the location and pathbars */
@@ -330,6 +384,7 @@ nemo_toolbar_constructed (GObject *obj)
 
     /* Right Side of the toolbar */
     tool_box = gtk_tool_item_new ();
+    self->priv->right_controls = GTK_WIDGET (tool_box);
     box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 2);
 
     self->priv->toggle_location_button = toolbar_create_toolbutton (self, FALSE, NEMO_ACTION_TOGGLE_LOCATION);
@@ -365,6 +420,7 @@ nemo_toolbar_constructed (GObject *obj)
     gtk_container_add (GTK_CONTAINER (self->priv->toolbar), GTK_WIDGET (tool_box));
 
     gtk_widget_show_all (GTK_WIDGET (tool_box));
+    gtk_widget_set_no_show_all (GTK_WIDGET (tool_box), TRUE);
     gtk_widget_set_margin_left (GTK_WIDGET (tool_box), 6);
 
     g_signal_connect_swapped (nemo_preferences,
@@ -372,6 +428,16 @@ nemo_toolbar_constructed (GObject *obj)
                   G_CALLBACK (toolbar_update_appearance), self);
 
 	toolbar_update_appearance (self);
+}
+
+void
+nemo_toolbar_set_location_only (NemoToolbar *self, gboolean location_only)
+{
+	g_return_if_fail (NEMO_IS_TOOLBAR (self));
+	if (self->priv->location_only != location_only) {
+		self->priv->location_only = location_only;
+		toolbar_update_appearance (self);
+	}
 }
 
 static void
@@ -433,6 +499,10 @@ nemo_toolbar_dispose (GObject *obj)
 	NemoToolbar *self = NEMO_TOOLBAR (obj);
 
 	g_clear_object (&self->priv->action_group);
+#ifdef NEMO_SMPL
+    g_signal_handlers_disconnect_by_func (nemo_keybinding_settings, toolbar_shortcuts_changed, self);
+    g_signal_handlers_disconnect_by_func (gtk_accel_map_get (), toolbar_accel_map_changed, self);
+#endif
 
 	g_signal_handlers_disconnect_by_func (nemo_preferences,
 					      toolbar_update_appearance, self);

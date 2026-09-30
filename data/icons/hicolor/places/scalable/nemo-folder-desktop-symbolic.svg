@@ -1,0 +1,7 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="none" stroke="#2e3436" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.5" y="2" width="13" height="9" rx="1"/>
+    <path d="M2 8.5h12M8 11v3M5 14h6"/>
+  </g>
+</svg>

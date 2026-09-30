@@ -4,6 +4,7 @@
 #include <libnemo-private/nemo-file-utilities.h>
 #include <libnemo-private/nemo-icon-fallback.h>
 #include <libnemo-private/nemo-icon-info.h>
+#include <libnemo-private/nemo-icon-names.h>
 
 typedef struct {
     GObject parent;
@@ -233,6 +234,36 @@ test_file_icons (void)
     }
 }
 
+static void
+test_distinct_places (void)
+{
+    use_theme ("NemoMissingTheme");
+    const char *names[] = {
+        "xsi-folder-symbolic", NEMO_ICON_SYMBOLIC_DESKTOP, NEMO_ICON_SYMBOLIC_FOLDER_FAVORITES
+    };
+    GBytes *pixels[G_N_ELEMENTS (names)];
+    GdkRGBA ink = { 0.1, 0.9, 0.2, 1.0 };
+    for (guint i = 0; i < G_N_ELEMENTS (names); i++) {
+        GtkIconInfo *info = assert_loadable (names[i], 16);
+        GError *error = NULL;
+        gboolean symbolic = FALSE;
+        GdkPixbuf *pixbuf = gtk_icon_info_load_symbolic (info, &ink, NULL, NULL, NULL, &symbolic, &error);
+        g_assert_no_error (error);
+        g_assert_nonnull (pixbuf);
+        g_assert_true (symbolic);
+        g_assert_cmpint (gdk_pixbuf_get_width (pixbuf), ==, 16);
+        g_assert_cmpint (gdk_pixbuf_get_height (pixbuf), ==, 16);
+        pixels[i] = gdk_pixbuf_read_pixel_bytes (pixbuf);
+        g_object_unref (pixbuf);
+        g_object_unref (info);
+    }
+    g_assert_false (g_bytes_equal (pixels[0], pixels[1]));
+    g_assert_false (g_bytes_equal (pixels[0], pixels[2]));
+    g_assert_false (g_bytes_equal (pixels[1], pixels[2]));
+    for (guint i = 0; i < G_N_ELEMENTS (names); i++)
+        g_bytes_unref (pixels[i]);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -250,6 +281,7 @@ main (int argc, char **argv)
     g_test_add_func ("/icons/dynamic-devices", test_dynamic_devices);
     g_test_add_func ("/icons/theme-precedence", test_theme_precedence);
     g_test_add_func ("/icons/file-icons", test_file_icons);
+    g_test_add_func ("/icons/distinct-places", test_distinct_places);
     gint result = g_test_run ();
     g_assert_cmpint (g_rmdir (fixture), ==, 0);
     g_free (fixture);

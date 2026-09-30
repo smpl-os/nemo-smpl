@@ -39,6 +39,9 @@
 #include <libnemo-private/nemo-thumbnails.h>
 #include <libnemo-private/nemo-desktop-icon-file.h>
 #include <libnemo-private/nemo-desktop-utils.h>
+#ifdef NEMO_SMPL
+#include <libnemo-private/nemo-file-colors.h>
+#endif
 
 #define DEBUG_FLAG NEMO_DEBUG_ICON_CONTAINER
 #include "nemo-debug.h"
@@ -97,6 +100,7 @@ nemo_icon_view_container_get_icon_images (NemoIconContainer *container,
 	GEmblem *emblem;
 	GList *emblem_icons, *l;
     gint scale;
+    GtkStyleContext *context = NULL;
 
 	file = (NemoFile *) data;
 
@@ -121,7 +125,17 @@ nemo_icon_view_container_get_icon_images (NemoIconContainer *container,
 		                                       nemo_view_get_directory_as_file (NEMO_VIEW (icon_view)));
 
     scale = gtk_widget_get_scale_factor (GTK_WIDGET (icon_view));
-	icon_info = nemo_file_get_icon (file, size, size, scale, flags);
+#ifdef NEMO_SMPL
+    if (!nemo_icon_container_get_is_desktop (container)) {
+        GtkStateFlags state = gtk_widget_get_state_flags (GTK_WIDGET (container));
+        context = gtk_widget_get_style_context (GTK_WIDGET (container));
+        gtk_style_context_save (context);
+        gtk_style_context_add_class (context, "nemo-canvas-item");
+        /* Only the label has a selection background in icon/compact views. */
+        gtk_style_context_set_state (context, state & ~(GTK_STATE_FLAG_SELECTED | GTK_STATE_FLAG_PRELIGHT));
+    }
+#endif
+	icon_info = nemo_file_get_icon_for_context (file, size, size, scale, flags, context);
 
 	/* apply emblems */
 	if (emblem_icons != NULL) {
@@ -161,7 +175,7 @@ nemo_icon_view_container_get_icon_images (NemoIconContainer *container,
 		}
 
         nemo_icon_info_clear (&icon_info);
-		icon_info = nemo_icon_info_lookup (emblemed_icon, size, scale);
+		icon_info = nemo_icon_info_lookup_for_context (emblemed_icon, size, scale, context);
         g_object_unref (emblemed_icon);
 
 skip_emblem:
@@ -172,6 +186,10 @@ skip_emblem:
 	if (emblem_icons != NULL) {
 		g_list_free_full (emblem_icons, g_object_unref);
 	}
+
+    if (context != NULL) {
+        gtk_style_context_restore (context);
+    }
 
 	return icon_info;
 }
@@ -1542,6 +1560,11 @@ nemo_icon_view_container_update_icon (NemoIconContainer *container,
                  "fav-unavailable", fav_unavailable,
                  NULL);
 
+#ifdef NEMO_SMPL
+    nemo_icon_canvas_item_set_file_color_kind (icon->item,
+        nemo_icon_container_get_is_desktop (container) ? NEMO_FILE_COLOR_DEFAULT :
+        nemo_file_get_color_kind (NEMO_FILE (icon->data)));
+#endif
     nemo_icon_canvas_item_set_image (icon->item, pixbuf);
 
     /* Let the pixbufs go. */

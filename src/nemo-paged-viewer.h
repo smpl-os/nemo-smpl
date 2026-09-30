@@ -43,6 +43,7 @@ gboolean         nemo_paged_viewer_open_file  (NemoPagedViewer *self,
                                                 const gchar     *path,
                                                 GError         **error);
 void             nemo_paged_viewer_close_file (NemoPagedViewer *self);
+void             nemo_paged_viewer_scroll_page (NemoPagedViewer *self, gboolean forward);
 void             nemo_paged_viewer_set_mode   (NemoPagedViewer *self,
                                                 NemoViewerMode   mode);
 

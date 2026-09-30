@@ -26,6 +26,9 @@ recognizable folders, file types and places where Nemo needs full-color icons.
 
 Nemo's own scalable application, sidebar, layout and progress icons are included
 directly from `data/icons/`, under their existing repository license.
+The Desktop monitor and starred Favorites-folder symbols in
+`data/icons/hicolor/places/scalable/` are Nemo artwork under GPL-2.0-or-later;
+the original vendored XSI icons remain unchanged.
 
 `origins.json` records the original installed or repository path and SHA-256 of
 each unmodified source asset. Resource aliases only change lookup names, not artwork.

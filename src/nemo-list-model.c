@@ -38,6 +38,7 @@
 #include <eel/eel-graphic-effects.h>
 #include <libnemo-private/nemo-dnd.h>
 #include <libnemo-private/nemo-file-utilities.h>
+#include <libnemo-private/nemo-global-preferences.h>
 
 enum {
 	SUBDIRECTORY_UNLOADED,
@@ -335,6 +336,7 @@ nemo_list_model_get_value (GtkTreeModel *tree_model, GtkTreeIter *iter, int colu
             GdkPixbuf *icon, *rendered_icon;
             NemoIconInfo *icon_info;
             GList *emblem_icons, *l;
+            GtkStyleContext *context = NULL;
 
 			zoom_level = nemo_list_model_get_zoom_level_from_column_id (column);
 			icon_size = nemo_get_list_icon_size_for_zoom_level (zoom_level);
@@ -365,7 +367,23 @@ nemo_list_model_get_value (GtkTreeModel *tree_model, GtkTreeIter *iter, int colu
 				}
 			}
 
-            icon_info = nemo_file_get_icon (file, icon_size, 0, icon_scale, flags);
+#ifdef NEMO_SMPL
+            if (model->details->drag_view != NULL) {
+                GtkWidget *view = GTK_WIDGET (model->details->drag_view);
+                GtkTreeSelection *selection = gtk_tree_view_get_selection (model->details->drag_view);
+                GtkStateFlags state = gtk_widget_get_state_flags (view);
+
+                context = gtk_widget_get_style_context (view);
+                state &= ~(GTK_STATE_FLAG_SELECTED | GTK_STATE_FLAG_PRELIGHT);
+                if (gtk_tree_selection_iter_is_selected (selection, iter) ||
+                    (flags & NEMO_FILE_ICON_FLAGS_FOR_DRAG_ACCEPT)) {
+                    state |= GTK_STATE_FLAG_SELECTED;
+                }
+                gtk_style_context_save (context);
+                gtk_style_context_set_state (context, state);
+            }
+#endif
+            icon_info = nemo_file_get_icon_for_context (file, icon_size, 0, icon_scale, flags, context);
             emblem_icons = nemo_file_get_emblem_icons (file, parent_file);
 
             if (emblem_icons) {
@@ -403,10 +421,14 @@ nemo_list_model_get_value (GtkTreeModel *tree_model, GtkTreeIter *iter, int colu
                 }
 
                 nemo_icon_info_clear (&icon_info);
-                icon_info = nemo_icon_info_lookup (gicon, icon_size, icon_scale);
+                icon_info = nemo_icon_info_lookup_for_context (gicon, icon_size, icon_scale, context);
 
                 g_list_free_full (emblem_icons, g_object_unref);
                 g_object_unref (gicon);
+            }
+
+            if (context != NULL) {
+                gtk_style_context_restore (context);
             }
 
 			icon = nemo_icon_info_get_pixbuf_at_size (icon_info, icon_size * icon_scale);
@@ -2052,4 +2074,3 @@ nemo_list_model_set_expansion_enabled (NemoListModel *model, gboolean enabled)
 {
     model->details->expansion_enabled = enabled;
 }
-

@@ -73,4 +73,5 @@ void nemo_toolbar_set_show_main_bar (NemoToolbar *self,
 void nemo_toolbar_set_show_location_entry (NemoToolbar *self,
 					       gboolean show_location_entry);
 void nemo_toolbar_update_for_location (NemoToolbar *self);
+void nemo_toolbar_set_location_only (NemoToolbar *self, gboolean location_only);
 #endif /* __NEMO_TOOLBAR_H__ */

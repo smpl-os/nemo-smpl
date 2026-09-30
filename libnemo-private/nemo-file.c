@@ -4382,8 +4382,185 @@ get_custom_icon_metadata_name (NemoFile *file)
 	return icon_name;
 }
 
+#ifdef NEMO_SMPL
+typedef struct {
+    GWeakRef owner;
+    GFile *location;
+    GFileMonitor *monitor;
+    NemoFile *covers[2];
+    guint load_id;
+    guint notify_id;
+} CoverIconCache;
+
+static const char *cover_icon_names[] = { "cover.jpg", "cover.png" };
+
+static gboolean
+cover_icon_notify (gpointer data)
+{
+    CoverIconCache *cache = data;
+    NemoFile *file = g_weak_ref_get (&cache->owner);
+
+    cache->notify_id = 0;
+    if (file != NULL) {
+        nemo_file_changed (file);
+        nemo_file_unref (file);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static void
+cover_icon_changed (NemoFile *cover, gpointer data)
+{
+    CoverIconCache *cache = data;
+    GFile *location = nemo_file_get_location (cover);
+    GIcon *icon = g_file_icon_new (location);
+
+    nemo_icon_info_invalidate_icon (icon);
+    g_object_unref (icon);
+    g_object_unref (location);
+
+    if (cache->notify_id == 0) {
+        cache->notify_id = g_idle_add (cover_icon_notify, cache);
+    }
+}
+
+static void
+cover_icon_set_file (CoverIconCache *cache, guint index, NemoFile *file)
+{
+    NemoFile *old = cache->covers[index];
+    if (old == file) {
+        return;
+    }
+    cache->covers[index] = nemo_file_ref (file);
+    if (old != NULL) {
+        nemo_file_cancel_call_when_ready (old, cover_icon_changed, cache);
+        g_signal_handlers_disconnect_by_func (old, cover_icon_changed, cache);
+        nemo_file_unref (old);
+    }
+    g_signal_connect (file, "changed", G_CALLBACK (cover_icon_changed), cache);
+    nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_INFO, cover_icon_changed, cache);
+}
+
+static void
+cover_icon_directory_changed (GFileMonitor      *monitor,
+                              GFile             *child,
+                              GFile             *other,
+                              GFileMonitorEvent  event,
+                              gpointer           data)
+{
+    CoverIconCache *cache = data;
+    char *name;
+
+    if (event != G_FILE_MONITOR_EVENT_CREATED &&
+        event != G_FILE_MONITOR_EVENT_DELETED &&
+        event != G_FILE_MONITOR_EVENT_CHANGED &&
+        event != G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT &&
+        event != G_FILE_MONITOR_EVENT_ATTRIBUTE_CHANGED) {
+        return;
+    }
+
+    name = g_file_get_basename (child);
+    for (guint i = 0; i < G_N_ELEMENTS (cover_icon_names); i++) {
+        if (g_strcmp0 (name, cover_icon_names[i]) == 0) {
+            NemoFile *file = nemo_file_get (child);
+            nemo_file_cancel_call_when_ready (file, cover_icon_changed, cache);
+            nemo_file_invalidate_attributes (file, NEMO_FILE_ATTRIBUTE_INFO);
+            if (cache->covers[i] == file) {
+                nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_INFO, cover_icon_changed, cache);
+            } else {
+                cover_icon_set_file (cache, i, file);
+            }
+            nemo_file_unref (file);
+        }
+    }
+    g_free (name);
+}
+
+static void
+cover_icon_cache_free (gpointer data)
+{
+    CoverIconCache *cache = data;
+
+    if (cache->load_id != 0) {
+        g_source_remove (cache->load_id);
+    }
+    if (cache->notify_id != 0) {
+        g_source_remove (cache->notify_id);
+    }
+    if (cache->monitor != NULL) {
+        g_file_monitor_cancel (cache->monitor);
+        g_object_unref (cache->monitor);
+    }
+    for (guint i = 0; i < G_N_ELEMENTS (cache->covers); i++) {
+        if (cache->covers[i] == NULL) {
+            continue;
+        }
+        nemo_file_cancel_call_when_ready (cache->covers[i], cover_icon_changed, cache);
+        g_signal_handlers_disconnect_by_func (cache->covers[i], cover_icon_changed, cache);
+        nemo_file_unref (cache->covers[i]);
+    }
+    g_weak_ref_clear (&cache->owner);
+    g_object_unref (cache->location);
+    g_free (cache);
+}
+
+static gboolean
+cover_icon_cache_start (gpointer data)
+{
+    CoverIconCache *cache = data;
+
+    cache->load_id = 0;
+    cache->monitor = g_file_monitor_directory (cache->location, G_FILE_MONITOR_NONE, NULL, NULL);
+    if (cache->monitor != NULL) {
+        g_signal_connect (cache->monitor, "changed",
+                          G_CALLBACK (cover_icon_directory_changed), cache);
+    }
+    for (guint i = 0; i < G_N_ELEMENTS (cover_icon_names); i++) {
+        GFile *child = g_file_get_child (cache->location, cover_icon_names[i]);
+        NemoFile *cover = nemo_file_get (child);
+        g_object_unref (child);
+        cover_icon_set_file (cache, i, cover);
+        nemo_file_unref (cover);
+    }
+    return G_SOURCE_REMOVE;
+}
+
 static GIcon *
-get_custom_icon (NemoFile *file)
+get_cached_cover_icon (NemoFile *file)
+{
+    CoverIconCache *cache;
+    GFile *location;
+    GIcon *icon = NULL;
+
+    location = nemo_file_get_location (file);
+    cache = g_object_get_data (G_OBJECT (file), "nemo-file-view-cover-cache");
+    if (cache == NULL || !g_file_equal (cache->location, location)) {
+        cache = g_new0 (CoverIconCache, 1);
+        g_weak_ref_init (&cache->owner, file);
+        cache->location = g_object_ref (location);
+        /* Start monitoring/discovery outside rendering. Subsequent renders
+         * only read Nemo's asynchronous metadata cache, including misses. */
+        cache->load_id = g_idle_add (cover_icon_cache_start, cache);
+        g_object_set_data_full (G_OBJECT (file), "nemo-file-view-cover-cache", cache,
+                                cover_icon_cache_free);
+    }
+    g_object_unref (location);
+
+    for (guint i = 0; i < G_N_ELEMENTS (cache->covers); i++) {
+        NemoFile *cover = cache->covers[i];
+        if (cover != NULL && cover->details->got_file_info && !nemo_file_is_gone (cover)) {
+            GFile *child = nemo_file_get_location (cover);
+            icon = g_file_icon_new (child);
+            g_object_unref (child);
+            break;
+        }
+    }
+    return icon;
+}
+#endif
+
+static GIcon *
+get_custom_icon_internal (NemoFile *file, gboolean cached_cover)
 {
 	char *custom_icon_uri, *custom_icon_name;
 	GFile *icon_file;
@@ -4421,6 +4598,11 @@ get_custom_icon (NemoFile *file)
  	}
 
 	if (icon == NULL && nemo_file_is_directory (file)) {
+#ifdef NEMO_SMPL
+        if (cached_cover) {
+            return get_cached_cover_icon (file);
+        }
+#endif
 		static const char *cover_names[] = { "cover.jpg", "cover.png", NULL };
 		GFile *dir_location = nemo_file_get_location (file);
 
@@ -4440,6 +4622,12 @@ get_custom_icon (NemoFile *file)
 	}
 
 	return icon;
+}
+
+static GIcon *
+get_custom_icon (NemoFile *file)
+{
+    return get_custom_icon_internal (file, FALSE);
 }
 
 GFilesystemPreviewType
@@ -4665,9 +4853,10 @@ prepend_icon_name (const char *name,
 	g_themed_icon_prepend_name(icon, name);
 }
 
-GIcon *
-nemo_file_get_gicon (NemoFile *file,
-			 NemoFileIconFlags flags)
+static GIcon *
+nemo_file_get_gicon_internal (NemoFile *file,
+                              NemoFileIconFlags flags,
+                              gboolean check_custom)
 {
 	const char * const * names;
 	const char *name;
@@ -4682,7 +4871,7 @@ nemo_file_get_gicon (NemoFile *file,
 		return NULL;
 	}
 
-	icon = get_custom_icon (file);
+	icon = check_custom ? get_custom_icon (file) : NULL;
 
 	if (icon != NULL) {
 		return icon;
@@ -4780,6 +4969,12 @@ nemo_file_get_gicon (NemoFile *file,
 	}
 
 	return g_themed_icon_new ("text-x-generic");
+}
+
+GIcon *
+nemo_file_get_gicon (NemoFile *file, NemoFileIconFlags flags)
+{
+    return nemo_file_get_gicon_internal (file, flags, TRUE);
 }
 
 
@@ -4894,6 +5089,64 @@ nemo_file_get_control_icon_name (NemoFile *file)
     return icon_name;
 }
 
+#ifdef NEMO_SMPL
+static GIcon *
+get_symbolic_file_view_icon (NemoFile *file, NemoFileIconFlags flags)
+{
+    GIcon *icon = NULL;
+    GMount *mount;
+
+    if (nemo_file_is_directory (file)) {
+        char *name = nemo_file_get_control_icon_name (file);
+        if (g_strcmp0 (name, "text-x-generic") == 0) {
+            g_free (name);
+            name = g_strdup ("folder-symbolic");
+        }
+        /* Prefer the theme's standard name to the XApp compatibility alias. */
+        const char *names[] = { g_str_has_prefix (name, "xsi-") ? name + 4 : name,
+                               name, "folder-symbolic", NULL };
+        icon = g_themed_icon_new_from_names ((char **) names, -1);
+        if (flags & (NEMO_FILE_ICON_FLAGS_FOR_DRAG_ACCEPT |
+                     NEMO_FILE_ICON_FLAGS_FOR_OPEN_FOLDER)) {
+            g_themed_icon_prepend_name (G_THEMED_ICON (icon), "folder-open-symbolic");
+        }
+        g_free (name);
+    } else if (file->details->icon != NULL && !G_IS_THEMED_ICON (file->details->icon)) {
+        /* Backend-provided artwork is as intentional as a custom icon. */
+        icon = g_object_ref (file->details->icon);
+    } else if (file->details->mime_type != NULL) {
+        icon = g_content_type_get_symbolic_icon (file->details->mime_type);
+    }
+
+    if (icon == NULL) {
+        icon = g_themed_icon_new ("text-x-generic-symbolic");
+    } else if (G_IS_THEMED_ICON (icon)) {
+        g_themed_icon_append_name (G_THEMED_ICON (icon), "text-x-generic-symbolic");
+    }
+
+    if (flags & (NEMO_FILE_ICON_FLAGS_USE_MOUNT_ICON |
+                 NEMO_FILE_ICON_FLAGS_USE_MOUNT_ICON_AS_EMBLEM)) {
+        mount = nemo_file_get_mount (file);
+        if (mount != NULL) {
+            GIcon *mount_icon = g_mount_get_symbolic_icon (mount);
+            if (mount_icon != NULL && (flags & NEMO_FILE_ICON_FLAGS_USE_MOUNT_ICON)) {
+                g_object_unref (icon);
+                icon = g_object_ref (mount_icon);
+            } else if (mount_icon != NULL && !g_icon_equal (mount_icon, icon)) {
+                GEmblem *emblem = g_emblem_new (mount_icon);
+                GIcon *emblemed = g_emblemed_icon_new (icon, emblem);
+                g_object_unref (icon);
+                g_object_unref (emblem);
+                icon = emblemed;
+            }
+            g_clear_object (&mount_icon);
+            g_object_unref (mount);
+        }
+    }
+    return icon;
+}
+#endif
+
 gboolean
 nemo_file_get_pinning (NemoFile *file)
 {
@@ -4961,12 +5214,14 @@ nemo_file_set_is_favorite (NemoFile *file,
     g_free (uri);
 }
 
-NemoIconInfo *
-nemo_file_get_icon (NemoFile *file,
+static NemoIconInfo *
+nemo_file_get_icon_internal (NemoFile *file,
 			int size,
             int max_width,
             int scale,
-			NemoFileIconFlags flags)
+			NemoFileIconFlags flags,
+            GtkStyleContext *context,
+            gboolean symbolic)
 {
 	NemoIconInfo *icon;
 	GIcon *gicon;
@@ -4977,9 +5232,9 @@ nemo_file_get_icon (NemoFile *file,
 		return NULL;
 	}
 
-	gicon = get_custom_icon (file);
+	gicon = get_custom_icon_internal (file, context != NULL);
 	if (gicon != NULL) {
-		icon = nemo_icon_info_lookup (gicon, size, scale);
+		icon = nemo_icon_info_lookup_for_context (gicon, size, scale, context);
 		g_object_unref (gicon);
 		return icon;
 	}
@@ -5081,11 +5336,25 @@ nemo_file_get_icon (NemoFile *file,
 		}
 	}
 
+#ifdef NEMO_SMPL
+    if (context != NULL && symbolic) {
+        if (file->details->is_thumbnailing && (flags & NEMO_FILE_ICON_FLAGS_USE_THUMBNAILS)) {
+            const char *names[] = { "image-loading-symbolic", "text-x-generic-symbolic", NULL };
+            gicon = g_themed_icon_new_from_names ((char **) names, -1);
+        } else {
+            gicon = get_symbolic_file_view_icon (file, flags);
+        }
+        icon = nemo_icon_info_lookup_for_context (gicon, size, scale, context);
+        g_object_unref (gicon);
+        return icon;
+    }
+#endif
+
     if (file->details->is_thumbnailing &&
 	    flags & NEMO_FILE_ICON_FLAGS_USE_THUMBNAILS)
 		gicon = g_themed_icon_new (ICON_NAME_THUMBNAIL_LOADING);
 	else
-		gicon = nemo_file_get_gicon (file, flags);
+		gicon = nemo_file_get_gicon_internal (file, flags, context == NULL);
 
 	if (gicon) {
 		icon = nemo_icon_info_lookup (gicon, size, scale);
@@ -5099,6 +5368,33 @@ nemo_file_get_icon (NemoFile *file,
 
 		return icon;
 	}
+}
+
+NemoIconInfo *
+nemo_file_get_icon (NemoFile *file,
+                   int size,
+                   int max_width,
+                   int scale,
+                   NemoFileIconFlags flags)
+{
+    return nemo_file_get_icon_internal (file, size, max_width, scale, flags, NULL, FALSE);
+}
+
+NemoIconInfo *
+nemo_file_get_icon_for_context (NemoFile *file,
+                               int size,
+                               int max_width,
+                               int scale,
+                               NemoFileIconFlags flags,
+                               GtkStyleContext *context)
+{
+#ifdef NEMO_SMPL
+    if (context != NULL) {
+        return nemo_file_get_icon_internal (file, size, max_width, scale, flags, context,
+            g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS));
+    }
+#endif
+    return nemo_file_get_icon (file, size, max_width, scale, flags);
 }
 
 GdkPixbuf *
@@ -9088,6 +9384,11 @@ nemo_file_invalidate_attributes_internal (NemoFile *file,
 		invalidate_mime_list (file);
 	}
 	if (REQUEST_WANTS_TYPE (request, REQUEST_FILE_INFO)) {
+#ifdef NEMO_SMPL
+        /* A reload must also retry cover discovery on backends without a
+         * working monitor. Dropping the cache cancels its pending callbacks. */
+        g_object_set_data (G_OBJECT (file), "nemo-file-view-cover-cache", NULL);
+#endif
 		invalidate_file_info (file);
 	}
 	if (REQUEST_WANTS_TYPE (request, REQUEST_LINK_INFO)) {

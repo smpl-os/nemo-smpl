@@ -342,6 +342,9 @@ void              nemo_icon_container_set_show_desktop_tooltips     (NemoIconCon
 void              nemo_icon_container_set_filter_highlight          (NemoIconContainer  *container,
 									 const char             *filter_text);
 const char       *nemo_icon_container_get_filter_highlight          (NemoIconContainer  *container);
+gboolean          nemo_icon_container_get_type_jump_active          (NemoIconContainer  *container);
+const char       *nemo_icon_container_get_type_jump_text            (NemoIconContainer  *container,
+                                                                     gboolean           *prefix_only);
 
 void              nemo_icon_container_reset_scroll_region           (NemoIconContainer  *container);
 void              nemo_icon_container_set_font                      (NemoIconContainer  *container,

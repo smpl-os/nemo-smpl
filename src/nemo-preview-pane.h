@@ -41,6 +41,7 @@ void       nemo_preview_pane_clear           (NemoPreviewPane *self);
 void       nemo_preview_pane_toggle_details  (NemoPreviewPane *self);
 void       nemo_preview_pane_toggle_mute     (NemoPreviewPane *self);
 void       nemo_preview_pane_toggle_play     (NemoPreviewPane *self);
+gboolean   nemo_preview_pane_handle_key_event (NemoPreviewPane *self, GdkEventKey *event);
 
 G_END_DECLS
 

@@ -609,6 +609,36 @@ along with .  If not, see <http://www.gnu.org/licenses/>.
                                             <property name="position">5</property>
                                           </packing>
                                         </child>
+                                        <child>
+                                          <object class="GtkCheckButton" id="file_type_colors_checkbutton">
+                                            <property name="label" translatable="yes">Use theme-aware file-type colors</property>
+                                            <property name="tooltip-text" translatable="yes">Color filenames by file type and brighten grey file details on dark backgrounds. Green, selection and high-contrast theme colors are preserved.</property>
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="no-show-all">True</property>
+                                            <property name="draw-indicator">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">False</property>
+                                            <property name="position">6</property>
+                                          </packing>
+                                        </child>
+                                        <child>
+                                          <object class="GtkCheckButton" id="symbolic_file_icons_checkbutton">
+                                            <property name="label" translatable="yes">Use outline-style file and folder icons</property>
+                                            <property name="tooltip-text" translatable="yes">Use theme-aware symbolic icons, including special icons for standard folders. Keep thumbnails, folder cover art and custom icons.</property>
+                                            <property name="visible">True</property>
+                                            <property name="can-focus">True</property>
+                                            <property name="no-show-all">True</property>
+                                            <property name="draw-indicator">True</property>
+                                          </object>
+                                          <packing>
+                                            <property name="expand">False</property>
+                                            <property name="fill">False</property>
+                                            <property name="position">7</property>
+                                          </packing>
+                                        </child>
                                       </object>
                                     </child>
                                   </object>
@@ -1275,7 +1305,8 @@ along with .  If not, see <http://www.gnu.org/licenses/>.
                                         </child>
                                         <child>
                                           <object class="GtkCheckButton" id="restore_tabs_on_startup_checkbutton">
-                                            <property name="label" translatable="yes">Restore last window tabs on startup</property>
+                                            <property name="label" translatable="yes">Remember folders, tabs and panes when closing Nemo</property>
+                                            <property name="tooltip-text" translatable="yes">Reopen the last closed window's folders and tabs when Nemo starts without a requested location.</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>
                                             <property name="receives-default">False</property>

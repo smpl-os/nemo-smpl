@@ -1,5 +1,9 @@
 <ui>
 <accelerator action="Search"/>
+<accelerator action="Zen Mode"/>
+<accelerator action="BackAlternate"/>
+<accelerator action="ForwardAlternate"/>
+<accelerator action="UpControl"/>
 <accelerator action="SplitViewNextPane"/>
 <accelerator action="Bookmark Picker"/>
 <accelerator action="Bookmark Picker Other Pane"/>
@@ -73,6 +77,7 @@
             </menu>
             <menuitem name="Show Hide Menubar" action="Show Hide Menubar"/>
 			<menuitem name="Show Hide Statusbar" action="Show Hide Statusbar"/>
+			<menuitem name="Zen Mode" action="Zen Mode"/>
             <separator/>
 			<menuitem name="Show Hide Extra Pane" action="Show Hide Extra Pane"/>
 			<menuitem name="Show Hide Preview Pane" action="Show Hide Preview Pane"/>
@@ -115,6 +120,7 @@
 		</menu>
 		<menu action="Bookmarks">
 			<menuitem name="Add Bookmark" action="Add Bookmark"/>
+			<placeholder name="Folder Favorites"/>
 			<menuitem name="Edit Bookmark" action="Edit Bookmarks"/>
 			<separator/>
 			<placeholder name="Bookmarks Placeholder"/>
@@ -141,5 +147,7 @@
 	</placeholder>
         <separator/>
 	<placeholder name="After Zoom Items"/>
+	<separator/>
+	<menuitem name="Zen Mode" action="Zen Mode"/>
 </popup>
 </ui>

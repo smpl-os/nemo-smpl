@@ -46,5 +46,6 @@ void     nemo_keybindings_apply_all           (void);
 void     nemo_keybindings_set_for_action      (const gchar *settings_key,
                                                const gchar *accel_string);
 GtkWidget *nemo_keybindings_create_editor     (void);
+char     *nemo_keybindings_get_action_tooltip (GtkAction *action);
 
 #endif /* NEMO_KEYBINDINGS_H */

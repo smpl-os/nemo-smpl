@@ -156,6 +156,8 @@ void     nemo_window_back_or_forward      (NemoWindow *window,
 void     nemo_window_split_view_on        (NemoWindow *window);
 void     nemo_window_split_view_off       (NemoWindow *window);
 gboolean nemo_window_split_view_showing   (NemoWindow *window);
+gboolean nemo_window_get_zen_mode         (NemoWindow *window);
+void     nemo_window_set_zen_mode         (NemoWindow *window, gboolean enabled);
 
 void     nemo_window_preview_pane_on      (NemoWindow *window);
 void     nemo_window_preview_pane_off     (NemoWindow *window);

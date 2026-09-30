@@ -1,5 +1,6 @@
 <ui>
 <accelerator action="OpenAccel"/>
+<accelerator action="OpenSelectedFolder"/>
 <accelerator action="PropertiesAccel"/>
 <accelerator action="RenameSelectAll"/>
 <menubar name="MenuBar">
@@ -108,6 +109,13 @@
 			<menuitem name="Show Thumbnails" action="Show Thumbnails"/>
 		</placeholder>
 	</menu>
+	<placeholder name="Other Menus">
+		<menu action="Bookmarks">
+			<placeholder name="Folder Favorites">
+				<menuitem name="AddCurrentFolderToFavorites" action="AddCurrentFolderToFavorites"/>
+			</placeholder>
+		</menu>
+	</placeholder>
 </menubar>
 <popup name="background">
 	<placeholder name="Before Zoom Items">
@@ -247,6 +255,9 @@
 		<menuitem name="LocationOpenAlternate" action="LocationOpenAlternate"/>
 	</placeholder>
 	<separator name="Location After Open Separator"/>
+	<menuitem name="LocationAddFavorite" action="LocationAddFavorite"/>
+	<menuitem name="LocationAddBookmark" action="LocationAddBookmark"/>
+	<separator name="Location After Favorites Separator"/>
 	<placeholder name="Clipboard Actions">
 		<menuitem name="Cut" action="LocationCut"/>
 		<menuitem name="Copy" action="LocationCopy"/>

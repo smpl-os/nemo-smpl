@@ -1004,6 +1004,15 @@ nemo_file_management_properties_dialog_setup (GtkBuilder  *builder,
   bind_builder_bool (builder, nemo_preferences,
                NEMO_FILE_MANAGEMENT_PROPERTIES_FAVORITES_FIRST_WIDGET,
                NEMO_PREFERENCES_SORT_FAVORITES_FIRST);
+#ifdef NEMO_SMPL
+  bind_builder_bool (builder, nemo_preferences, "file_type_colors_checkbutton",
+                     NEMO_PREFERENCES_FILE_TYPE_COLORS);
+  bind_builder_bool (builder, nemo_preferences, "symbolic_file_icons_checkbutton",
+                     NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS);
+#else
+  gtk_widget_hide (GTK_WIDGET (gtk_builder_get_object (builder, "file_type_colors_checkbutton")));
+  gtk_widget_hide (GTK_WIDGET (gtk_builder_get_object (builder, "symbolic_file_icons_checkbutton")));
+#endif
 	bind_builder_enum (builder, nemo_preferences,
 			   NEMO_FILE_MANAGEMENT_PROPERTIES_DEFAULT_VIEW_WIDGET,
 			   NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER,

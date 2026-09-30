@@ -71,8 +71,82 @@ if smpl_features_enabled
     timeout: 60,
     is_parallel: false,
   )
+  document_test_args = []
+  if document_preview_enabled
+    document_test_args = ['-DNEMO_DOCUMENT_RENDERER_PATH="@0@"'.format(document_renderer.full_path())]
+    test('Native document renderer', hardening_python,
+      args: hardening_runner + [hardening_python.full_path(), files('test-document-renderer.py')[0],
+                               document_renderer],
+      suite: 'documents',
+      timeout: 180,
+      is_parallel: false,
+    )
+  endif
+  folder_persistence_test = executable('test-folder-persistence',
+    'test-folder-persistence.c',
+    objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+    include_directories: [rootInclude, include_directories('../src')],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions,
+    link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=eel_pop_up_context_menu'],
+  )
+  test('Nemo session persistence', hardening_python,
+    args: hardening_runner + [hardening_python.full_path(), files('test-window-session.py')[0],
+                             nemo, folder_persistence_test],
+    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
+    depends: copy_integrity_schemas,
+    suite: 'hardening',
+    timeout: 90,
+    is_parallel: false,
+  )
   ui_regressions = [
     completion_test,
+    executable('test-file-colors',
+      'test-file-colors.c',
+      include_directories: [rootInclude],
+      dependencies: [gtk, nemo_private],
+      c_args: nemo_definitions,
+    ),
+    executable('test-symbolic-file-icons',
+      'test-symbolic-file-icons.c',
+      include_directories: [rootInclude],
+      dependencies: [gtk, nemo_private],
+      c_args: nemo_definitions,
+    ),
+    folder_persistence_test,
+    executable('test-sidebar-favorites',
+      'test-sidebar-favorites.c',
+      objects: nemo.extract_objects(sidebar_favorites_test_sources),
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache',
+                  '-Wl,--wrap=eel_vfs_supports_uri_scheme',
+                  '-Wl,--wrap=nemo_window_slot_open_location_full',
+                  '-Wl,--wrap=nemo_mime_activate_file'],
+    ),
+    executable('test-toolbar-shortcuts',
+      'test-toolbar-shortcuts.c',
+      objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=gtk_tooltip_set_text'],
+    ),
+    executable('test-icon-type-jump',
+      'test-icon-type-jump.c',
+      include_directories: [rootInclude],
+      dependencies: [gtk, nemo_private],
+      c_args: nemo_definitions,
+    ),
+    executable('test-list-type-jump',
+      'test-list-type-jump.c',
+      objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=nemo_mime_activate_files'],
+    ),
     executable('test-search-navigation',
       'test-search-navigation.c',
       objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
@@ -117,10 +191,11 @@ if smpl_features_enabled
         '../src/nemo-image-viewer.c',
         '../src/nemo-paged-viewer.c',
         '../src/nemo-preview-utils.c',
+        '../src/nemo-document-viewer.c',
       ],
       include_directories: [rootInclude],
       dependencies: nemo_deps,
-      c_args: nemo_definitions,
+      c_args: nemo_definitions + document_test_args,
     ),
     executable('test-nemo-preview-async',
       [
@@ -128,10 +203,11 @@ if smpl_features_enabled
         '../src/nemo-preview-details.c',
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
+        '../src/nemo-document-viewer.c',
       ],
       include_directories: [rootInclude],
       dependencies: nemo_deps,
-      c_args: nemo_definitions,
+      c_args: nemo_definitions + document_test_args,
     ),
     executable('test-nemo-properties-volume',
       [
@@ -145,6 +221,18 @@ if smpl_features_enabled
       link_args: ['-Wl,--gc-sections'],
     ),
   ]
+  if document_preview_enabled
+    ui_regressions += executable('test-document-viewer',
+      ['test-document-viewer.c', '../src/nemo-preview-utils.c'],
+      include_directories: [rootInclude],
+      dependencies: nemo_deps + [json],
+      c_args: nemo_definitions + document_test_args,
+    )
+  endif
+  ui_regression_dependencies = [copy_integrity_schemas]
+  if document_preview_enabled
+    ui_regression_dependencies += document_renderer
+  endif
   foreach regression : ui_regressions
     regression_suites = ['hardening']
     if regression == completion_test
@@ -153,7 +241,7 @@ if smpl_features_enabled
     test(regression.name(), hardening_python,
       args: hardening_runner + [regression],
       env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
-      depends: copy_integrity_schemas,
+      depends: ui_regression_dependencies,
       suite: regression_suites,
       timeout: 60,
       is_parallel: false,
@@ -166,6 +254,17 @@ if smpl_features_enabled
       dependencies: [gio],
     ),
     suite: 'hardening',
+    timeout: 30,
+  )
+  test('Type-to-jump matching',
+    executable('test-type-jump',
+      'test-type-jump.c',
+      include_directories: [rootInclude],
+      dependencies: [gtk, nemo_private],
+    ),
+    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
+    depends: copy_integrity_schemas,
+    suite: 'type-jump',
     timeout: 30,
   )
 endif

@@ -33,6 +33,8 @@ publicIcons = [
   'hicolor/actions/scalable/nemo-vertical-layout-wide-symbolic.svg',
   'hicolor/actions/scalable/nemo-recursive-search-symbolic.svg',
   'hicolor/actions/scalable/nemo-recursive-search-symbolic-rtl.svg',
+  'hicolor/places/scalable/nemo-folder-desktop-symbolic.svg',
+  'hicolor/places/scalable/nemo-folder-favorites-symbolic.svg',
   'hicolor/status/scalable/nemo-progress-0-symbolic.svg',
   'hicolor/status/scalable/nemo-progress-10-symbolic.svg',
   'hicolor/status/scalable/nemo-progress-20-symbolic.svg',
@@ -78,4 +80,3 @@ foreach icon : privateIcons
     install_dir: join_paths(get_option('datadir'), 'nemo', 'icons', theme, size, context)
   )
 endforeach
-

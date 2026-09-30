@@ -23,6 +23,7 @@
 #include "nemo-icon-info.h"
 #include "nemo-icon-names.h"
 #include "nemo-default-file-icon.h"
+#include "nemo-icon-fallback.h"
 #include <gtk/gtk.h>
 #include <gio/gio.h>
 
@@ -286,6 +287,31 @@ icon_key_free (IconKey *key)
 	g_free (key);
 }
 
+void
+nemo_icon_info_invalidate_icon (GIcon *icon)
+{
+    GHashTable *caches[] = { loadable_icon_cache, themed_icon_cache };
+
+    g_return_if_fail (G_IS_ICON (icon));
+    for (guint i = 0; i < G_N_ELEMENTS (caches); i++) {
+        GHashTableIter iter;
+        gpointer key, value;
+        if (caches[i] == NULL) {
+            continue;
+        }
+        g_hash_table_iter_init (&iter, caches[i]);
+        while (g_hash_table_iter_next (&iter, &key, &value)) {
+            if (g_icon_equal (((IconKey *) key)->icon, icon)) {
+                /* Existing canvas surfaces or callers may still own the old
+                 * image. Drop the cache's reference, not those references. */
+                g_hash_table_iter_steal (&iter);
+                icon_key_free (key);
+                nemo_icon_info_unref (value);
+            }
+        }
+    }
+}
+
 NemoIconInfo *
 nemo_icon_info_lookup (GIcon *icon,
                int size,
@@ -398,6 +424,100 @@ nemo_icon_info_lookup (GIcon *icon,
 
         return nemo_icon_info_ref (icon_info);
     }
+}
+
+NemoIconInfo *
+nemo_icon_info_lookup_for_context (GIcon           *icon,
+                                   int              size,
+                                   int              scale,
+                                   GtkStyleContext *context)
+{
+    GtkIconTheme *theme;
+    GtkIconInfo *gtk_info = NULL;
+    GdkPixbuf *pixbuf = NULL;
+    NemoIconInfo *info;
+    GtkIconLookupFlags flags = GTK_ICON_LOOKUP_FORCE_SIZE;
+    gboolean symbolic = FALSE;
+
+    if (context == NULL) {
+        return nemo_icon_info_lookup (icon, size, scale);
+    }
+
+    g_return_val_if_fail (G_IS_ICON (icon), NULL);
+    g_return_val_if_fail (GTK_IS_STYLE_CONTEXT (context), NULL);
+
+    nemo_icon_fallback_init ();
+    if (G_IS_LOADABLE_ICON (icon)) {
+        /* Artwork does not use the symbolic foreground palette. Keep its
+         * existing cache so rendering does not repeatedly read/decode it. */
+        return nemo_icon_info_lookup (icon, size, scale);
+    }
+    theme = gtk_icon_theme_get_for_screen (gtk_style_context_get_screen (context));
+    if (G_IS_THEMED_ICON (icon)) {
+        const char * const *names = g_themed_icon_get_names (G_THEMED_ICON (icon));
+        symbolic = names[0] != NULL && g_str_has_suffix (names[0], "-symbolic");
+        if (symbolic) {
+            flags |= GTK_ICON_LOOKUP_FORCE_SYMBOLIC;
+        }
+        /* Resolve each name including its embedded fallback before considering
+         * the next. GTK's multi-name lookup otherwise prefers an installed
+         * generic icon over an embedded XDG-folder or MIME-specific symbol. */
+        for (guint i = 0; names[i] != NULL && pixbuf == NULL; i++) {
+            if (symbolic && !g_str_has_suffix (names[i], "-symbolic")) {
+                continue;
+            }
+            if (!gtk_icon_theme_has_icon (theme, names[i])) {
+                /* has_icon() does not include root-level resource fallbacks. */
+                char *resource = g_strconcat (NEMO_ICON_FALLBACK_RESOURCE_PATH "/",
+                                              names[i], ".svg", NULL);
+                gboolean embedded = g_resources_get_info (resource, 0, NULL, NULL, NULL);
+                g_free (resource);
+                if (!embedded) {
+                    continue;
+                }
+            }
+            gtk_info = gtk_icon_theme_lookup_icon_for_scale (theme, names[i], size, scale, flags);
+            if (gtk_info != NULL && (!symbolic || gtk_icon_info_is_symbolic (gtk_info))) {
+                pixbuf = gtk_icon_info_load_symbolic_for_context (gtk_info, context, NULL, NULL);
+            }
+            if (pixbuf == NULL) {
+                g_clear_object (&gtk_info);
+            }
+        }
+    } else {
+        gtk_info = gtk_icon_theme_lookup_by_gicon_for_scale (theme, icon, size, scale, flags);
+        if (gtk_info != NULL) {
+            pixbuf = gtk_icon_info_load_symbolic_for_context (gtk_info, context, NULL, NULL);
+        }
+    }
+
+    if (pixbuf == NULL) {
+        g_clear_object (&gtk_info);
+        gtk_info = gtk_icon_theme_lookup_icon_for_scale (theme, "text-x-generic-symbolic",
+                                                         size, scale,
+                                                         flags | GTK_ICON_LOOKUP_FORCE_SYMBOLIC);
+        if (gtk_info != NULL) {
+            pixbuf = gtk_icon_info_load_symbolic_for_context (gtk_info, context, NULL, NULL);
+        }
+    }
+
+    /* GTK caches lookup and symbolic recoloring by theme, scale and palette.
+     * Do not put these already-colored pixels in Nemo's global GIcon cache. */
+    info = nemo_icon_info_new_for_pixbuf (pixbuf, scale);
+    if (gtk_info != NULL) {
+        const char *filename = gtk_icon_info_get_filename (gtk_info);
+        if (filename != NULL) {
+            char *extension;
+            info->icon_name = g_path_get_basename (filename);
+            extension = strrchr (info->icon_name, '.');
+            if (extension != NULL) {
+                *extension = '\0';
+            }
+        }
+    }
+    g_clear_object (&gtk_info);
+    g_clear_object (&pixbuf);
+    return info;
 }
 
 NemoIconInfo *

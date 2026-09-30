@@ -41,6 +41,7 @@
 #include "nemo-selection-canvas-item.h"
 #include "nemo-desktop-utils.h"
 #include "nemo-thumbnails.h"
+#include "nemo-type-jump.h"
 #include <atk/atkaction.h>
 #include <eel/eel-accessibility.h>
 #include <eel/eel-vfs-extensions.h>
@@ -143,6 +144,8 @@ static int compare_icons_vertical (NemoIconContainer *container,
 				   NemoIcon *icon_b);
 
 static void remove_search_entry_timeout (NemoIconContainer *container);
+static void nemo_icon_container_search_dialog_hide (GtkWidget *search_dialog,
+                                                     NemoIconContainer *container);
 
 static gboolean handle_icon_slow_two_click (NemoIconContainer *container,
                                             NemoIcon *icon,
@@ -628,6 +631,7 @@ unschedule_keyboard_icon_reveal (NemoIconContainer *container)
 
 	if (details->keyboard_icon_reveal_timer_id != 0) {
 		g_source_remove (details->keyboard_icon_reveal_timer_id);
+		details->keyboard_icon_reveal_timer_id = 0;
 	}
 }
 
@@ -2954,6 +2958,15 @@ realize (GtkWidget *widget)
 }
 
 static void
+unmap (GtkWidget *widget)
+{
+	NemoIconContainer *container = NEMO_ICON_CONTAINER (widget);
+
+	nemo_icon_container_search_dialog_hide (container->details->search_window, container);
+	GTK_WIDGET_CLASS (nemo_icon_container_parent_class)->unmap (widget);
+}
+
+static void
 unrealize (GtkWidget *widget)
 {
 	NemoIconContainer *container;
@@ -2961,10 +2974,30 @@ unrealize (GtkWidget *widget)
 	container = NEMO_ICON_CONTAINER (widget);
 
 	nemo_icon_dnd_fini (container);
-	remove_search_entry_timeout (container);
+	nemo_icon_container_search_dialog_hide (container->details->search_window, container);
 
 	GTK_WIDGET_CLASS (nemo_icon_container_parent_class)->unrealize (widget);
 }
+
+#ifdef NEMO_SMPL
+static void
+file_appearance_changed (GSettings *settings, const char *key, NemoIconContainer *container)
+{
+	if (gtk_widget_get_realized (GTK_WIDGET (container))) {
+		nemo_icon_container_invalidate_labels (container);
+		if (g_str_equal (key, NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS))
+			nemo_icon_container_request_update_all (container);
+		gtk_widget_queue_draw (GTK_WIDGET (container));
+	}
+}
+
+static void
+file_icon_theme_changed (GtkIconTheme *theme, NemoIconContainer *container)
+{
+	nemo_icon_info_clear_caches ();
+	file_appearance_changed (NULL, NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS, container);
+}
+#endif
 
 static void
 style_updated (GtkWidget *widget)
@@ -3003,12 +3036,9 @@ button_press_event (GtkWidget *widget,
         clear_keyboard_focus (container);
 	clear_keyboard_rubberband_start (container);
 
-       // hide and clear the type-ahead search when a mouse click occur
-       if (event->type == GDK_BUTTON_PRESS && container->details->search_window){
-           remove_search_entry_timeout (container);
-           gtk_widget_hide (container->details->search_window);
-           gtk_entry_set_text (GTK_ENTRY (container->details->search_entry), "");
-       }
+	if (event->type == GDK_BUTTON_PRESS) {
+		nemo_icon_container_search_dialog_hide (container->details->search_window, container);
+	}
 
 	if (event->type == GDK_2BUTTON_PRESS || event->type == GDK_3BUTTON_PRESS) {
 		/* We use our own double-click detection. */
@@ -3694,9 +3724,67 @@ send_focus_change (GtkWidget *widget, gboolean in)
 }
 
 static void
+nemo_icon_container_refresh_type_jump_labels (NemoIconContainer *container)
+{
+	GList *p;
+
+	nemo_icon_container_invalidate_labels (container);
+	for (p = container->details->icons; p != NULL; p = p->next) {
+		NemoIcon *icon = p->data;
+		eel_canvas_item_request_update (EEL_CANVAS_ITEM (icon->item));
+	}
+	gtk_widget_queue_draw (GTK_WIDGET (container));
+}
+
+gboolean
+nemo_icon_container_get_type_jump_active (NemoIconContainer *container)
+{
+	g_return_val_if_fail (NEMO_IS_ICON_CONTAINER (container), FALSE);
+
+	return container->details->search_window != NULL &&
+		container->details->search_entry_changed_id != 0 &&
+		gtk_widget_get_visible (container->details->search_window);
+}
+
+static gboolean
+nemo_icon_container_type_jump_prefix_only (void)
+{
+#ifdef NEMO_SMPL
+	return nemo_smpl_interactive_search_mode () != NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING;
+#else
+	return FALSE;
+#endif
+}
+
+const char *
+nemo_icon_container_get_type_jump_text (NemoIconContainer *container,
+                                        gboolean *prefix_only)
+{
+	g_return_val_if_fail (NEMO_IS_ICON_CONTAINER (container), NULL);
+
+	if (prefix_only != NULL) {
+		*prefix_only = FALSE;
+	}
+	if (!nemo_icon_container_get_type_jump_active (container)) {
+		return NULL;
+	}
+	if (prefix_only != NULL) {
+		*prefix_only = nemo_icon_container_type_jump_prefix_only ();
+	}
+	return gtk_entry_get_text (GTK_ENTRY (container->details->search_entry));
+}
+
+static void
 nemo_icon_container_search_dialog_hide (GtkWidget *search_dialog,
 					    NemoIconContainer *container)
 {
+	gboolean had_search;
+
+	if (search_dialog == NULL) {
+		return;
+	}
+
+	had_search = container->details->search_entry_changed_id != 0;
 	if (container->details->search_entry_changed_id) {
 		g_signal_handler_disconnect (container->details->search_entry,
 					     container->details->search_entry_changed_id);
@@ -3705,10 +3793,46 @@ nemo_icon_container_search_dialog_hide (GtkWidget *search_dialog,
 
 	remove_search_entry_timeout (container);
 
-	/* send focus-in event */
-	send_focus_change (GTK_WIDGET (container->details->search_entry), FALSE);
+	if (gtk_widget_get_realized (container->details->search_entry) &&
+	    gtk_widget_get_visible (search_dialog)) {
+		send_focus_change (container->details->search_entry, FALSE);
+	}
 	gtk_widget_hide (search_dialog);
 	gtk_entry_set_text (GTK_ENTRY (container->details->search_entry), "");
+	container->details->selected_iter = 0;
+	if (had_search) {
+		nemo_icon_container_refresh_type_jump_labels (container);
+	}
+}
+
+#ifdef NEMO_SMPL
+static void
+interactive_search_mode_changed_callback (NemoIconContainer *container)
+{
+	nemo_icon_container_search_dialog_hide (container->details->search_window, container);
+}
+#endif
+
+static void
+nemo_icon_container_search_hidden (GtkWidget *search_dialog,
+                                   NemoIconContainer *container)
+{
+	/* The entry is also briefly shown to feed its IM context before a search starts. */
+	if (container->details->search_entry_changed_id != 0) {
+		nemo_icon_container_search_dialog_hide (search_dialog, container);
+	}
+}
+
+static void
+nemo_icon_container_search_destroyed (GtkWidget *search_dialog,
+                                      NemoIconContainer *container)
+{
+	remove_search_entry_timeout (container);
+	container->details->search_window = NULL;
+	container->details->search_entry = NULL;
+	container->details->search_entry_changed_id = 0;
+	container->details->selected_iter = 0;
+	nemo_icon_container_refresh_type_jump_labels (container);
 }
 
 static gboolean
@@ -3725,6 +3849,9 @@ nemo_icon_container_search_entry_flush_timeout (gpointer data)
 static void
 add_search_entry_timeout (NemoIconContainer *container)
 {
+	if (!nemo_icon_container_get_type_jump_active (container)) {
+		return;
+	}
 	container->details->typeselect_flush_timeout =
 		g_timeout_add_seconds (NEMO_ICON_CONTAINER_SEARCH_DIALOG_TIMEOUT,
 				       nemo_icon_container_search_entry_flush_timeout,
@@ -3809,8 +3936,8 @@ nemo_icon_container_search_populate_popup (GtkEntry *entry,
 					       NemoIconContainer *container)
 {
 	remove_search_entry_timeout (container);
-	g_signal_connect_swapped (menu, "hide",
-				  G_CALLBACK (add_search_entry_timeout), container);
+	g_signal_connect_object (menu, "hide",
+				 G_CALLBACK (reset_search_entry_timeout), container, G_CONNECT_SWAPPED);
 }
 
 void
@@ -3835,85 +3962,64 @@ nemo_icon_container_search_iter (NemoIconContainer *container,
 				     const char *key, gint n)
 {
 	GList *p;
-	NemoIcon *icon;
-	char *name;
-	int count;
-	char *normalized_key, *case_normalized_key;
-	char *normalized_name, *case_normalized_name;
+	NemoIcon *match = NULL;
+	char *normalized_key;
+	gboolean prefix_only;
+	int count = 0;
+	NemoTypeJumpMatch rank;
 
 	g_assert (key != NULL);
 	g_assert (n >= 1);
 
-	normalized_key = g_utf8_normalize (key, -1, G_NORMALIZE_ALL);
-	if (!normalized_key) {
-		return FALSE;
-	}
-	case_normalized_key = g_utf8_casefold (normalized_key, -1);
-	g_free (normalized_key);
-	if (!case_normalized_key) {
+	normalized_key = nemo_type_jump_normalize (key);
+	if (normalized_key == NULL || normalized_key[0] == '\0') {
+		g_free (normalized_key);
 		return FALSE;
 	}
 
-	icon = NULL;
-	name = NULL;
-	count = 0;
-	for (p = container->details->icons; p != NULL && count != n; p = p->next) {
-		icon = p->data;
-		nemo_icon_container_get_icon_text (container, icon->data, &name,
-						       NULL, NULL, NULL, TRUE);
+	prefix_only = nemo_icon_container_type_jump_prefix_only ();
 
-		/* This can happen if a key event is handled really early while
-		 * loading the icon container, before the items have all been
-		 * updated once.
-		 */
-		if (!name) {
-			continue;
-		}
-
-		normalized_name = g_utf8_normalize (name, -1, G_NORMALIZE_ALL);
-		if (!normalized_name) {
-			continue;
-		}
-		case_normalized_name = g_utf8_casefold (normalized_name, -1);
-		g_free (normalized_name);
-		if (!case_normalized_name) {
-			continue;
-		}
-
+	/* Two stable passes retain folder/layout ordering inside each match tier. */
 #ifdef NEMO_SMPL
-		{
-			gboolean matched;
-
-			if (nemo_smpl_interactive_search_mode () == NEMO_INTERACTIVE_SEARCH_MODE_SUBSTRING) {
-				matched = (strstr (case_normalized_name, case_normalized_key) != NULL);
-			} else {
-				/* prefix (vanilla) or filter (this path shouldn't fire in filter mode) */
-				matched = (strncmp (case_normalized_key, case_normalized_name,
-						    strlen (case_normalized_key)) == 0);
-			}
-
-			if (matched) {
-				count++;
-			}
-		}
+	rank = NEMO_TYPE_JUMP_PREFIX;
 #else
-		if (strstr (case_normalized_name, case_normalized_key) != NULL) {
-			count++;
-		}
-#endif /* NEMO_SMPL */
+	rank = NEMO_TYPE_JUMP_SUBSTRING;
+#endif
+	for (;
+	     rank <= (prefix_only ? NEMO_TYPE_JUMP_PREFIX : NEMO_TYPE_JUMP_SUBSTRING) && match == NULL;
+	     rank++) {
+		for (p = container->details->icons; p != NULL; p = p->next) {
+			NemoIcon *icon = p->data;
+			EelCanvasItem *item = EEL_CANVAS_ITEM (icon->item);
+			char *name = NULL;
+			NemoTypeJumpMatch result;
 
-		g_free (case_normalized_name);
-		g_free (name);
-		name = NULL;
+			if (!(item->flags & EEL_CANVAS_ITEM_VISIBLE) ||
+			    !(item->flags & EEL_CANVAS_ITEM_MAPPED)) {
+				continue;
+			}
+			nemo_icon_container_get_icon_text (container, icon->data, &name,
+			                                  NULL, NULL, NULL, TRUE);
+			result = nemo_type_jump_match (normalized_key, name, prefix_only);
+			g_free (name);
+#ifndef NEMO_SMPL
+			if (result == NEMO_TYPE_JUMP_PREFIX)
+				result = NEMO_TYPE_JUMP_SUBSTRING;
+#endif
+			if (result == rank && ++count == n) {
+				match = icon;
+				break;
+			}
+		}
 	}
 
-	g_free (case_normalized_key);
+	g_free (normalized_key);
 
-	if (count == n) {
-		if (select_one_unselect_others (container, icon)) {
+	if (match != NULL) {
+		if (select_one_unselect_others (container, match)) {
 			g_signal_emit (container, signals[SELECTION_CHANGED], 0);
 		}
-		schedule_keyboard_icon_reveal (container, icon);
+		schedule_keyboard_icon_reveal (container, match);
 
 		return TRUE;
 	}
@@ -3948,19 +4054,12 @@ nemo_icon_container_search_move (GtkWidget *window,
 		return;
 	}
 
-	/* search */
-	unselect_all (container);
-
 	ret = nemo_icon_container_search_iter (container, text,
 		up?((container->details->selected_iter) - 1):((container->details->selected_iter + 1)));
 
 	if (ret) {
 		/* found */
 		container->details->selected_iter += up?(-1):(1);
-	} else {
-		/* return to old iter */
-		nemo_icon_container_search_iter (container, text,
-					container->details->selected_iter);
 	}
 }
 
@@ -3990,6 +4089,7 @@ nemo_icon_container_search_key_press_event (GtkWidget *widget,
 						NemoIconContainer *container)
 {
 	gboolean retval = FALSE;
+	int direction;
 
 	g_assert (GTK_IS_WIDGET (widget));
 	g_assert (NEMO_IS_ICON_CONTAINER (container));
@@ -4009,27 +4109,21 @@ nemo_icon_container_search_key_press_event (GtkWidget *widget,
 		return TRUE;
 	}
 
-	/* select previous matching iter */
-	if (event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_KP_Up) {
-		nemo_icon_container_search_move (widget, container, TRUE);
-		retval = TRUE;
-	}
-
-	if (((event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == (GDK_CONTROL_MASK | GDK_SHIFT_MASK))
-	    && (event->keyval == GDK_KEY_g || event->keyval == GDK_KEY_G)) {
-		nemo_icon_container_search_move (widget, container, TRUE);
-		retval = TRUE;
-	}
-
-	/* select next matching iter */
-	if (event->keyval == GDK_KEY_Down || event->keyval == GDK_KEY_KP_Down) {
-		nemo_icon_container_search_move (widget, container, FALSE);
-		retval = TRUE;
-	}
-
-	if (((event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == GDK_CONTROL_MASK)
-	    && (event->keyval == GDK_KEY_g || event->keyval == GDK_KEY_G)) {
-		nemo_icon_container_search_move (widget, container, FALSE);
+#ifdef NEMO_SMPL
+	direction = nemo_type_jump_key_direction (event);
+#else
+	direction = 0;
+	if (event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_KP_Up ||
+	    ((event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == (GDK_CONTROL_MASK | GDK_SHIFT_MASK) &&
+	     (event->keyval == GDK_KEY_g || event->keyval == GDK_KEY_G)))
+		direction = -1;
+	else if (event->keyval == GDK_KEY_Down || event->keyval == GDK_KEY_KP_Down ||
+	         ((event->state & (GDK_CONTROL_MASK | GDK_SHIFT_MASK)) == GDK_CONTROL_MASK &&
+	          (event->keyval == GDK_KEY_g || event->keyval == GDK_KEY_G)))
+		direction = 1;
+#endif
+	if (direction != 0) {
+		nemo_icon_container_search_move (widget, container, direction < 0);
 		retval = TRUE;
 	}
 
@@ -4042,9 +4136,9 @@ static void
 nemo_icon_container_search_init (GtkWidget   *entry,
 				     NemoIconContainer *container)
 {
-	gint ret;
 	gint len;
 	const gchar *text;
+	gboolean selection_changed;
 
 	g_assert (GTK_IS_ENTRY (entry));
 	g_assert (NEMO_IS_ICON_CONTAINER (container));
@@ -4053,17 +4147,15 @@ nemo_icon_container_search_init (GtkWidget   *entry,
 	len = strlen (text);
 
 	/* search */
-	unselect_all (container);
+	selection_changed = unselect_all (container);
+	container->details->selected_iter = 0;
 	reset_search_entry_timeout (container);
+	nemo_icon_container_refresh_type_jump_labels (container);
 
-	if (len < 1) {
-		return;
-	}
-
-	ret = nemo_icon_container_search_iter (container, text, 1);
-
-	if (ret) {
+	if (len > 0 && nemo_icon_container_search_iter (container, text, 1)) {
 		container->details->selected_iter = 1;
+	} else if (selection_changed) {
+		g_signal_emit (container, signals[SELECTION_CHANGED], 0);
 	}
 }
 
@@ -4085,6 +4177,10 @@ nemo_icon_container_ensure_interactive_directory (NemoIconContainer *container)
 	gtk_window_set_type_hint (GTK_WINDOW (container->details->search_window),
 				  GDK_WINDOW_TYPE_HINT_COMBO);
 
+	g_signal_connect (container->details->search_window, "hide",
+	                  G_CALLBACK (nemo_icon_container_search_hidden), container);
+	g_signal_connect (container->details->search_window, "destroy",
+	                  G_CALLBACK (nemo_icon_container_search_destroyed), container);
 	g_signal_connect (container->details->search_window, "delete_event",
 			  G_CALLBACK (nemo_icon_container_search_delete_event),
 			  container);
@@ -4238,6 +4334,7 @@ key_press_event (GtkWidget *widget,
 
 		((GdkEventKey *) new_event)->window = window;
 		gdk_event_free(new_event);
+		return handled;
 	} else {
 		switch (event->keyval) {
 		case GDK_KEY_Home:
@@ -4400,6 +4497,8 @@ key_press_event (GtkWidget *widget,
 	        new_text = gtk_entry_get_text (GTK_ENTRY (container->details->search_entry));
 	        text_modified = strcmp (old_text, new_text) != 0;
 	        g_free (old_text);
+	        ((GdkEventKey *) new_event)->window = window;
+	        gdk_event_free (new_event);
 	        if (container->details->imcontext_changed ||
 	            (retval && text_modified)) {
 	            if (nemo_icon_container_start_interactive_search (container)) {
@@ -4410,9 +4509,6 @@ key_press_event (GtkWidget *widget,
 	                return FALSE;
 	            }
 	        }
-
-	        ((GdkEventKey *) new_event)->window = window;
-	        gdk_event_free (new_event);
 	    }
 	}
 
@@ -4923,6 +5019,7 @@ nemo_icon_container_class_init (NemoIconContainerClass *class)
 	widget_class->get_preferred_width = get_prefered_width;
 	widget_class->get_preferred_height = get_prefered_height;
 	widget_class->realize = realize;
+	widget_class->unmap = unmap;
 	widget_class->unrealize = unrealize;
 	widget_class->button_press_event = button_press_event;
 	widget_class->button_release_event = button_release_event;
@@ -5000,6 +5097,19 @@ nemo_icon_container_init (NemoIconContainer *container)
     details->view_constants = g_new0 (NemoViewLayoutConstants, 1);
 
 	container->details = details;
+
+#ifdef NEMO_SMPL
+	g_signal_connect_object (nemo_preferences, "changed::" NEMO_PREFERENCES_FILE_TYPE_COLORS,
+	                         G_CALLBACK (file_appearance_changed), container, 0);
+	g_signal_connect_object (nemo_preferences, "changed::" NEMO_PREFERENCES_SYMBOLIC_FILE_ICONS,
+	                         G_CALLBACK (file_appearance_changed), container, 0);
+	g_signal_connect_object (gtk_icon_theme_get_default (), "changed",
+	                         G_CALLBACK (file_icon_theme_changed), container, 0);
+	g_signal_connect_object (nemo_preferences,
+	                         "changed::" NEMO_PREFERENCES_INTERACTIVE_SEARCH_MODE,
+	                         G_CALLBACK (interactive_search_mode_changed_callback),
+	                         container, G_CONNECT_SWAPPED);
+#endif
 
 	g_signal_connect (container, "focus-in-event",
 			  G_CALLBACK (handle_focus_in_event), NULL);
@@ -5285,6 +5395,7 @@ nemo_icon_container_clear (NemoIconContainer *container)
 	g_return_if_fail (NEMO_IS_ICON_CONTAINER (container));
 
 	details = container->details;
+	nemo_icon_container_search_dialog_hide (details->search_window, container);
 	details->layout_timestamp = UNDEFINED_TIME;
 	details->store_layout_timestamps_when_finishing_new_icons = FALSE;
 

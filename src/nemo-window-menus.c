@@ -45,6 +45,7 @@
 #include "nemo-list-view.h"
 #include "nemo-toolbar.h"
 #include "nemo-quick-preview.h"
+#include "nemo-keybindings.h"
 
 #include <gtk/gtk.h>
 #include <gio/gio.h>
@@ -844,6 +845,12 @@ nemo_window_update_split_view_actions_sensitivity (NemoWindow *window)
 }
 
 static void
+action_zen_mode_callback (GtkAction *action, gpointer user_data)
+{
+	nemo_window_set_zen_mode (NEMO_WINDOW (user_data), gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (action)));
+}
+
+static void
 action_split_view_callback (GtkAction *action,
 			    gpointer user_data)
 {
@@ -1106,6 +1113,7 @@ nemo_window_update_show_hide_ui_elements (NemoWindow *window)
 		gtk_action_unblock_activate (action);
 	}
     }
+    nemo_window_sync_zen_mode (window);
 }
 
 static void
@@ -1864,8 +1872,8 @@ toggle_location_entry (NemoWindow     *window,
 
     current_view = nemo_toolbar_get_show_location_entry (NEMO_TOOLBAR (pane->tool_bar));
     temp_toolbar_visible = pane->temporary_navigation_bar;
-    default_toolbar_visible = g_settings_get_boolean (nemo_window_state,
-                                                      NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
+    default_toolbar_visible = nemo_window_get_zen_mode (window) ||
+                              g_settings_get_boolean (nemo_window_state, NEMO_WINDOW_STATE_START_WITH_TOOLBAR);
     already_has_focus = nemo_location_bar_has_focus (NEMO_LOCATION_BAR (pane->location_bar));
 
     grab_focus_only = from_accel_or_menu && (pane->last_focus_widget == NULL || !already_has_focus) && current_view;
@@ -2373,6 +2381,12 @@ static const GtkActionEntry main_entries[] = {
   /* name, stock id, label */  { "Up", "xsi-go-up-symbolic", N_("Open _Parent"),
                                  "<alt>Up", N_("Open the parent folder"),
                                  G_CALLBACK (action_up_callback) },
+                               { NEMO_ACTION_UP_CONTROL, NULL, N_("Go Up (second alternate)"),
+                                 "<control>Up", NULL, G_CALLBACK (action_up_callback) },
+                               { NEMO_ACTION_BACK_ALTERNATE, NULL, N_("Go Back (alternate)"),
+                                 "<control>Left", NULL, G_CALLBACK (action_back_callback) },
+                               { NEMO_ACTION_FORWARD_ALTERNATE, NULL, N_("Go Forward (alternate)"),
+                                 "<control>Right", NULL, G_CALLBACK (action_forward_callback) },
   /* name, stock id, label */  { "UpAccel", NULL, "UpAccel",
                                  "", NULL,
                                  G_CALLBACK (action_up_callback) },
@@ -2523,6 +2537,9 @@ static const GtkActionEntry main_entries[] = {
 };
 
 static const GtkToggleActionEntry main_toggle_entries[] = {
+  { NEMO_ACTION_ZEN_MODE, NULL, N_("_Zen Mode"), "<Alt>z",
+    N_("Show only file panes and location bars"),
+    G_CALLBACK (action_zen_mode_callback), FALSE },
   /* name, stock id */         { "Show Hidden Files", NULL,
   /* label, accelerator */       N_("Show _Hidden Files"), "<control>H",
   /* tooltip */                  N_("Toggle the display of hidden files in the current window"),
@@ -2926,6 +2943,21 @@ nemo_window_initialize_menus (NemoWindow *window)
 	gtk_action_group_add_actions (action_group,
 				      main_entries, G_N_ELEMENTS (main_entries),
 				      window);
+    const char *navigation_aliases[][2] = {
+        { NEMO_ACTION_BACK, NEMO_ACTION_BACK_ALTERNATE },
+        { NEMO_ACTION_FORWARD, NEMO_ACTION_FORWARD_ALTERNATE },
+        { NEMO_ACTION_UP, NEMO_ACTION_UP_CONTROL }
+    };
+    for (guint alias = 0; alias < G_N_ELEMENTS (navigation_aliases); alias++) {
+        GtkAction *alternate = gtk_action_group_get_action (action_group, navigation_aliases[alias][1]);
+#ifdef NEMO_SMPL
+        if (!NEMO_IS_DESKTOP_WINDOW (window))
+            g_object_bind_property (gtk_action_group_get_action (action_group, navigation_aliases[alias][0]),
+                                    "sensitive", alternate, "sensitive", G_BINDING_SYNC_CREATE);
+        else
+#endif
+            gtk_action_set_sensitive (alternate, FALSE);
+    }
 
       /* if root then hide menu items that do not work */
     if (nemo_user_is_root () && !nemo_treating_root_as_normal ()) {
@@ -2944,6 +2976,13 @@ nemo_window_initialize_menus (NemoWindow *window)
 	gtk_action_group_add_toggle_actions (action_group,
 					     main_toggle_entries, G_N_ELEMENTS (main_toggle_entries),
 					     window);
+	action = gtk_action_group_get_action (action_group, NEMO_ACTION_ZEN_MODE);
+#ifdef NEMO_SMPL
+	gtk_action_set_sensitive (action, !window->details->disable_chrome);
+#else
+	gtk_action_set_visible (action, FALSE);
+	gtk_action_set_sensitive (action, FALSE);
+#endif
 	gtk_action_group_add_radio_actions (action_group,
 					    sidebar_radio_entries, G_N_ELEMENTS (sidebar_radio_entries),
 					    0, G_CALLBACK (sidebar_radio_entry_changed_cb),
@@ -3053,6 +3092,9 @@ nemo_window_initialize_menus (NemoWindow *window)
     g_signal_connect (submenu, "show", G_CALLBACK (on_file_menu_show), window);
 
 	nemo_window_initialize_trash_icon_monitor (window);
+#ifdef NEMO_SMPL
+    nemo_keybindings_apply_all ();
+#endif
 }
 
 void

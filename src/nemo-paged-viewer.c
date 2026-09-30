@@ -948,8 +948,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer user_data)
 	case GDK_KEY_k: scroll_by_lines (self, -1); return TRUE;
 	case GDK_KEY_Down:
 	case GDK_KEY_j: scroll_by_lines (self, 1); return TRUE;
-	case GDK_KEY_Page_Up: scroll_by_lines (self, -page); return TRUE;
+	case GDK_KEY_Page_Up:
+	case GDK_KEY_KP_Page_Up: scroll_by_lines (self, -page); return TRUE;
 	case GDK_KEY_Page_Down:
+	case GDK_KEY_KP_Page_Down:
 	case GDK_KEY_space: scroll_by_lines (self, page); return TRUE;
 	case GDK_KEY_Home: request_page (self, NAV_OFFSET, 0, 0); return TRUE;
 	case GDK_KEY_End: request_page (self, NAV_END, 0, 0); return TRUE;
@@ -1781,9 +1783,11 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer user_data)
 		scroll_by_lines (self, 1);
 		return TRUE;
 	case GDK_KEY_Page_Up:
+	case GDK_KEY_KP_Page_Up:
 		scroll_by_lines (self, -page);
 		return TRUE;
 	case GDK_KEY_Page_Down:
+	case GDK_KEY_KP_Page_Down:
 	case GDK_KEY_space:
 		scroll_by_lines (self, page);
 		return TRUE;
@@ -2031,3 +2035,11 @@ nemo_paged_viewer_search_has_match (NemoPagedViewer *self)
 }
 
 #endif /* NEMO_SMPL */
+
+void
+nemo_paged_viewer_scroll_page (NemoPagedViewer *self, gboolean forward)
+{
+	g_return_if_fail (NEMO_IS_PAGED_VIEWER (self));
+	int page = MAX (1, self->vis_lines - 2);
+	scroll_by_lines (self, forward ? page : -page);
+}

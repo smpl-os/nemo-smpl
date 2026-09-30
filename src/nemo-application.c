@@ -486,6 +486,10 @@ init_icons_and_styles (void)
      * above Adwaita and nemo's own CSS.  Also installs a GFileMonitor for
      * live reload when theme-set rewrites the file. */
     load_smplos_theme ();
+    /* Keep the resize affordance visible even when a theme hides generic
+     * separators. Its colors still come from the active theme. */
+    add_css_provider_at_priority ("/org/nemo/nemo-style-affordances.css",
+                                  GTK_STYLE_PROVIDER_PRIORITY_USER + 1);
 #endif /* NEMO_SMPL */
 
     GtkSettings *gtk_settings = gtk_settings_get_default ();

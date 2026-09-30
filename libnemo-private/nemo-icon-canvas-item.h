@@ -27,6 +27,7 @@
 
 #include <eel/eel-canvas.h>
 #include <eel/eel-art-extensions.h>
+#include "nemo-file-colors.h"
 
 G_BEGIN_DECLS
 
@@ -69,6 +70,8 @@ GType       nemo_icon_canvas_item_get_type                 (void);
 /* attributes */
 void        nemo_icon_canvas_item_set_image                (NemoIconCanvasItem       *item,
 								GdkPixbuf                    *image);
+void        nemo_icon_canvas_item_set_file_color_kind      (NemoIconCanvasItem *item,
+                                                            NemoFileColorKind kind);
 cairo_surface_t* nemo_icon_canvas_item_get_drag_surface    (NemoIconCanvasItem       *item);
 void        nemo_icon_canvas_item_set_emblems              (NemoIconCanvasItem       *item,
 								GList                        *emblem_pixbufs);

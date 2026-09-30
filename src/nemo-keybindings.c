@@ -22,11 +22,11 @@
 
 #include <config.h>
 #include "nemo-keybindings.h"
+#include "nemo-actions.h"
 
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
-
-GSettings *nemo_keybinding_settings = NULL;
+#include <string.h>
 
 /*
  * Master table of all configurable keybindings.
@@ -42,6 +42,12 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "go-back",               "<Actions>/ShellActions/Back",               N_("Go Back"),                    N_("Navigation"), "<Alt>Left",              NULL, NULL },
 	{ "go-forward",            "<Actions>/ShellActions/Forward",            N_("Go Forward"),                 N_("Navigation"), "<Alt>Right",             NULL, NULL },
 	{ "go-up",                 "<Actions>/ShellActions/Up",                 N_("Go to Parent Folder"),        N_("Navigation"), "<Alt>Up",                NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "go-back-alt",           "<Actions>/ShellActions/BackAlternate",      N_("Go Back (alternate)"),         N_("Navigation"), "<Control>Left",          NULL, NULL },
+	{ "go-forward-alt",        "<Actions>/ShellActions/ForwardAlternate",   N_("Go Forward (alternate)"),      N_("Navigation"), "<Control>Right",         NULL, NULL },
+	{ "go-up-secondary",       "<Actions>/ShellActions/UpControl",          N_("Go Up (second alternate)"),    N_("Navigation"), "<Control>Up",            NULL, NULL },
+	{ "go-down",               "<Actions>/DirViewActions/OpenSelectedFolder", N_("Open Selected Folder"),     N_("Navigation"), "<Control>Down",          NULL, NULL },
+#endif
 	{ "go-home",               "<Actions>/ShellActions/Home",               N_("Go Home"),                    N_("Navigation"), "<Alt>Home",              NULL, NULL },
 	{ "edit-location",         "<Actions>/ShellActions/Edit Location",      N_("Toggle Location Entry"),      N_("Navigation"), "<Control>l",             NULL, NULL },
 	{ "reload",                "<Actions>/ShellActions/Reload",             N_("Reload"),                     N_("Navigation"), "<Control>r",             NULL, NULL },
@@ -57,6 +63,9 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "close-all-windows",     "<Actions>/ShellActions/Close All Windows",  N_("Close All Windows"),          N_("Window"), "<Control>q",                NULL, NULL },
 	{ "show-hidden-files",     "<Actions>/ShellActions/Show Hidden Files",  N_("Show Hidden Files"),          N_("Window"), "<Control>h",                NULL, NULL },
 	{ "show-sidebar",          "<Actions>/ShellActions/Show Hide Sidebar",  N_("Toggle Sidebar"),             N_("Window"), "F9",                        NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "toggle-zen-mode",       "<Actions>/ShellActions/Zen Mode",           N_("Toggle Zen Mode"),            N_("Window"), "<Alt>z",                    NULL, NULL },
+#endif
 	{ "split-view",            "<Actions>/ShellActions/Show Hide Extra Pane", N_("Toggle Split View"),        N_("Window"), "<Control>F3",                   NULL, NULL },
 	{ "show-places",           "<Actions>/ShellActions/Show Places",          N_("Show Places Sidebar"),      N_("Window"), "<Alt><Shift>p",               NULL, NULL },
 	{ "show-treeview",         "<Actions>/ShellActions/Show Treeview",        N_("Show Treeview Sidebar"),    N_("Window"), "<Alt><Shift>t",               NULL, NULL },
@@ -73,6 +82,16 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "quick-preview-search",      NULL, N_("Open Search in Quick Preview"), N_("Quick Preview"), "<Primary>f", NULL, NULL },
 	{ "quick-preview-search-next", NULL, N_("Next Search Match"),            N_("Quick Preview"), "F3",          NULL, NULL },
 	{ "quick-preview-search-prev", NULL, N_("Previous Search Match"),        N_("Quick Preview"), "<Shift>F3",   NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "quick-preview-previous-file", NULL, N_("Previous File in Quick Preview"), N_("Quick Preview"), "<Control>Left", NULL, NULL },
+	{ "quick-preview-next-file", NULL, N_("Next File in Quick Preview"), N_("Quick Preview"), "<Control>Right", NULL, NULL },
+	{ "type-jump-next", NULL, N_("Next Matching Filename"), N_("Type to Jump"), "Down", NULL, NULL },
+	{ "type-jump-previous", NULL, N_("Previous Matching Filename"), N_("Type to Jump"), "Up", NULL, NULL },
+	{ "type-jump-next-alt", NULL, N_("Next Matching Filename (Right Arrow)"), N_("Type to Jump"), "Right", NULL, NULL },
+	{ "type-jump-previous-alt", NULL, N_("Previous Matching Filename (Left Arrow)"), N_("Type to Jump"), "Left", NULL, NULL },
+	{ "type-jump-next-secondary", NULL, N_("Next Matching Filename (alternate)"), N_("Type to Jump"), "<Control>g", NULL, NULL },
+	{ "type-jump-previous-secondary", NULL, N_("Previous Matching Filename (alternate)"), N_("Type to Jump"), "<Control><Shift>g", NULL, NULL },
+#endif
 
 	/* Tabs */
 	{ "new-tab",               "<Actions>/ShellActions/New Tab",            N_("New Tab"),                    N_("Tabs"), "<Control>t",                   NULL, NULL },
@@ -91,6 +110,9 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 
 	/* Bookmarks */
 	{ "add-bookmark",          "<Actions>/ShellActions/Add Bookmark",       N_("Add Bookmark"),               N_("Bookmarks"), "<Control>d",              NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "add-favorite",          "<Actions>/DirViewActions/AddCurrentFolderToFavorites", N_("Add Current Folder to Favorites"), N_("Bookmarks"), "<Control><Alt>b", NULL, NULL },
+#endif
 	{ "edit-bookmarks",        "<Actions>/ShellActions/Edit Bookmarks",     N_("Edit Bookmarks"),             N_("Bookmarks"), "<Control>b",              NULL, NULL },
 	{ "bookmark-picker",       "<Actions>/ShellActions/Bookmark Picker",    N_("Bookmark/Disk Picker"),       N_("Bookmarks"), "<Alt>F1",                 NULL, NULL },
 	{ "bookmark-picker-other", "<Actions>/ShellActions/Bookmark Picker Other Pane", N_("Bookmark/Disk Picker (Other Pane)"), N_("Bookmarks"), "<Alt>F2",     NULL, NULL },
@@ -275,22 +297,158 @@ on_keybinding_changed (GSettings   *settings,
 	}
 }
 
+#ifdef NEMO_SMPL
+static void
+reserve_new_shortcut_defaults (void)
+{
+	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode" };
+	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
+		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
+		if (user_value != NULL) {
+			g_variant_unref (user_value);
+			continue;
+		}
+		if (!g_settings_is_writable (nemo_keybinding_settings, keys[i]))
+			continue;
+		g_autofree char *value = g_settings_get_string (nemo_keybinding_settings, keys[i]);
+		guint key;
+		GdkModifierType mods;
+		gtk_accelerator_parse (value, &key, &mods);
+		if (key == 0)
+			continue;
+		for (gint j = 0; j < nemo_keybinding_entries_count; j++) {
+			/* Preview keys live in a separate window, not the file panes. */
+			if (g_str_equal (nemo_keybinding_entries[j].category, "Quick Preview"))
+				continue;
+			const char *other = nemo_keybinding_entries[j].settings_key;
+			if (g_str_equal (keys[i], other))
+				continue;
+			g_autofree char *assigned = g_settings_get_string (nemo_keybinding_settings, other);
+			guint other_key;
+			GdkModifierType other_mods;
+			gtk_accelerator_parse (assigned, &other_key, &other_mods);
+			if (key == other_key && mods == other_mods) {
+				if (!g_settings_set_string (nemo_keybinding_settings, keys[i], ""))
+					g_warning ("Could not disable conflicting default shortcut %s", keys[i]);
+				break;
+			}
+		}
+	}
+}
+#endif
+
 /*
  * Initialize the keybinding settings and apply all overrides.
  */
 void
 nemo_keybindings_init (void)
 {
-	if (nemo_keybinding_settings != NULL) {
+	static gboolean initialized;
+	if (initialized) {
 		return;
 	}
-
-	nemo_keybinding_settings = g_settings_new ("org.nemo.keybindings");
+	initialized = TRUE;
+	if (nemo_keybinding_settings == NULL)
+		nemo_keybinding_settings = g_settings_new ("org.nemo.keybindings");
+#ifdef NEMO_SMPL
+	reserve_new_shortcut_defaults ();
+#endif
 
 	g_signal_connect (nemo_keybinding_settings, "changed",
 	                  G_CALLBACK (on_keybinding_changed), NULL);
 
 	nemo_keybindings_apply_all ();
+}
+
+static const char *
+canonical_tooltip_action (const char *name)
+{
+	static const struct { const char *alias; const char *action; } aliases[] = {
+		{ NEMO_ACTION_BACK_ALTERNATE, NEMO_ACTION_BACK },
+		{ NEMO_ACTION_FORWARD_ALTERNATE, NEMO_ACTION_FORWARD },
+		{ NEMO_ACTION_UP_CONTROL, NEMO_ACTION_UP },
+		{ NEMO_ACTION_TOGGLE_LOCATION, NEMO_ACTION_EDIT_LOCATION }
+	};
+	for (guint i = 0; i < G_N_ELEMENTS (aliases); i++)
+		if (g_strcmp0 (name, aliases[i].alias) == 0)
+			return aliases[i].action;
+	return name;
+}
+
+static gboolean
+entry_matches_tooltip_action (const NemoKeybindingEntry *entry, const char *name)
+{
+	if (entry->accel_path != NULL) {
+		const char *action = strrchr (entry->accel_path, '/');
+		return action != NULL && g_strcmp0 (canonical_tooltip_action (action + 1), name) == 0;
+	}
+	return (g_str_equal (name, "Up") && g_str_equal (entry->settings_key, "go-up-alt")) ||
+	       (g_str_equal (name, "Reload") && g_str_equal (entry->settings_key, "reload-alt")) ||
+	       (g_str_equal (name, "New Folder") && g_str_equal (entry->settings_key, "new-folder-alt"));
+}
+
+static void
+append_shortcut_label (GString *text, GHashTable *seen, guint key, GdkModifierType mods)
+{
+	if (key == 0)
+		return;
+	char *label = gtk_accelerator_get_label (key, mods);
+	if (g_hash_table_contains (seen, label)) {
+		g_free (label);
+		return;
+	}
+	if (text->len > 0)
+		g_string_append (text, ", ");
+	g_string_append (text, label);
+	g_hash_table_add (seen, label);
+}
+
+char *
+nemo_keybindings_get_action_tooltip (GtkAction *action)
+{
+	g_return_val_if_fail (GTK_IS_ACTION (action), NULL);
+	const char *name = canonical_tooltip_action (gtk_action_get_name (action));
+	const char *help = gtk_action_get_tooltip (action);
+	GString *text = g_string_new (help != NULL ? help : "");
+	if (text->len == 0) {
+		const char *label = gtk_action_get_label (action);
+		for (const char *p = label != NULL ? label : name; *p != '\0'; p++) {
+			if (*p == '_' && p[1] != '\0')
+				p++;
+			g_string_append_c (text, *p);
+		}
+	}
+	GString *shortcuts = g_string_new (NULL);
+	GHashTable *seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	if (nemo_keybinding_settings != NULL) {
+		for (gint i = 0; i < nemo_keybinding_entries_count; i++) {
+			const NemoKeybindingEntry *entry = &nemo_keybinding_entries[i];
+			if (!entry_matches_tooltip_action (entry, name))
+				continue;
+			GtkAccelKey mapped;
+			if (entry->accel_path != NULL && gtk_accel_map_lookup_entry (entry->accel_path, &mapped))
+				append_shortcut_label (shortcuts, seen, mapped.accel_key, mapped.accel_mods);
+			else {
+				g_autofree char *value = g_settings_get_string (nemo_keybinding_settings, entry->settings_key);
+				guint key;
+				GdkModifierType mods;
+				gtk_accelerator_parse (value, &key, &mods);
+				append_shortcut_label (shortcuts, seen, key, mods);
+			}
+		}
+	}
+	const char *path = gtk_action_get_accel_path (action);
+	GtkAccelKey mapped;
+	if (path != NULL && gtk_accel_map_lookup_entry (path, &mapped))
+		append_shortcut_label (shortcuts, seen, mapped.accel_key, mapped.accel_mods);
+	if (shortcuts->len > 0) {
+		g_autofree char *line = g_strdup_printf (_("Shortcut: %s"), shortcuts->str);
+		g_string_append_c (text, '\n');
+		g_string_append (text, line);
+	}
+	g_string_free (shortcuts, TRUE);
+	g_hash_table_unref (seen);
+	return g_string_free (text, FALSE);
 }
 
 /* --- Preferences UI --- */

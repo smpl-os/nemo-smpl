@@ -31,6 +31,8 @@
 
 void                  nemo_bookmarks_exiting                        (void);
 void                  nemo_window_add_bookmark_for_current_location (NemoWindow *window);
+void                  nemo_window_add_bookmark_for_location         (NemoWindow *window, GFile *location);
+gboolean              nemo_window_location_is_bookmarked            (NemoWindow *window, GFile *location);
 void                  nemo_window_edit_bookmarks                    (NemoWindow *window);
 void                  nemo_window_initialize_bookmarks_menu         (NemoWindow *window);
 

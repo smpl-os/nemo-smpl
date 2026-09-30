@@ -323,6 +323,7 @@ struct NemoViewClass {
 						   const char  *filter_text);
 
 	void    (* select_first)                   (NemoView *view);
+	gboolean (* get_type_jump_active)          (NemoView *view);
 
         /* Signals used only for keybindings */
         gboolean (* trash)                         (NemoView *view);
@@ -341,6 +342,7 @@ void                nemo_view_display_selection_info           (NemoView  *view)
 
 GdkAtom	            nemo_view_get_copied_files_atom            (NemoView  *view);
 gboolean            nemo_view_get_active                       (NemoView  *view);
+gboolean            nemo_view_get_type_jump_active             (NemoView  *view);
 
 /* Wrappers for signal emitters. These are normally called 
  * only by NemoView itself. They have corresponding signals

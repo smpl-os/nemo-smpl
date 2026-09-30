@@ -91,6 +91,14 @@
     "sha256": "7de63db4be625bdaae11a833a8b2a6ad6c4a783ed39825645100c98bdd84bb0b",
     "source": "repo:data/icons/hicolor/categories/scalable/nemo-prefs-toolbar-symbolic.svg"
   },
+  "../data/icons/hicolor/places/scalable/nemo-folder-desktop-symbolic.svg": {
+    "sha256": "218f256a7bfba6b4594a84f4009bfb5f020d8e174df90ad47c3d02854b47859e",
+    "source": "repo:data/icons/hicolor/places/scalable/nemo-folder-desktop-symbolic.svg"
+  },
+  "../data/icons/hicolor/places/scalable/nemo-folder-favorites-symbolic.svg": {
+    "sha256": "6fe0e1506c7f811022d6278d6d455fc5f81aa9f5c8f0b1bba5d4a0b29a369abc",
+    "source": "repo:data/icons/hicolor/places/scalable/nemo-folder-favorites-symbolic.svg"
+  },
   "../data/icons/hicolor/status/scalable/nemo-progress-0-symbolic.svg": {
     "sha256": "64d040c9e957de60f3cc1eb109d0389fe642e36cb45529a1825163b8522c14c7",
     "source": "repo:data/icons/hicolor/status/scalable/nemo-progress-0-symbolic.svg"

@@ -2735,6 +2735,14 @@ nemo_icon_view_constructed (GObject *object)
     nemo_icon_container_set_is_desktop (icon_container, FALSE);
 }
 
+static gboolean
+nemo_icon_view_get_type_jump_active (NemoView *view)
+{
+	NemoIconContainer *container = get_icon_container (NEMO_ICON_VIEW (view));
+
+	return container != NULL && nemo_icon_container_get_type_jump_active (container);
+}
+
 static void
 nemo_icon_view_class_init (NemoIconViewClass *klass)
 {
@@ -2780,6 +2788,7 @@ nemo_icon_view_class_init (NemoIconViewClass *klass)
 	nemo_view_class->invert_selection = nemo_icon_view_invert_selection;
 	nemo_view_class->compare_files = compare_files;
 	nemo_view_class->update_filter_text = nemo_icon_view_update_filter_text;
+	nemo_view_class->get_type_jump_active = nemo_icon_view_get_type_jump_active;
 	nemo_view_class->select_first = nemo_icon_view_select_first;
 	nemo_view_class->zoom_to_level = nemo_icon_view_zoom_to_level;
 	nemo_view_class->get_zoom_level = nemo_icon_view_get_zoom_level;
