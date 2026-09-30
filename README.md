@@ -130,6 +130,8 @@ variants are not promised. Markdown uses safe HTML conversion and does not
 load linked external images; EPUB/FB2 embedded images are supported. This is
 a preview, not a full ebook editor or reader. FB2 files with DTDs or non-UTF-8
 encoding are rejected explicitly.
+FB2 previews preserve covers and chapter content without inserting an empty
+opening page on older MuPDF releases.
 
 Reflowable books (Markdown, EPUB, FB2 and supported MOBI) follow the current
 theme's background and text colors, including theme changes while open.

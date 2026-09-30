@@ -546,10 +546,19 @@ add_metadata (JsonBuilder *builder, const char *name, char *value)
 }
 
 static gboolean
-write_theme_stylesheet (const char *path, const char *background,
-                        const char *foreground, GError **error)
+write_reader_stylesheet (const char *path, const char *kind, const char *background,
+                         const char *foreground, GError **error)
 {
-    g_autofree char *css = g_strdup_printf (
+    g_autoptr(GString) css = g_string_new ("");
+
+    /* Older MuPDF versions apply a chapter break even before the first content. */
+    if (strcmp (kind, "fb2") == 0)
+        g_string_append (css,
+            "description>title-info>coverpage{page-break-before:auto}"
+            "body>section>title{page-break-before:auto}"
+            "body>section+section{page-break-before:always}\n");
+    if (background != NULL)
+        g_string_append_printf (css,
         "body{font-family:serif;line-height:1.5;margin:24px}"
         "h1,h2,h3,h4{font-family:sans-serif;line-height:1.2}"
         "pre,code{font-family:monospace}"
@@ -561,7 +570,7 @@ write_theme_stylesheet (const char *path, const char *background,
         "html,body{background:%s !important}\n",
         foreground, foreground, foreground, background, foreground, background);
 
-    return g_file_set_contents (path, css, -1, error);
+    return g_file_set_contents (path, css->str, css->len, error);
 }
 
 static gboolean
@@ -578,6 +587,10 @@ prepare_document (const char *kind, const char *input, const char *pdf,
     g_autoptr(JsonBuilder) builder = NULL;
     PopplerDocument *document = NULL;
     gboolean result = FALSE;
+    const char *argv[18] = {
+        "mutool", "convert", "-F", "pdf", "-W", "600", "-H", "800", "-S", "12"
+    };
+    guint argc = 10;
     int fd;
 
     if (!g_strv_contains (kinds, kind))
@@ -612,21 +625,22 @@ prepare_document (const char *kind, const char *input, const char *pdf,
         g_free (source);
         source = g_canonicalize_filename (html, NULL);
     }
-    if (background != NULL) {
+    if (background != NULL || strcmp (kind, "fb2") == 0) {
         stylesheet = g_strconcat (staged_pdf, ".css", NULL);
-        if (!write_theme_stylesheet (stylesheet, background, foreground, error))
+        if (!write_reader_stylesheet (stylesheet, kind, background, foreground, error))
             goto out;
-        /* MuPDF's user CSS alone does not override publisher inline colors. */
-        converter = g_subprocess_new (G_SUBPROCESS_FLAGS_NONE, error,
-                                     "mutool", "convert", "-F", "pdf",
-                                     "-W", "600", "-H", "800", "-S", "12",
-                                     "-X", "-U", stylesheet, "-o", staged_pdf, source, NULL);
-    } else {
-        converter = g_subprocess_new (G_SUBPROCESS_FLAGS_NONE, error,
-                                     "mutool", "convert", "-F", "pdf",
-                                     "-W", "600", "-H", "800", "-S", "12",
-                                     "-o", staged_pdf, source, NULL);
+        argv[argc++] = "-U";
+        argv[argc++] = stylesheet;
     }
+    if (background != NULL) {
+        /* MuPDF's user CSS alone does not override publisher inline colors. */
+        argv[argc++] = "-X";
+    }
+    argv[argc++] = "-o";
+    argv[argc++] = staged_pdf;
+    argv[argc++] = source;
+    argv[argc] = NULL;
+    converter = g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_NONE, error);
     if (converter == NULL || !g_subprocess_wait_check (converter, NULL, error))
         goto out;
     document = open_document (staged_pdf, error);

@@ -316,10 +316,46 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(self.search(pdf, "EPUBSentinel"), {"found": True, "page": 0})
 
     def test_fb2_with_embedded_image(self):
-        pdf, _ = self.prepare("fb2")
+        pdf, metadata = self.prepare("fb2")
+        self.assertEqual(metadata["page_count"], 1, "No blank page before the first chapter")
         _, _, pixels = self.render(pdf)
         self.assert_visible(pixels, image=True)
         self.assertEqual(self.search(pdf, "FB2Sentinel"), {"found": True, "page": 0})
+
+    def test_fb2_preserves_cover_and_chapter_content(self):
+        original = (self.fixtures / "input.fb2").read_text(encoding="utf-8")
+        chapters = original.replace(
+            "</section></body>",
+            "</section><section><title><p>SecondChapterSentinel</p></title>"
+            "<p>A second chapter.</p></section></body>")
+        for cover in (False, True):
+            source = self.work / f"chapters-{cover}.fb2"
+            text = chapters
+            if cover:
+                text = text.replace(
+                    "<lang>en</lang>",
+                    '<coverpage><image l:href="#red"/></coverpage><lang>en</lang>')
+            source.write_text(text, encoding="utf-8")
+            for theme in (None, ("#000000", "#00FF00"), ("#F4EEDF", "#24364F")):
+                with self.subTest(cover=cover, theme=theme):
+                    pdf, metadata = self.prepare("fb2", source, theme=theme)
+                    self.assertEqual(self.search(pdf, "FB2Sentinel"),
+                                     {"found": True, "page": int(cover)})
+                    second = self.search(pdf, "SecondChapterSentinel")
+                    self.assertTrue(second["found"])
+                    # MuPDF versions paginate short adjacent chapters differently.
+                    self.assertIn(second["page"], (int(cover), 1 + int(cover)))
+                    self.assertEqual(metadata["page_count"], second["page"] + 1)
+                    rendered = self.render(pdf, page=int(cover),
+                                           background=theme[0] if theme else None)
+                    if theme:
+                        self.assert_themed(rendered, theme, image=True)
+                    else:
+                        self.assert_visible(rendered[2], image=True)
+                    if cover:
+                        _, _, pixels = self.render(pdf)
+                        self.assertGreater(sum(r > 170 and g < 90 and b < 90
+                                               for r, g, b in pixels), 400)
 
     def test_fb2_rejects_malformed_xml(self):
         source = self.work / "invalid.fb2"
