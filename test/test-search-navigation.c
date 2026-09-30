@@ -9,6 +9,7 @@
 #include "../src/nemo-keybindings.h"
 #include "../src/nemo-list-view.h"
 #include "../src/nemo-icon-view.h"
+#include "../src/nemo-paged-viewer.h"
 #include <libnemo-private/nemo-global-preferences.h>
 #include <libnemo-private/nemo-query.h>
 #include <libnemo-private/nemo-search-directory.h>
@@ -190,6 +191,96 @@ test_registered_shortcuts (void)
     }
 }
 
+static GtkWidget *
+find_descendant (GtkWidget *widget, GType type)
+{
+    if (G_TYPE_CHECK_INSTANCE_TYPE (widget, type))
+        return widget;
+    if (!GTK_IS_CONTAINER (widget))
+        return NULL;
+    GList *children = gtk_container_get_children (GTK_CONTAINER (widget));
+    GtkWidget *found = NULL;
+    for (GList *l = children; l != NULL && found == NULL; l = l->next)
+        found = find_descendant (l->data, type);
+    g_list_free (children);
+    return found;
+}
+
+static void
+test_preview_navigation (void)
+{
+    Fixture fixture = fixture_new ();
+    GFile *next = g_file_get_child (fixture.containing, "z-next.txt");
+    g_autofree char *path = g_file_get_path (fixture.item);
+    g_autofree char *next_path = g_file_get_path (next);
+    GString *text = g_string_new (NULL);
+    for (guint i = 0; i < 300; i++)
+        g_string_append_printf (text, "Line %u of the preview navigation fixture\n", i);
+    g_assert_true (g_file_set_contents (path, text->str, text->len, NULL));
+    g_assert_true (g_file_set_contents (next_path, "next file\n", -1, NULL));
+    g_string_free (text, TRUE);
+    nemo_window_slot_open_location (fixture.slot, fixture.containing,
+                                   NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    nemo_window_slot_set_content_view (fixture.slot, NEMO_LIST_VIEW_ID);
+    WAIT_FOR (NEMO_IS_LIST_VIEW (fixture.slot->content_view) &&
+              !nemo_view_get_loading (fixture.slot->content_view));
+    NemoFile *file = nemo_file_get (fixture.item);
+    GList selection = { .data = file };
+    nemo_view_set_selection (fixture.slot->content_view, &selection);
+    nemo_view_grab_focus (fixture.slot->content_view);
+    GtkWidget *focus = gtk_window_get_focus (GTK_WINDOW (fixture.window));
+    nemo_window_preview_pane_on (fixture.window);
+    GtkWidget *viewer = find_descendant (fixture.window->details->preview_pane,
+                                         NEMO_TYPE_PAGED_VIEWER);
+    g_assert_nonnull (viewer);
+    GtkWidget *scrollbar = find_descendant (viewer, GTK_TYPE_SCROLLBAR);
+    g_assert_nonnull (scrollbar);
+    GtkAdjustment *adjustment = gtk_range_get_adjustment (GTK_RANGE (scrollbar));
+    WAIT_FOR (gtk_adjustment_get_upper (adjustment) > gtk_adjustment_get_page_size (adjustment));
+    g_assert_true (gtk_window_get_focus (GTK_WINDOW (fixture.window)) == focus);
+
+    GdkEventKey page = {
+        .type = GDK_KEY_PRESS,
+        .window = gtk_widget_get_window (GTK_WIDGET (fixture.window)),
+        .keyval = GDK_KEY_Page_Down,
+        .state = GDK_MOD1_MASK,
+    };
+    g_assert_true (GTK_WIDGET_GET_CLASS (fixture.window)->key_press_event (
+        GTK_WIDGET (fixture.window), &page));
+    WAIT_FOR (gtk_adjustment_get_value (adjustment) > 0);
+    g_assert_true (gtk_window_get_focus (GTK_WINDOW (fixture.window)) == focus);
+    assert_selected_item (fixture.slot, fixture.item);
+    page.keyval = GDK_KEY_Page_Up;
+    g_assert_true (GTK_WIDGET_GET_CLASS (fixture.window)->key_press_event (
+        GTK_WIDGET (fixture.window), &page));
+    WAIT_FOR (gtk_adjustment_get_value (adjustment) == 0);
+
+    g_assert_true (key_press (fixture.window, "Down"));
+    WAIT_FOR (gtk_adjustment_get_upper (adjustment) <= gtk_adjustment_get_page_size (adjustment));
+    assert_selected_item (fixture.slot, next);
+    g_assert_true (gtk_window_get_focus (GTK_WINDOW (fixture.window)) == focus);
+    g_assert_true (key_press (fixture.window, "Up"));
+    WAIT_FOR (gtk_adjustment_get_upper (adjustment) > gtk_adjustment_get_page_size (adjustment));
+    assert_selected_item (fixture.slot, fixture.item);
+    g_assert_true (gtk_window_get_focus (GTK_WINDOW (fixture.window)) == focus);
+
+    g_settings_set_string (nemo_keybinding_settings, "preview-scroll-down", "<Alt>j");
+    page.keyval = GDK_KEY_j;
+    g_assert_true (GTK_WIDGET_GET_CLASS (fixture.window)->key_press_event (
+        GTK_WIDGET (fixture.window), &page));
+    WAIT_FOR (gtk_adjustment_get_value (adjustment) > 0);
+    assert_selected_item (fixture.slot, fixture.item);
+    g_assert_true (gtk_window_get_focus (GTK_WINDOW (fixture.window)) == focus);
+    g_settings_reset (nemo_keybinding_settings, "preview-scroll-down");
+
+    nemo_window_preview_pane_off (fixture.window);
+    nemo_file_unref (file);
+    g_assert_true (g_file_delete (next, NULL, NULL));
+    g_object_unref (next);
+    fixture_clear (&fixture);
+}
+
 typedef struct {
     const char *path;
     GTestFunc run;
@@ -227,6 +318,7 @@ main (int argc, char **argv)
         { "/search-navigation/containing-shortcuts", test_containing_folder_shortcuts },
         { "/search-navigation/other-pane-from-right", test_other_pane_from_right },
         { "/search-navigation/shortcut-settings", test_registered_shortcuts },
+        { "/search-navigation/preview-navigation", test_preview_navigation },
     };
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
         g_test_add_data_func (cases[i].path, &cases[i], run_case);

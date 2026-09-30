@@ -1166,6 +1166,15 @@
       <summary>Next file in Quick Preview</summary>
     </key>
 
+    <key name="preview-scroll-up" type="s">
+      <default>'&lt;Alt&gt;Page_Up'</default>
+      <summary>Scroll the sidebar preview up</summary>
+    </key>
+    <key name="preview-scroll-down" type="s">
+      <default>'&lt;Alt&gt;Page_Down'</default>
+      <summary>Scroll the sidebar preview down</summary>
+    </key>
+
     <!-- Contextual navigation while typing a filename -->
     <key name="type-jump-next" type="s">
       <default>'Down'</default>
@@ -1175,21 +1184,23 @@
       <default>'Up'</default>
       <summary>Previous matching filename while typing</summary>
     </key>
+    <!-- Legacy keys retained for stored-settings compatibility only.
+         Not registered or dispatched; primary customizations stay unchanged. -->
     <key name="type-jump-next-alt" type="s">
       <default>'Right'</default>
-      <summary>Next matching filename with the right arrow</summary>
+      <summary>Deprecated next matching filename with the right arrow</summary>
     </key>
     <key name="type-jump-previous-alt" type="s">
       <default>'Left'</default>
-      <summary>Previous matching filename with the left arrow</summary>
+      <summary>Deprecated previous matching filename with the left arrow</summary>
     </key>
     <key name="type-jump-next-secondary" type="s">
       <default>'&lt;Control&gt;g'</default>
-      <summary>Next matching filename (alternate)</summary>
+      <summary>Deprecated next matching filename (alternate)</summary>
     </key>
     <key name="type-jump-previous-secondary" type="s">
       <default>'&lt;Control&gt;&lt;Shift&gt;g'</default>
-      <summary>Previous matching filename (alternate)</summary>
+      <summary>Deprecated previous matching filename (alternate)</summary>
     </key>
 
     <!-- Tabs -->

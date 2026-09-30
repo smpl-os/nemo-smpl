@@ -75,6 +75,12 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "switch-pane",           "<Actions>/ShellActions/SplitViewNextPane",  N_("Switch to Other Pane"),       N_("Window"), "F6",                        NULL, NULL },
 	{ "same-location-pane",    "<Actions>/ShellActions/SplitViewSameLocation", N_("Same Location as Other Pane"), N_("Window"), "<Alt>s",                NULL, NULL },
 
+#ifdef NEMO_SMPL
+	/* Preview scrolling is routed by the window's key handler. */
+	{ "preview-scroll-up", NULL, N_("Scroll Preview Up"), N_("Preview"), "<Alt>Page_Up", NULL, NULL },
+	{ "preview-scroll-down", NULL, N_("Scroll Preview Down"), N_("Preview"), "<Alt>Page_Down", NULL, NULL },
+#endif
+
 	/* Quick Preview — internal keys handled directly by the preview window's
 	 * key-press-event handler.  accel_path and binding_set are both NULL so
 	 * apply_keybinding() skips them; the values are read at runtime via
@@ -87,10 +93,6 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "quick-preview-next-file", NULL, N_("Next File in Quick Preview"), N_("Quick Preview"), "<Control>Right", NULL, NULL },
 	{ "type-jump-next", NULL, N_("Next Matching Filename"), N_("Type to Jump"), "Down", NULL, NULL },
 	{ "type-jump-previous", NULL, N_("Previous Matching Filename"), N_("Type to Jump"), "Up", NULL, NULL },
-	{ "type-jump-next-alt", NULL, N_("Next Matching Filename (Right Arrow)"), N_("Type to Jump"), "Right", NULL, NULL },
-	{ "type-jump-previous-alt", NULL, N_("Previous Matching Filename (Left Arrow)"), N_("Type to Jump"), "Left", NULL, NULL },
-	{ "type-jump-next-secondary", NULL, N_("Next Matching Filename (alternate)"), N_("Type to Jump"), "<Control>g", NULL, NULL },
-	{ "type-jump-previous-secondary", NULL, N_("Previous Matching Filename (alternate)"), N_("Type to Jump"), "<Control><Shift>g", NULL, NULL },
 #endif
 
 	/* Tabs */
@@ -301,7 +303,8 @@ on_keybinding_changed (GSettings   *settings,
 static void
 reserve_new_shortcut_defaults (void)
 {
-	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode" };
+	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode",
+	                       "preview-scroll-up", "preview-scroll-down" };
 	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
 		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
 		if (user_value != NULL) {
@@ -463,6 +466,22 @@ enum {
 	NUM_COLS
 };
 
+static gboolean
+is_type_jump_binding (const char *settings_key)
+{
+	return g_strcmp0 (settings_key, "type-jump-next") == 0 ||
+	       g_strcmp0 (settings_key, "type-jump-previous") == 0;
+}
+
+static gboolean
+is_arrow_key (guint key)
+{
+	return key == GDK_KEY_Up || key == GDK_KEY_Down ||
+	       key == GDK_KEY_Left || key == GDK_KEY_Right ||
+	       key == GDK_KEY_KP_Up || key == GDK_KEY_KP_Down ||
+	       key == GDK_KEY_KP_Left || key == GDK_KEY_KP_Right;
+}
+
 static void
 on_accel_edited (GtkCellRendererAccel *renderer,
                  gchar               *path_string,
@@ -487,6 +506,14 @@ on_accel_edited (GtkCellRendererAccel *renderer,
 
 	gtk_tree_model_get (child_model, &child_iter,
 	                    COL_SETTINGS_KEY, &settings_key, -1);
+
+	/* OTHER mode permits contextual arrows; retain GTK validation for all
+	 * other keys and application-wide accelerators. */
+	if (!gtk_accelerator_valid (accel_key, accel_mods) &&
+	    !(is_type_jump_binding (settings_key) && is_arrow_key (accel_key))) {
+		g_free (settings_key);
+		return;
+	}
 
 	accel_string = gtk_accelerator_name (accel_key, accel_mods);
 
@@ -687,10 +714,16 @@ accel_cell_data_func (GtkTreeViewColumn *column,
                      gpointer           user_data)
 {
 	gint idx;
+	g_autofree char *settings_key = NULL;
 
-	gtk_tree_model_get (model, iter, COL_ENTRY_INDEX, &idx, -1);
+	gtk_tree_model_get (model, iter,
+	                    COL_ENTRY_INDEX, &idx,
+	                    COL_SETTINGS_KEY, &settings_key, -1);
 
-	g_object_set (renderer, "visible", idx >= 0, NULL);
+	g_object_set (renderer,
+	              "visible", idx >= 0 &&
+	                  is_type_jump_binding (settings_key) == GPOINTER_TO_INT (user_data),
+	              NULL);
 }
 
 /*
@@ -805,26 +838,28 @@ nemo_keybindings_create_editor (void)
 	gtk_tree_view_column_set_resizable (column, TRUE);
 	gtk_tree_view_append_column (GTK_TREE_VIEW (tree_view), column);
 
-	/* Shortcut column with editable accelerator cells */
-	renderer = gtk_cell_renderer_accel_new ();
-	g_object_set (renderer,
-	              "editable", TRUE,
-	              "accel-mode", GTK_CELL_RENDERER_ACCEL_MODE_GTK,
-	              NULL);
-
-	g_signal_connect (renderer, "accel-edited",
-	                  G_CALLBACK (on_accel_edited), filter_model);
-	g_signal_connect (renderer, "accel-cleared",
-	                  G_CALLBACK (on_accel_cleared), filter_model);
-
-	column = gtk_tree_view_column_new_with_attributes (
-		_("Shortcut"), renderer,
-		"accel-key", COL_ACCEL_KEY,
-		"accel-mods", COL_ACCEL_MODS,
-		NULL);
-	gtk_tree_view_column_set_cell_data_func (column, renderer,
-	                                         accel_cell_data_func,
-	                                         NULL, NULL);
+	/* GTK mode rejects bare arrows. Use a separate contextual renderer so
+	 * drawing other rows cannot change the mode during shortcut capture. */
+	column = gtk_tree_view_column_new ();
+	gtk_tree_view_column_set_title (column, _("Shortcut"));
+	for (i = 0; i < 2; i++) {
+		renderer = gtk_cell_renderer_accel_new ();
+		g_object_set (renderer,
+		              "editable", TRUE,
+		              "accel-mode", i == 0 ? GTK_CELL_RENDERER_ACCEL_MODE_GTK
+		                                    : GTK_CELL_RENDERER_ACCEL_MODE_OTHER,
+		              NULL);
+		g_signal_connect (renderer, "accel-edited",
+		                  G_CALLBACK (on_accel_edited), filter_model);
+		g_signal_connect (renderer, "accel-cleared",
+		                  G_CALLBACK (on_accel_cleared), filter_model);
+		gtk_tree_view_column_pack_start (column, renderer, FALSE);
+		gtk_tree_view_column_add_attribute (column, renderer, "accel-key", COL_ACCEL_KEY);
+		gtk_tree_view_column_add_attribute (column, renderer, "accel-mods", COL_ACCEL_MODS);
+		gtk_tree_view_column_set_cell_data_func (column, renderer,
+		                                         accel_cell_data_func,
+		                                         GINT_TO_POINTER (i), NULL);
+	}
 	gtk_tree_view_column_set_min_width (column, 200);
 	gtk_tree_view_append_column (GTK_TREE_VIEW (tree_view), column);
 

@@ -106,6 +106,7 @@ struct _NemoPagedViewer {
 	GtkWidget *scrollbar;
 	GtkAdjustment *vadjust;
 	gboolean in_adj_update;
+	gboolean focus_on_load;
 	gboolean destroyed;
 
 	GFile *location;
@@ -1028,6 +1029,7 @@ nemo_paged_viewer_class_init (NemoPagedViewerClass *klass)
 static void
 nemo_paged_viewer_init (NemoPagedViewer *self)
 {
+	self->focus_on_load = TRUE;
 	self->mode = NEMO_VIEWER_MODE_TEXT;
 	self->char_w = 8;
 	self->char_h = 16;
@@ -1076,7 +1078,8 @@ nemo_paged_viewer_open_location (NemoPagedViewer *self, GFile *location)
 	self->opening = TRUE;
 	update_scrollbar (self);
 	gtk_widget_queue_draw (self->drawing_area);
-	gtk_widget_grab_focus (self->drawing_area);
+	if (self->focus_on_load)
+		gtk_widget_grab_focus (self->drawing_area);
 	request_start (request_new (self, REQUEST_OPEN), &self->open_cancel);
 	g_signal_emit (self, signals[SEARCH_CHANGED], 0);
 }
@@ -1229,6 +1232,7 @@ struct _NemoPagedViewer {
 	GtkAdjustment *vadjust;
 	gulong vadjust_handler;
 	gboolean in_adj_update;
+	gboolean focus_on_load;
 	int fd;
 	gint64 file_size;
 	PageSlot cache[MAX_PAGES];
@@ -1832,6 +1836,7 @@ on_size_allocate (GtkWidget *widget, GtkAllocation *alloc, gpointer user_data)
 static void
 nemo_paged_viewer_init (NemoPagedViewer *self)
 {
+	self->focus_on_load = TRUE;
 	self->fd = -1;
 	self->file_size = 0;
 	self->n_cached = 0;
@@ -1922,7 +1927,8 @@ nemo_paged_viewer_open_file (NemoPagedViewer *self, const gchar *path, GError **
 	self->avg_line_len = estimate_avg_line_len (self);
 	update_scrollbar (self);
 	gtk_widget_queue_draw (self->drawing_area);
-	gtk_widget_grab_focus (self->drawing_area);
+	if (self->focus_on_load)
+		gtk_widget_grab_focus (self->drawing_area);
 	return TRUE;
 }
 
@@ -2035,6 +2041,13 @@ nemo_paged_viewer_search_has_match (NemoPagedViewer *self)
 }
 
 #endif /* NEMO_SMPL */
+
+void
+nemo_paged_viewer_set_focus_on_load (NemoPagedViewer *self, gboolean focus_on_load)
+{
+	g_return_if_fail (NEMO_IS_PAGED_VIEWER (self));
+	self->focus_on_load = focus_on_load;
+}
 
 void
 nemo_paged_viewer_scroll_page (NemoPagedViewer *self, gboolean forward)

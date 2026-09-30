@@ -246,6 +246,14 @@ test_editing_keeps_control_arrows (void)
 static void
 test_existing_binding_wins (void)
 {
+    g_autofree char *preview_up = g_settings_get_string (nemo_keybinding_settings, "preview-scroll-up");
+    g_autofree char *preview_down = g_settings_get_string (nemo_keybinding_settings, "preview-scroll-down");
+    g_autofree char *new_tab = g_settings_get_string (nemo_keybinding_settings, "new-tab");
+    g_autofree char *new_folder = g_settings_get_string (nemo_keybinding_settings, "new-folder");
+    g_assert_cmpstr (preview_up, ==, "");
+    g_assert_cmpstr (preview_down, ==, "<Alt>j");
+    g_assert_cmpstr (new_tab, ==, "<Alt>Page_Up");
+    g_assert_cmpstr (new_folder, ==, "<Alt>Page_Down");
     g_autofree char *binding = g_settings_get_string (nemo_keybinding_settings, "go-back-alt");
     g_assert_cmpstr (binding, ==, "");
     Fixture fixture = fixture_new ();
@@ -257,6 +265,43 @@ test_existing_binding_wins (void)
     g_assert_cmpuint (key.accel_mods, ==, GDK_CONTROL_MASK);
     assert_shortcut (query_tooltip (button_for (&fixture, NEMO_ACTION_BACK)), "<Control>Left", FALSE);
     fixture_clear (&fixture);
+}
+
+static void
+test_preview_scroll_bindings (void)
+{
+    const char *keys[] = { "preview-scroll-up", "preview-scroll-down" };
+    const char *defaults[] = { "<Alt>Page_Up", "<Alt>Page_Down" };
+    const char *labels[] = { "Scroll Preview Up", "Scroll Preview Down" };
+    for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
+        const NemoKeybindingEntry *entry = NULL;
+        for (gint j = 0; j < nemo_keybinding_entries_count; j++)
+            if (g_str_equal (nemo_keybinding_entries[j].settings_key, keys[i]))
+                entry = &nemo_keybinding_entries[j];
+        g_assert_nonnull (entry);
+        g_assert_cmpstr (entry->category, ==, "Preview");
+        g_assert_cmpstr (entry->description, ==, labels[i]);
+        g_assert_cmpstr (entry->default_accel, ==, defaults[i]);
+        g_assert_null (entry->accel_path);
+        g_assert_null (entry->binding_set_name);
+        GVariant *schema_default = g_settings_get_default_value (nemo_keybinding_settings, keys[i]);
+        g_assert_cmpstr (g_variant_get_string (schema_default, NULL), ==, defaults[i]);
+        g_variant_unref (schema_default);
+        g_autofree char *value = g_settings_get_string (nemo_keybinding_settings, keys[i]);
+        g_assert_cmpstr (value, ==, defaults[i]);
+        nemo_keybindings_set_for_action (keys[i], "<Alt>j");
+        g_clear_pointer (&value, g_free);
+        value = g_settings_get_string (nemo_keybinding_settings, keys[i]);
+        g_assert_cmpstr (value, ==, "<Alt>j");
+        nemo_keybindings_set_for_action (keys[i], "");
+        g_clear_pointer (&value, g_free);
+        value = g_settings_get_string (nemo_keybinding_settings, keys[i]);
+        g_assert_cmpstr (value, ==, "");
+        g_settings_reset (nemo_keybinding_settings, keys[i]);
+        g_clear_pointer (&value, g_free);
+        value = g_settings_get_string (nemo_keybinding_settings, keys[i]);
+        g_assert_cmpstr (value, ==, defaults[i]);
+    }
 }
 
 typedef struct {
@@ -470,6 +515,9 @@ run_case (gconstpointer data)
     if (test->conflict) {
         nemo_global_preferences_init ();
         g_settings_set_string (nemo_keybinding_settings, "new-window", "<Control>Left");
+        g_settings_set_string (nemo_keybinding_settings, "new-tab", "<Alt>Page_Up");
+        g_settings_set_string (nemo_keybinding_settings, "new-folder", "<Alt>Page_Down");
+        g_settings_set_string (nemo_keybinding_settings, "preview-scroll-down", "<Alt>j");
     }
     application = nemo_main_application_get_singleton ();
     GError *error = NULL;
@@ -497,6 +545,7 @@ main (int argc, char **argv)
         { "/toolbar/control-arrow-compact", test_control_navigation, FALSE, "compact-view" },
         { "/toolbar/control-arrow-editing", test_editing_keeps_control_arrows, FALSE, NULL },
         { "/toolbar/existing-shortcut-preserved", test_existing_binding_wins, TRUE, NULL },
+        { "/toolbar/preview-scroll-bindings", test_preview_scroll_bindings, FALSE, NULL },
         { "/toolbar/split-pane-divider", test_split_divider, FALSE, NULL },
         { "/toolbar/zen-layout", test_zen_layout, FALSE, NULL },
         { "/toolbar/zen-hidden-preferences-shortcut", test_zen_hidden_preferences_and_shortcut, FALSE, NULL },

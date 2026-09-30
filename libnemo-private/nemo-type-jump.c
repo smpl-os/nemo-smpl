@@ -98,11 +98,7 @@ nemo_type_jump_key_direction (const GdkEventKey *event)
 {
 	static const struct { const char *key; int direction; } bindings[] = {
 		{ "type-jump-previous", -1 },
-		{ "type-jump-previous-alt", -1 },
-		{ "type-jump-previous-secondary", -1 },
-		{ "type-jump-next", 1 },
-		{ "type-jump-next-alt", 1 },
-		{ "type-jump-next-secondary", 1 }
+		{ "type-jump-next", 1 }
 	};
 	if (event == NULL || nemo_keybinding_settings == NULL)
 		return 0;

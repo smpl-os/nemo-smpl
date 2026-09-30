@@ -81,29 +81,48 @@ static void
 test_navigation_bindings (void)
 {
     GdkEventKey event = { .type = GDK_KEY_PRESS };
-    const guint forward[] = { GDK_KEY_Down, GDK_KEY_Right, GDK_KEY_KP_Down, GDK_KEY_KP_Right };
-    const guint backward[] = { GDK_KEY_Up, GDK_KEY_Left, GDK_KEY_KP_Up, GDK_KEY_KP_Left };
+    const guint forward[] = { GDK_KEY_Down, GDK_KEY_KP_Down };
+    const guint backward[] = { GDK_KEY_Up, GDK_KEY_KP_Up };
     for (guint i = 0; i < G_N_ELEMENTS (forward); i++) {
         event.keyval = forward[i];
         g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 1);
         event.keyval = backward[i];
         g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, -1);
     }
+    const guint unused[] = { GDK_KEY_Right, GDK_KEY_Left, GDK_KEY_KP_Right, GDK_KEY_KP_Left };
+    for (guint i = 0; i < G_N_ELEMENTS (unused); i++) {
+        event.keyval = unused[i];
+        g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
+    }
     event.keyval = GDK_KEY_G;
     event.state = GDK_CONTROL_MASK | GDK_LOCK_MASK;
-    g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 1);
+    g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
     event.state = GDK_CONTROL_MASK | GDK_SHIFT_MASK;
-    g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, -1);
+    g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
     g_settings_set_string (nemo_keybinding_settings, "type-jump-next", "<Alt>n");
     event.keyval = GDK_KEY_Down;
     event.state = 0;
     g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
     event.keyval = GDK_KEY_n;
-    event.state = GDK_MOD1_MASK;
+    event.state = GDK_MOD1_MASK | GDK_LOCK_MASK;
     g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 1);
-    g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "");
-    event.keyval = GDK_KEY_Right;
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-previous", "Left");
+    event.keyval = GDK_KEY_KP_Left;
     event.state = 0;
+    g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, -1);
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-next", "");
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-previous", "");
+    const char *legacy[] = {
+        "type-jump-next-alt", "type-jump-previous-alt",
+        "type-jump-next-secondary", "type-jump-previous-secondary"
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (legacy); i++) {
+        g_settings_set_string (nemo_keybinding_settings, legacy[i], "F8");
+        event.keyval = GDK_KEY_F8;
+        g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
+    }
+    event.keyval = GDK_KEY_n;
+    event.state = GDK_MOD1_MASK;
     g_assert_cmpint (nemo_type_jump_key_direction (&event), ==, 0);
 }
 

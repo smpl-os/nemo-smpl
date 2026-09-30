@@ -241,11 +241,11 @@ test_rank_and_navigation (void)
     pango_attr_list_unref (attrs);
     g_assert_true (key_press (fixture.window, "Down"));
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve.txt"));
-    g_assert_true (key_press (fixture.window, "Right"));
+    g_assert_true (key_press (fixture.window, "Down"));
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve2.txt"));
     g_assert_true (key_press (fixture.window, "Up"));
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve.txt"));
-    g_assert_true (key_press (fixture.window, "Left"));
+    g_assert_true (key_press (fixture.window, "Up"));
     WAIT_FOR (selected (fixture.slot->content_view, "curveycase.txt"));
     gtk_entry_set_text (entry, "curve2");
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve2.txt"));
@@ -265,19 +265,179 @@ test_custom_keys_and_exit (void)
 {
     GtkTreeView *tree = NULL;
     Fixture fixture = list_fixture (&tree);
-    begin_jump (&fixture);
+    GtkEntry *entry = begin_jump (&fixture);
     g_settings_set_string (nemo_keybinding_settings, "type-jump-next", "F8");
     g_assert_true (key_press (fixture.window, "F8"));
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve.txt"));
+    const guint unused[] = { GDK_KEY_Right, GDK_KEY_Left, GDK_KEY_g, GDK_KEY_G, GDK_KEY_F9 };
+    const GdkModifierType modifiers[] = { 0, 0, GDK_CONTROL_MASK,
+                                         GDK_CONTROL_MASK | GDK_SHIFT_MASK, 0 };
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "F9");
+    for (guint i = 0; i < G_N_ELEMENTS (unused); i++) {
+        GdkEvent *event = gdk_event_new (GDK_KEY_PRESS);
+        event->key.window = g_object_ref (gtk_widget_get_window (GTK_WIDGET (entry)));
+        event->key.keyval = unused[i];
+        event->key.state = modifiers[i];
+        GdkSeat *seat = gdk_display_get_default_seat (gtk_widget_get_display (GTK_WIDGET (entry)));
+        gdk_event_set_device (event, gdk_seat_get_keyboard (seat));
+        gtk_widget_event (GTK_WIDGET (entry), event);
+        gdk_event_free (event);
+        g_assert_true (selected (fixture.slot->content_view, "misscurve.txt"));
+        g_assert_true (nemo_view_get_type_jump_active (fixture.slot->content_view));
+    }
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-previous", "F7");
+    g_assert_true (key_press (fixture.window, "F7"));
+    WAIT_FOR (selected (fixture.slot->content_view, "curveycase.txt"));
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-next", "");
+    g_assert_true (key_press (fixture.window, "F8"));
+    for (guint i = 0; i < 50; i++)
+        iterate ();
+    g_assert_true (selected (fixture.slot->content_view, "curveycase.txt"));
     g_assert_true (key_press (fixture.window, "Escape"));
     WAIT_FOR (!nemo_view_get_type_jump_active (fixture.slot->content_view));
     g_assert_null (filename_attributes (tree, "misscurve.txt"));
     /* Normal row navigation resumes, independently of the configured match key. */
     g_assert_true (key_press (fixture.window, "Down"));
+    WAIT_FOR (selected (fixture.slot->content_view, "misscurve.txt"));
+    g_assert_true (key_press (fixture.window, "Down"));
     WAIT_FOR (selected (fixture.slot->content_view, "misscurve2.txt"));
     g_assert_true (key_press (fixture.window, "Down"));
     WAIT_FOR (selected (fixture.slot->content_view, "missile.txt"));
     list_fixture_clear (&fixture);
+}
+
+static GtkCellRenderer *
+shortcut_cell (GtkTreeView *tree, const char *key, char **path)
+{
+    GtkTreeModel *model = gtk_tree_view_get_model (tree);
+    GtkTreeIter category, action;
+    gboolean valid = gtk_tree_model_get_iter_first (model, &category);
+    while (valid) {
+        gboolean child_valid = gtk_tree_model_iter_children (model, &action, &category);
+        while (child_valid) {
+            g_autofree char *settings_key = NULL;
+            gtk_tree_model_get (model, &action, 4, &settings_key, -1);
+            if (g_strcmp0 (settings_key, key) == 0) {
+                GtkTreeViewColumn *column = gtk_tree_view_get_column (tree, 1);
+                gtk_tree_view_column_cell_set_cell_data (column, model, &action, FALSE, FALSE);
+                GList *cells = gtk_cell_layout_get_cells (GTK_CELL_LAYOUT (column));
+                GtkCellRenderer *renderer = NULL;
+                for (GList *cell = cells; cell != NULL; cell = cell->next) {
+                    gboolean visible;
+                    g_object_get (cell->data, "visible", &visible, NULL);
+                    if (visible) {
+                        g_assert_null (renderer);
+                        renderer = cell->data;
+                    }
+                }
+                g_assert_nonnull (renderer);
+                g_list_free (cells);
+                *path = gtk_tree_model_get_string_from_iter (model, &action);
+                return renderer;
+            }
+            child_valid = gtk_tree_model_iter_next (model, &action);
+        }
+        valid = gtk_tree_model_iter_next (model, &category);
+    }
+    g_assert_not_reached ();
+}
+
+static void
+assert_shortcut (GtkTreeView *tree, const char *settings_key, guint key, gboolean contextual)
+{
+    g_autofree char *path = NULL;
+    GtkCellRenderer *renderer = shortcut_cell (tree, settings_key, &path);
+    GtkCellRendererAccelMode mode;
+    g_autofree char *text = NULL;
+    g_autofree char *expected = gtk_accelerator_get_label (key, 0);
+    g_object_get (renderer, "accel-mode", &mode, "text", &text, NULL);
+    g_assert_cmpint (mode, ==, contextual ? GTK_CELL_RENDERER_ACCEL_MODE_OTHER
+                                        : GTK_CELL_RENDERER_ACCEL_MODE_GTK);
+    g_assert_cmpstr (text, ==, expected);
+}
+
+static void
+test_shortcut_editor (void)
+{
+    GtkTreeView *tree = NULL;
+    GtkWidget *editor = nemo_keybindings_create_editor ();
+    g_object_ref_sink (editor);
+    find_tree (editor, &tree);
+    g_assert_nonnull (tree);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Down, TRUE);
+    assert_shortcut (tree, "type-jump-previous", GDK_KEY_Up, TRUE);
+    assert_shortcut (tree, "rename", GDK_KEY_F2, FALSE);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Down, TRUE);
+
+    GList *children = gtk_container_get_children (GTK_CONTAINER (editor));
+    GtkEntry *search = GTK_ENTRY (children->data);
+    g_list_free (children);
+    gtk_entry_set_text (search, "Next Matching Filename");
+    g_signal_emit_by_name (search, "search-changed");
+    g_autofree char *path = NULL;
+    GtkCellRenderer *renderer = shortcut_cell (tree, "type-jump-next", &path);
+    g_signal_emit_by_name (renderer, "accel-edited", path, GDK_KEY_Up, 0, 0);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Up, TRUE);
+    g_autofree char *value = g_settings_get_string (nemo_keybinding_settings, "type-jump-next");
+    g_assert_cmpstr (value, ==, "Up");
+    g_signal_emit_by_name (renderer, "accel-edited", path, GDK_KEY_Down, 0, 0);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Down, TRUE);
+    g_signal_emit_by_name (renderer, "accel-edited", path, GDK_KEY_Tab, 0, 0);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Down, TRUE);
+
+    gtk_entry_set_text (search, "");
+    g_signal_emit_by_name (search, "search-changed");
+    GtkCellRenderer *contextual_renderer = renderer;
+    g_clear_pointer (&path, g_free);
+    renderer = shortcut_cell (tree, "rename", &path);
+    GtkCellRendererAccelMode capture_mode;
+    g_object_get (contextual_renderer, "accel-mode", &capture_mode, NULL);
+    g_assert_cmpint (capture_mode, ==, GTK_CELL_RENDERER_ACCEL_MODE_OTHER);
+    g_signal_emit_by_name (renderer, "accel-edited", path, GDK_KEY_Down, 0, 0);
+    assert_shortcut (tree, "rename", GDK_KEY_F2, FALSE);
+    g_clear_pointer (&value, g_free);
+    value = g_settings_get_string (nemo_keybinding_settings, "rename");
+    g_assert_cmpstr (value, ==, "F2");
+
+    g_clear_pointer (&path, g_free);
+    renderer = shortcut_cell (tree, "type-jump-previous", &path);
+    g_signal_emit_by_name (renderer, "accel-cleared", path);
+    g_clear_pointer (&value, g_free);
+    value = g_settings_get_string (nemo_keybinding_settings, "type-jump-previous");
+    g_assert_cmpstr (value, ==, "");
+    gtk_widget_destroy (editor);
+    g_object_unref (editor);
+
+    /* Reopening preserves custom and disabled primary bindings, and neither
+     * resurrects retired alternatives nor changes unrelated shortcuts. */
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-next", "F8");
+    g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "F9");
+    g_settings_set_string (nemo_keybinding_settings, "rename", "F7");
+    editor = nemo_keybindings_create_editor ();
+    g_object_ref_sink (editor);
+    tree = NULL;
+    find_tree (editor, &tree);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_F8, TRUE);
+    g_clear_pointer (&path, g_free);
+    renderer = shortcut_cell (tree, "type-jump-previous", &path);
+    guint key;
+    g_object_get (renderer, "accel-key", &key, NULL);
+    g_assert_cmpuint (key, ==, 0);
+    assert_shortcut (tree, "rename", GDK_KEY_F7, FALSE);
+    children = gtk_container_get_children (GTK_CONTAINER (editor));
+    GtkWidget *button_box = g_list_last (children)->data;
+    g_list_free (children);
+    children = gtk_container_get_children (GTK_CONTAINER (button_box));
+    g_signal_emit_by_name (children->data, "clicked");
+    g_list_free (children);
+    assert_shortcut (tree, "type-jump-next", GDK_KEY_Down, TRUE);
+    assert_shortcut (tree, "type-jump-previous", GDK_KEY_Up, TRUE);
+    assert_shortcut (tree, "rename", GDK_KEY_F2, FALSE);
+    g_clear_pointer (&value, g_free);
+    value = g_settings_get_string (nemo_keybinding_settings, "type-jump-next-alt");
+    g_assert_cmpstr (value, ==, "F9");
+    gtk_widget_destroy (editor);
+    g_object_unref (editor);
 }
 
 static void
@@ -289,7 +449,6 @@ test_prefix_mode_and_bindings (void)
     begin_jump (&fixture);
     WAIT_FOR (selected (fixture.slot->content_view, "curveycase.txt"));
     g_assert_null (filename_attributes (tree, "misscurve.txt"));
-    g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "");
     g_assert_true (key_press (fixture.window, "Right"));
     for (guint i = 0; i < 50; i++)
         iterate ();
@@ -300,9 +459,13 @@ test_prefix_mode_and_bindings (void)
     g_assert_null (filename_attributes (tree, "curveycase.txt"));
 
     const char *keys[] = {
-        "type-jump-next", "type-jump-previous", "type-jump-next-alt",
-        "type-jump-previous-alt", "type-jump-next-secondary", "type-jump-previous-secondary"
+        "type-jump-next", "type-jump-previous"
     };
+    guint count = 0;
+    for (gint j = 0; j < nemo_keybinding_entries_count; j++)
+        if (g_str_equal (nemo_keybinding_entries[j].category, "Type to Jump"))
+            count++;
+    g_assert_cmpuint (count, ==, G_N_ELEMENTS (keys));
     for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
         const NemoKeybindingEntry *entry = NULL;
         for (gint j = 0; j < nemo_keybinding_entries_count; j++)
@@ -361,6 +524,7 @@ main (int argc, char **argv)
     static const ListCase cases[] = {
         { "/list-type-jump/ranking-navigation-highlight", test_rank_and_navigation },
         { "/list-type-jump/custom-keys-exit", test_custom_keys_and_exit },
+        { "/list-type-jump/shortcut-editor", test_shortcut_editor },
         { "/list-type-jump/prefix-mode-settings", test_prefix_mode_and_bindings },
         { "/list-type-jump/timeout-destroy", test_timeout_and_destroy },
         { "/list-type-jump/file-colors", test_file_type_colors },

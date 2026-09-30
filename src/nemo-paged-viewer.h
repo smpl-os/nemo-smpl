@@ -43,6 +43,9 @@ gboolean         nemo_paged_viewer_open_file  (NemoPagedViewer *self,
                                                 const gchar     *path,
                                                 GError         **error);
 void             nemo_paged_viewer_close_file (NemoPagedViewer *self);
+/* Defaults to TRUE; embedded previews can load without taking keyboard focus. */
+void             nemo_paged_viewer_set_focus_on_load (NemoPagedViewer *self,
+                                                     gboolean         focus_on_load);
 void             nemo_paged_viewer_scroll_page (NemoPagedViewer *self, gboolean forward);
 void             nemo_paged_viewer_set_mode   (NemoPagedViewer *self,
                                                 NemoViewerMode   mode);

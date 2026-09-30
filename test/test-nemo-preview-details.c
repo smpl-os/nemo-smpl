@@ -3,6 +3,7 @@
 #include <glib/gstdio.h>
 #include <unistd.h>
 #include "../src/nemo-preview-details.c"
+#include <libnemo-private/nemo-file-private.h>
 
 typedef struct {
 	GAsyncReadyCallback callback;
@@ -108,6 +109,165 @@ test_no_gps (void)
 	g_assert_null (self->file);
 	g_assert_cmpint (g_remove ("plain.txt"), ==, 0);
 	g_object_unref (file);
+	destroy_details (self);
+}
+
+static void
+wait_directory_size (NemoPreviewDetails *self)
+{
+	gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+
+	while (g_strcmp0 (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+			 _("Calculating…")) == 0 &&
+	       g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_nonnull (self->size_file);
+	g_assert_cmpuint (self->size_timeout_id, ==, 0);
+	g_assert_false (gtk_widget_get_visible (self->status));
+}
+
+static void
+test_directory_size (void)
+{
+	NemoPreviewDetails *self = new_details ();
+	GFile *file = g_file_new_for_path ("folder");
+	GStatBuf statbuf;
+	goffset expected, size;
+	char *formatted;
+	char contents[65536] = { 0 };
+
+	g_assert_cmpint (g_mkdir ("folder", 0700), ==, 0);
+	nemo_preview_details_set_file (self, file);
+	wait_metadata (self);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+			 ==, _("Calculating…"));
+	g_assert_cmpuint (self->size_timeout_id, !=, 0);
+	g_assert_null (self->size_file);
+	wait_directory_size (self);
+	formatted = g_format_size (0);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+			 ==, formatted);
+	g_free (formatted);
+	nemo_preview_details_clear (self);
+
+	g_assert_cmpint (g_mkdir ("folder/nested", 0700), ==, 0);
+	g_assert_true (g_file_set_contents ("folder/nested/data", contents, sizeof contents, NULL));
+	g_assert_true (g_file_set_contents ("folder/.hidden", contents, 12345, NULL));
+	g_assert_cmpint (link ("folder/nested/data", "folder/hardlink"), ==, 0);
+	g_assert_cmpint (symlink ("..", "folder/nested/loop"), ==, 0);
+	g_assert_cmpint (g_lstat ("folder/nested", &statbuf), ==, 0);
+	expected = sizeof contents + 12345 + statbuf.st_size;
+	g_assert_cmpint (g_lstat ("folder/nested/loop", &statbuf), ==, 0);
+	expected += statbuf.st_size;
+	nemo_preview_details_set_file (self, file);
+	wait_metadata (self);
+	/* An info refresh before the debounce expires must still replace the
+	 * cached empty-folder count when the scan starts. */
+	nemo_preview_details_set_file (self, file);
+	wait_metadata (self);
+	wait_directory_size (self);
+	g_assert_cmpint (nemo_file_get_deep_counts (self->size_file, NULL, NULL,
+			 NULL, NULL, &size, TRUE), ==, NEMO_REQUEST_DONE);
+	g_assert_cmpint (size, ==, expected);
+	formatted = g_format_size (expected);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+			 ==, formatted);
+	g_free (formatted);
+	destroy_details (self);
+	g_object_unref (file);
+	g_assert_cmpint (g_remove ("folder/nested/loop"), ==, 0);
+	g_assert_cmpint (g_remove ("folder/hardlink"), ==, 0);
+	g_assert_cmpint (g_remove ("folder/.hidden"), ==, 0);
+	g_assert_cmpint (g_remove ("folder/nested/data"), ==, 0);
+	g_assert_cmpint (g_rmdir ("folder/nested"), ==, 0);
+	g_assert_cmpint (g_rmdir ("folder"), ==, 0);
+}
+
+static void
+test_directory_size_cancel (gconstpointer data)
+{
+	guint mode = GPOINTER_TO_UINT (data);
+	NemoPreviewDetails *self = new_details ();
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	GFile *file = g_file_new_for_path ("cancel-folder");
+	GFile *replacement = g_file_new_for_path ("replacement.txt");
+
+	g_assert_cmpint (g_mkdir ("cancel-folder", 0700), ==, 0);
+	g_assert_true (g_file_set_contents ("replacement.txt", "replacement", -1, NULL));
+	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (self));
+	gtk_widget_show_all (window);
+	nemo_preview_details_set_file (self, file);
+	wait_metadata (self);
+	g_assert_cmpuint (self->size_timeout_id, !=, 0);
+	if (mode != 0) {
+		g_source_remove (self->size_timeout_id);
+		start_directory_size (self);
+		g_assert_nonnull (self->size_file);
+	}
+	if (mode == 2)
+		gtk_widget_hide (window);
+	else if (mode == 3)
+		gtk_widget_destroy (GTK_WIDGET (self));
+	else if (mode == 4)
+		gtk_widget_hide (GTK_WIDGET (self));
+	else
+		nemo_preview_details_set_file (self, replacement);
+	g_assert_cmpuint (self->size_timeout_id, ==, 0);
+	g_assert_null (self->size_file);
+	if (mode < 2) {
+		wait_metadata (self);
+		g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_NAME])),
+				 ==, "replacement.txt");
+	}
+	gint64 deadline = g_get_monotonic_time () + 2 * DIRECTORY_SIZE_DELAY_MS * 1000;
+	while (g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_cmpuint (self->size_timeout_id, ==, 0);
+	g_assert_null (self->size_file);
+	if (mode < 2) {
+		char *formatted = g_format_size (strlen ("replacement"));
+		g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+				 ==, formatted);
+		g_free (formatted);
+	}
+	if (mode == 2 || mode == 4) {
+		gtk_widget_show_all (window);
+		wait_metadata (self);
+		wait_directory_size (self);
+	}
+	gtk_widget_destroy (window);
+	destroy_details (self);
+	g_object_unref (file);
+	g_object_unref (replacement);
+	g_assert_cmpint (g_remove ("replacement.txt"), ==, 0);
+	g_assert_cmpint (g_rmdir ("cancel-folder"), ==, 0);
+}
+
+static void
+test_directory_size_incomplete (void)
+{
+	NemoPreviewDetails *self = new_details ();
+	NemoFile *file = nemo_file_get_by_uri ("file:///unused-preview-incomplete");
+	char *formatted = g_format_size (8192);
+	char *expected = g_strdup_printf (_("At least %s"), formatted);
+
+	file->details->type = G_FILE_TYPE_DIRECTORY;
+	file->details->deep_counts_status = NEMO_REQUEST_DONE;
+	file->details->deep_unreadable_count = 1;
+	file->details->deep_size = 8192;
+	directory_size_ready_cb (file, self);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_SIZE])),
+			 ==, expected);
+	g_assert_true (gtk_widget_get_visible (self->status));
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->status)),
+			 ==, _("Some folder contents could not be read."));
+	nemo_file_unref (file);
+	g_free (formatted);
+	g_free (expected);
 	destroy_details (self);
 }
 
@@ -867,6 +1027,18 @@ main (int argc, char **argv)
 	g_assert_cmpint (g_mkdir (scratch, 0700), ==, 0);
 	g_assert_cmpint (g_chdir (scratch), ==, 0);
 	g_test_add_func ("/preview-details/no-gps", test_no_gps);
+	g_test_add_func ("/preview-details/directory-size", test_directory_size);
+	g_test_add_func ("/preview-details/directory-size-incomplete", test_directory_size_incomplete);
+	g_test_add_data_func ("/preview-details/directory-switch-before-scan",
+			      GUINT_TO_POINTER (0), test_directory_size_cancel);
+	g_test_add_data_func ("/preview-details/directory-switch-during-scan",
+			      GUINT_TO_POINTER (1), test_directory_size_cancel);
+	g_test_add_data_func ("/preview-details/directory-hide-during-scan",
+			      GUINT_TO_POINTER (2), test_directory_size_cancel);
+	g_test_add_data_func ("/preview-details/directory-destroy-during-scan",
+			      GUINT_TO_POINTER (3), test_directory_size_cancel);
+	g_test_add_data_func ("/preview-details/directory-hide-details-during-scan",
+			      GUINT_TO_POINTER (4), test_directory_size_cancel);
 	g_test_add_func ("/preview-details/image-without-metadata", test_image_without_metadata);
 	g_test_add_func ("/preview-details/stale-metadata-map", test_stale_metadata_and_map);
 	g_test_add_func ("/preview-details/generation", test_generation_guard);

@@ -189,13 +189,64 @@ test_details_ownership (void)
 	g_object_unref (file);
 }
 
-#ifdef HAVE_DOCUMENT_PREVIEW
 static void
 document_file_ready (NemoFile *file, gpointer data)
 {
 	*(gboolean *) data = TRUE;
 }
 
+static void
+test_directory_size_settles (void)
+{
+	NemoPreviewPane *pane = new_test_pane ();
+	GFile *location = g_file_new_for_path ("pane-folder");
+	NemoFile *file;
+	gboolean ready = FALSE;
+	gint64 deadline;
+	goffset size;
+
+	g_assert_cmpint (g_mkdir ("pane-folder", 0700), ==, 0);
+	g_assert_true (g_file_set_contents ("pane-folder/data", "contents", -1, NULL));
+	file = nemo_file_get (location);
+	nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_INFO, document_file_ready, &ready);
+	deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while (!ready && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (ready);
+	nemo_preview_pane_set_file (pane, file);
+	while (nemo_file_get_deep_counts (file, NULL, NULL, NULL, NULL, &size, TRUE)
+	       != NEMO_REQUEST_DONE && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_cmpint (size, ==, strlen ("contents"));
+
+	/* Completion emits changed; refreshing details must not start an
+	 * endless cycle of new scans and changed notifications. */
+	for (guint pass = 0; pass < 2; pass++) {
+		guint64 generation = pane->generation;
+		deadline = g_get_monotonic_time () + G_TIME_SPAN_SECOND;
+		while (g_get_monotonic_time () < deadline) {
+			g_main_context_iteration (NULL, FALSE);
+			g_usleep (1000);
+		}
+		if (pass == 1)
+			g_assert_cmpuint (pane->generation, ==, generation);
+	}
+	g_assert_cmpint (nemo_file_get_deep_counts (file, NULL, NULL, NULL, NULL, &size, TRUE),
+			 ==, NEMO_REQUEST_DONE);
+	g_assert_cmpint (size, ==, strlen ("contents"));
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_remove ("pane-folder/data"), ==, 0);
+	g_assert_cmpint (g_rmdir ("pane-folder"), ==, 0);
+}
+
+#ifdef HAVE_DOCUMENT_PREVIEW
 static void
 test_rich_document_pane (void)
 {
@@ -385,6 +436,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview-pane/destroy-pending", test_destroy_pending);
 	g_test_add_func ("/preview-pane/thumbnail-worker", test_thumbnail_worker);
 	g_test_add_func ("/preview-pane/details-ownership", test_details_ownership);
+	g_test_add_func ("/preview-pane/directory-size-settles", test_directory_size_settles);
 #ifdef HAVE_DOCUMENT_PREVIEW
 	g_test_add_func ("/preview-pane/rich-document", test_rich_document_pane);
 #endif

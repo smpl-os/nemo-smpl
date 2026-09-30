@@ -30,6 +30,13 @@ nemo-smpl
 
 See [FEATURES.md](FEATURES.md) for full details and release notes.
 
+Folder sizes in preview details are calculated recursively in the background
+after a short selection delay, rather than showing the directory entry's own
+size. The field shows **Calculating…** until ready, using the same totals as
+Properties (including hidden contents, without following nested symbolic links
+or descending into other filesystems). Moving away or hiding the details cancels
+the request. Unreadable contents are reported as an incomplete total.
+
 ## Installation
 
 ### Arch Linux / smplOS
@@ -111,7 +118,12 @@ are still reported; verification itself is unchanged.
 
 F3 and the right preview pane share a native document viewer for **Markdown,
 EPUB, plain UTF-8 FB2, basic MOBI, PDF and CBZ**. It provides document paging, zoom,
-and F3 text search. **PgUp/PgDn scroll the open document**, not the file list.
+and F3 text search. Loading a sidebar preview never takes keyboard focus from
+the file list: **Up/Down** continue selecting files. Use the scrollbar or
+**Alt+PgUp/Alt+PgDn** to scroll a text/document preview without leaving the file
+list; these bindings are configurable under **Keyboard Shortcuts → Preview**.
+**PgUp/PgDn scroll the open document** in F3 or when the sidebar preview has
+keyboard focus.
 In F3, **Ctrl+Left / Ctrl+Right** switch files; both are configurable under
 **Preferences → Keyboard Shortcuts → Quick Preview**. The file-navigation
 button tooltips follow those settings. Plain Left/Right still seek in media.
@@ -223,6 +235,7 @@ Bookmarks**. The new Favorites shortcut leaves an existing assignment alone.
 |----------|--------|
 | **F3** | Quick Preview (instant file viewer) |
 | **Alt+F3** | Toggle Preview Pane |
+| **Alt+PgUp / Alt+PgDn** | Scroll the text/document preview up / down without changing selection |
 | **Ctrl+F3** | Toggle Split View |
 | **Shift+Alt+F3** | Toggle Preview Pane details |
 | **Ctrl+Shift+K** | Edit keyboard shortcuts |
@@ -283,10 +296,12 @@ before `misscurve.txt`, while `curve2` can select `misscurve2.txt`. This is not 
 fuzzy subsequence match, and it does not hide other files. Matching filename
 segments are shown in **bold** while typing.
 
-In typing mode, **Down/Right** move to the next match and **Up/Left** to the
-previous one. **Ctrl+G / Ctrl+Shift+G** also move between matches. All six
-bindings are configurable under **Preferences → Keyboard Shortcuts → Type to
-Jump**. Escape, Tab, clicking elsewhere, or inactivity ends typing mode and
+In typing mode, **Down** moves to the next match and **Up** to the previous
+one. Configure **Next Matching Filename** and **Previous Matching Filename**
+under **Preferences → Keyboard Shortcuts → Type to Jump**. Each action has one
+shortcut; existing customizations of these two actions are kept. The former
+Right/Left and Ctrl+G/Ctrl+Shift+G alternate actions are no longer used.
+Escape, Tab, clicking elsewhere, or inactivity ends typing mode and
 restores normal arrow-key navigation. Prefix-only and fuzzy-filter modes remain
 available through the existing `interactive-search-mode` preference.
 

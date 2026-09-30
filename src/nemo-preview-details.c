@@ -7,6 +7,7 @@
 #include "nemo-preview-details.h"
 #include "nemo-preview-utils.h"
 
+#include <libnemo-private/nemo-file.h>
 #include <glib/gi18n.h>
 #include <math.h>
 #include <string.h>
@@ -26,6 +27,7 @@
 /* Never download an entire unbounded remote image just to inspect metadata. */
 #define METADATA_READ_LIMIT (32 * 1024 * 1024)
 #define MAP_READ_LIMIT (2 * 1024 * 1024)
+#define DIRECTORY_SIZE_DELAY_MS 250
 
 typedef enum {
 	DETAIL_NAME, DETAIL_SIZE, DETAIL_TYPE, DETAIL_MODIFIED,
@@ -37,6 +39,7 @@ typedef enum {
 typedef struct {
 	char *values[N_DETAILS];
 	char *warning;
+	gboolean is_directory;
 	gboolean has_gps;
 	double latitude, longitude;
 } DetailsResult;
@@ -52,6 +55,9 @@ struct _NemoPreviewDetails {
 	GtkWidget *map_status;
 	GFile *file;
 	GCancellable *cancellable;
+	NemoFile *size_file;
+	guint size_timeout_id;
+	gboolean recompute_directory_size;
 	guint64 generation;
 	gboolean destroyed;
 	double latitude, longitude;
@@ -68,6 +74,7 @@ typedef struct {
 G_DEFINE_TYPE (NemoPreviewDetails, nemo_preview_details, GTK_TYPE_BOX)
 
 static void start_metadata_load (NemoPreviewDetails *self);
+static void directory_size_ready_cb (NemoFile *file, gpointer user_data);
 
 static void
 details_result_free (DetailsResult *result)
@@ -138,6 +145,16 @@ static void
 reset_details (NemoPreviewDetails *self)
 {
 	self->generation++;
+	self->recompute_directory_size = TRUE;
+	if (self->size_timeout_id != 0) {
+		g_source_remove (self->size_timeout_id);
+		self->size_timeout_id = 0;
+	}
+	if (self->size_file != NULL) {
+		nemo_file_cancel_call_when_ready (self->size_file,
+						directory_size_ready_cb, self);
+		g_clear_object (&self->size_file);
+	}
 	if (self->cancellable != NULL) {
 		g_cancellable_cancel (self->cancellable);
 		g_clear_object (&self->cancellable);
@@ -487,7 +504,10 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 		return;
 	}
 	result->values[DETAIL_NAME] = g_strdup (g_file_info_get_display_name (info));
-	if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
+	result->is_directory = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
+	if (result->is_directory)
+		result->values[DETAIL_SIZE] = g_strdup (_("Calculating…"));
+	else if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
 		result->values[DETAIL_SIZE] = g_format_size (g_file_info_get_size (info));
 	mime = g_file_info_get_content_type (info);
 	if (mime != NULL)
@@ -727,6 +747,54 @@ gps_map_fetch_tile (NemoPreviewDetails *self)
 }
 
 static void
+directory_size_ready_cb (NemoFile *file, gpointer user_data)
+{
+	NemoPreviewDetails *self = user_data;
+	guint unreadable;
+	goffset size;
+	NemoRequestStatus status;
+	char *formatted;
+
+	status = nemo_file_get_deep_counts (file, NULL, NULL, &unreadable,
+					   NULL, &size, TRUE);
+	if (!nemo_file_is_directory (file) || status != NEMO_REQUEST_DONE) {
+		set_field (self, DETAIL_SIZE, _("Unknown"));
+		gtk_label_set_text (GTK_LABEL (self->status),
+				    _("Unable to calculate folder size."));
+		gtk_widget_show (self->status);
+		return;
+	}
+	formatted = g_format_size (size);
+	if (unreadable != 0) {
+		char *partial = g_strdup_printf (_("At least %s"), formatted);
+		set_field (self, DETAIL_SIZE, partial);
+		g_free (partial);
+		gtk_label_set_text (GTK_LABEL (self->status),
+				    _("Some folder contents could not be read."));
+		gtk_widget_show (self->status);
+	} else
+		set_field (self, DETAIL_SIZE, formatted);
+	g_free (formatted);
+}
+
+static gboolean
+start_directory_size (gpointer user_data)
+{
+	NemoPreviewDetails *self = user_data;
+
+	self->size_timeout_id = 0;
+	self->size_file = nemo_file_get (self->file);
+	if (self->recompute_directory_size) {
+		self->recompute_directory_size = FALSE;
+		nemo_file_recompute_deep_counts (self->size_file);
+	}
+	nemo_file_call_when_ready (self->size_file,
+				  NEMO_FILE_ATTRIBUTE_INFO | NEMO_FILE_ATTRIBUTE_DEEP_COUNTS,
+				  directory_size_ready_cb, self);
+	return G_SOURCE_REMOVE;
+}
+
+static void
 metadata_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
 	GTask *task = G_TASK (result);
@@ -747,6 +815,10 @@ metadata_ready_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 				gtk_label_set_text (GTK_LABEL (self->status), metadata->warning);
 				gtk_widget_show (self->status);
 			}
+			if (metadata->is_directory)
+				self->size_timeout_id = g_timeout_add_full (
+					G_PRIORITY_LOW, DIRECTORY_SIZE_DELAY_MS,
+					start_directory_size, self, NULL);
 			if (metadata->has_gps) {
 				self->latitude = metadata->latitude;
 				self->longitude = metadata->longitude;
@@ -780,11 +852,19 @@ start_metadata_load (NemoPreviewDetails *self)
 void
 nemo_preview_details_set_file (NemoPreviewDetails *self, GFile *file)
 {
+	gboolean recompute;
+
 	g_return_if_fail (NEMO_IS_PREVIEW_DETAILS (self));
 	g_return_if_fail (file == NULL || G_IS_FILE (file));
 	if (self->destroyed)
 		return;
+	/* Deep-count completion emits NemoFile::changed. A metadata refresh for
+	 * the same selection must not invalidate the count that just finished. */
+	recompute = self->recompute_directory_size ||
+		    self->file == NULL || file == NULL || self->cancellable == NULL ||
+		    !g_file_equal (self->file, file);
 	reset_details (self);
+	self->recompute_directory_size = recompute;
 	g_set_object (&self->file, file);
 	if (file != NULL)
 		start_metadata_load (self);

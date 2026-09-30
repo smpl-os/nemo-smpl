@@ -1364,6 +1364,25 @@ nemo_window_key_press_event (GtkWidget *widget,
 	}
 
 #ifdef NEMO_SMPL
+	if (nemo_keybinding_settings != NULL &&
+	    gtk_widget_get_mapped (window->details->preview_pane)) {
+		const char *scroll_keys[] = { "preview-scroll-up", "preview-scroll-down" };
+
+		for (guint direction = 0; direction < G_N_ELEMENTS (scroll_keys); direction++) {
+			g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings,
+								      scroll_keys[direction]);
+			guint key;
+			GdkModifierType mods;
+
+			gtk_accelerator_parse (accel, &key, &mods);
+			if (key != 0 && gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (key) &&
+			    (event->state & gtk_accelerator_get_default_mod_mask ()) == mods &&
+			    nemo_preview_pane_scroll_page (
+				    NEMO_PREVIEW_PANE (window->details->preview_pane), direction == 1))
+				return TRUE;
+		}
+	}
+
 	if (event->keyval == GDK_KEY_Escape &&
 	    (event->state & gtk_accelerator_get_default_mod_mask ()) == 0 &&
 	    (view == NULL || !nemo_view_get_filter_active (view)) &&

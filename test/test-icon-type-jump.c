@@ -201,21 +201,21 @@ test_ranked_navigation (Fixture *fixture, gconstpointer compact)
 	assert_selected (fixture, 1);
 	g_assert_true (press_key (fixture, GDK_KEY_Down, 0));
 	assert_selected (fixture, 2);
-	g_assert_true (press_key (fixture, GDK_KEY_Right, 0));
+	g_assert_true (press_key (fixture, GDK_KEY_Down, 0));
 	assert_selected (fixture, 7);
-	g_assert_true (press_key (fixture, GDK_KEY_KP_Right, 0));
+	g_assert_true (press_key (fixture, GDK_KEY_KP_Down, 0));
 	assert_selected (fixture, 0);
-	g_assert_true (press_key (fixture, GDK_KEY_g, GDK_CONTROL_MASK));
+	g_assert_true (press_key (fixture, GDK_KEY_Down, 0));
 	assert_selected (fixture, 4);
 	g_assert_true (press_key (fixture, GDK_KEY_Down, 0));
 	assert_selected (fixture, 6);
 	g_assert_true (press_key (fixture, GDK_KEY_Down, 0));
 	assert_selected (fixture, 6);
-	g_assert_true (press_key (fixture, GDK_KEY_Left, 0));
+	g_assert_true (press_key (fixture, GDK_KEY_Up, 0));
 	assert_selected (fixture, 4);
 	g_assert_true (press_key (fixture, GDK_KEY_KP_Up, 0));
 	assert_selected (fixture, 0);
-	g_assert_true (press_key (fixture, GDK_KEY_G, GDK_CONTROL_MASK | GDK_SHIFT_MASK));
+	g_assert_true (press_key (fixture, GDK_KEY_Up, 0));
 	assert_selected (fixture, 7);
 }
 
@@ -249,9 +249,9 @@ test_incremental_queries (Fixture *fixture, gconstpointer compact)
 	assert_selected (fixture, -1);
 	search_for (fixture, "cur");
 	assert_selected (fixture, 1);
-	press_key (fixture, GDK_KEY_Right, 0);
-	press_key (fixture, GDK_KEY_Right, 0);
-	press_key (fixture, GDK_KEY_Right, 0);
+	press_key (fixture, GDK_KEY_Down, 0);
+	press_key (fixture, GDK_KEY_Down, 0);
+	press_key (fixture, GDK_KEY_Down, 0);
 	assert_selected (fixture, 7);
 }
 
@@ -264,8 +264,16 @@ test_live_bindings (Fixture *fixture, gconstpointer compact)
 	assert_selected (fixture, 1);
 	g_assert_true (press_key (fixture, GDK_KEY_j, GDK_CONTROL_MASK));
 	assert_selected (fixture, 2);
-	g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "");
 	press_key (fixture, GDK_KEY_Right, 0);
+	assert_selected (fixture, 2);
+	press_key (fixture, GDK_KEY_Left, 0);
+	assert_selected (fixture, 2);
+	press_key (fixture, GDK_KEY_g, GDK_CONTROL_MASK);
+	assert_selected (fixture, 2);
+	press_key (fixture, GDK_KEY_G, GDK_CONTROL_MASK | GDK_SHIFT_MASK);
+	assert_selected (fixture, 2);
+	g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "F8");
+	press_key (fixture, GDK_KEY_F8, 0);
 	assert_selected (fixture, 2);
 	g_settings_set_string (nemo_keybinding_settings, "type-jump-previous", "<Control>k");
 	g_assert_true (press_key (fixture, GDK_KEY_k, GDK_CONTROL_MASK));
@@ -435,7 +443,6 @@ test_existing_arrows (Fixture *fixture, gconstpointer compact)
 	search_for (fixture, "curvey");
 	assert_selected (fixture, 2);
 	press_key (fixture, GDK_KEY_Escape, 0);
-	g_settings_set_string (nemo_keybinding_settings, "type-jump-next-alt", "");
 	for (guint i = 0; i < G_N_ELEMENTS (fixture->icons); i++) {
 		fixture->icons[i]->x = fixture->icons[i]->item->details->x;
 		fixture->icons[i]->y = fixture->icons[i]->item->details->y;

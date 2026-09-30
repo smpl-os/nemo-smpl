@@ -783,6 +783,35 @@ test_keyboard_navigation (void)
 	g_object_unref (file);
 }
 
+static void
+test_focus_on_load (void)
+{
+	MockData *data;
+	GFile *file = new_file ("preview\n", 8, &data);
+	NemoPagedViewer *viewer = new_viewer ();
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	GtkWidget *entry = gtk_entry_new ();
+
+	gtk_container_add (GTK_CONTAINER (window), box);
+	gtk_box_pack_start (GTK_BOX (box), entry, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (box), GTK_WIDGET (viewer), TRUE, TRUE, 0);
+	gtk_widget_show_all (window);
+	gtk_widget_grab_focus (entry);
+	nemo_paged_viewer_set_focus_on_load (viewer, FALSE);
+	nemo_paged_viewer_open_location (viewer, file);
+	g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == entry);
+	WAIT_FOR (viewer->opened);
+	g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == entry);
+	nemo_paged_viewer_set_focus_on_load (viewer, TRUE);
+	nemo_paged_viewer_open_location (viewer, file);
+	g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == viewer->drawing_area);
+	WAIT_FOR (viewer->opened);
+	gtk_widget_destroy (window);
+	g_object_unref (viewer);
+	g_object_unref (file);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -817,6 +846,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/paged-viewer/search-read-error", test_search_read_error);
 	g_test_add_func ("/paged-viewer/text-formatting-highlight", test_text_formatting_and_highlight);
 	g_test_add_func ("/paged-viewer/keyboard-navigation", test_keyboard_navigation);
+	g_test_add_func ("/paged-viewer/focus-on-load", test_focus_on_load);
 	return g_test_run ();
 }
 

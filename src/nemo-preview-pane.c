@@ -1044,24 +1044,31 @@ nemo_preview_pane_set_file (NemoPreviewPane *self,
 }
 
 gboolean
+nemo_preview_pane_scroll_page (NemoPreviewPane *self, gboolean forward)
+{
+	g_return_val_if_fail (NEMO_IS_PREVIEW_PANE (self), FALSE);
+	if (self->destroyed)
+		return FALSE;
+	const char *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
+	if (g_strcmp0 (page, "document") == 0)
+		nemo_document_viewer_scroll_page (self->document_viewer, forward);
+	else if (g_strcmp0 (page, "text") == 0)
+		nemo_paged_viewer_scroll_page (self->paged_viewer, forward);
+	else
+		return FALSE;
+	return TRUE;
+}
+
+gboolean
 nemo_preview_pane_handle_key_event (NemoPreviewPane *self, GdkEventKey *event)
 {
 	g_return_val_if_fail (NEMO_IS_PREVIEW_PANE (self), FALSE);
 	g_return_val_if_fail (event != NULL, FALSE);
-	if (self->destroyed || (event->state & gtk_accelerator_get_default_mod_mask ()) != 0)
+	if ((event->state & gtk_accelerator_get_default_mod_mask ()) != 0)
 		return FALSE;
 	gboolean up = event->keyval == GDK_KEY_Page_Up || event->keyval == GDK_KEY_KP_Page_Up;
 	gboolean down = event->keyval == GDK_KEY_Page_Down || event->keyval == GDK_KEY_KP_Page_Down;
-	if (!up && !down)
-		return FALSE;
-	const char *page = gtk_stack_get_visible_child_name (GTK_STACK (self->stack));
-	if (g_strcmp0 (page, "document") == 0)
-		nemo_document_viewer_scroll_page (self->document_viewer, down);
-	else if (g_strcmp0 (page, "text") == 0)
-		nemo_paged_viewer_scroll_page (self->paged_viewer, down);
-	else
-		return FALSE;
-	return TRUE;
+	return (up || down) && nemo_preview_pane_scroll_page (self, down);
 }
 
 void
@@ -1359,6 +1366,7 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 
 	/* Text page — shared NemoPagedViewer (handles files of any size) */
 	self->paged_viewer = nemo_paged_viewer_new ();
+	nemo_paged_viewer_set_focus_on_load (self->paged_viewer, FALSE);
 	gtk_stack_add_named (GTK_STACK (self->stack),
 			     GTK_WIDGET (self->paged_viewer), "text");
 	gtk_widget_show (GTK_WIDGET (self->paged_viewer));

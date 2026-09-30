@@ -208,6 +208,10 @@ sudo udevadm trigger --subsystem-match=usb
 - **Toggle on/off:** Alt+F3
 - **Adjust width:** Ctrl+[ (shrink) / Ctrl+] (grow)
 - **Toggle metadata:** Shift+Alt+F3
+- **Scroll text/documents:** Alt+PgUp / Alt+PgDn (configurable under Keyboard Shortcuts → Preview)
+
+Loading a preview keeps focus in the file list, so Up/Down continue selecting
+files. The preview scrollbar also works without changing the file selection.
 
 ### Theme & Appearance
 
