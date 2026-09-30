@@ -106,6 +106,7 @@
 #define NEMO_FILE_MANAGEMENT_PROPERTIES_BOOKMARKS_IN_TO_MENUS_WIDGET "bookmarks_in_to_checkbutton"
 #define NEMO_FILE_MANAGEMENT_PROPERTIES_PLACES_IN_TO_MENUS_WIDGET "places_in_to_checkbutton"
 #define NEMO_FILE_MANAGEMENT_PROPERTIES_INHERIT_SHOW_THUMBNAILS_WIDGET "inherit_show_thumbnails_checkbutton"
+#define NEMO_FILE_MANAGEMENT_PROPERTIES_REMEMBER_DOCUMENT_POSITION_WIDGET "remember_document_position_checkbutton"
 
 #define NEMO_FILE_MANAGEMENT_PROPERTIES_BULK_RENAME_WIDGET "bulk_rename_entry"
 
@@ -1110,6 +1111,10 @@ nemo_file_management_properties_dialog_setup (GtkBuilder  *builder,
     bind_builder_bool (builder, nemo_preferences,
                        NEMO_FILE_MANAGEMENT_PROPERTIES_RESTORE_TABS_ON_STARTUP_WIDGET,
                        NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP);
+
+    bind_builder_bool (builder, nemo_preferences,
+                       NEMO_FILE_MANAGEMENT_PROPERTIES_REMEMBER_DOCUMENT_POSITION_WIDGET,
+                       NEMO_PREFERENCES_REMEMBER_DOCUMENT_POSITION);
 
     bind_builder_bool (builder, nemo_preferences,
                        NEMO_FILE_MANAGEMENT_PROPERTIES_IGNORE_VIEW_METADATA_WIDGET,

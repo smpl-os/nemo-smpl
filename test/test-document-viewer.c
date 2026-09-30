@@ -79,6 +79,7 @@ probe_spawn (GSubprocessLauncher *launcher, const char * const *argv, GError **e
 #define g_subprocess_launcher_spawnv probe_spawn
 #include "../src/nemo-document-viewer.c"
 #undef g_subprocess_launcher_spawnv
+#include <libnemo-private/nemo-file-utilities.h>
 
 static void
 write_pdf (const char *path)
@@ -252,6 +253,10 @@ harness_load (Harness *h, const char *name, const char *mime)
 {
 	g_autofree char *path = fixture_path (name);
 	g_autoptr (GFile) file = g_file_new_for_path (path);
+	/* Shared fixtures always start at the beginning; reading positions are
+	 * exercised deliberately by /document/reading-position. */
+	nemo_document_position_forget (file);
+	nemo_document_position_flush ();
 	nemo_document_viewer_load_file (h->viewer, file, mime);
 }
 
@@ -697,6 +702,63 @@ test_input_limit (void)
 	g_assert_cmpint (g_unlink (path), ==, 0);
 }
 
+static void
+test_reading_position (void)
+{
+	g_autofree char *path = fixture_path ("reading.pdf");
+	g_autoptr (GFile) file = g_file_new_for_path (path);
+	guint page = 0;
+	gdouble offset = 0, stored = 0;
+
+	write_pdf (path);
+	Harness h = { 0 };
+	harness_init (&h, "normal");
+	nemo_document_viewer_load_file (h.viewer, file, "application/pdf");
+	if (!harness_wait (&h)) {
+		harness_clear (&h);
+		g_assert_cmpint (g_unlink (path), ==, 0);
+		return;
+	}
+	g_assert_no_error (h.error);
+	wait_render (h.viewer);
+	g_assert_cmpuint (h.viewer->page, ==, 0);
+	document_change_page (h.viewer, 2, 1);
+	wait_render (h.viewer);
+	g_assert_cmpuint (h.viewer->page, ==, 2);
+	GtkAdjustment *v = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (h.viewer->scroll));
+	g_assert_cmpfloat (gtk_adjustment_get_upper (v), >, gtk_adjustment_get_page_size (v));
+	gtk_adjustment_set_value (v, (gtk_adjustment_get_upper (v) - gtk_adjustment_get_page_size (v)) / 2);
+	stored = document_scroll_fraction (h.viewer);
+	g_assert_cmpfloat (stored, >, 0.1);
+	harness_clear (&h);
+
+	/* The position must survive on disk, not just in the running process. */
+	g_autofree char *user_directory = nemo_get_user_directory ();
+	g_autofree char *keyfile = g_build_filename (user_directory, "document-positions", NULL);
+	g_assert_true (g_file_test (keyfile, G_FILE_TEST_EXISTS));
+	g_assert_true (nemo_document_position_lookup (file, &page, &offset));
+	g_assert_cmpuint (page, ==, 2);
+
+	Harness reopened = { 0 };
+	harness_init (&reopened, "normal");
+	nemo_document_viewer_load_file (reopened.viewer, file, "application/pdf");
+	g_assert_true (harness_wait (&reopened));
+	g_assert_no_error (reopened.error);
+	wait_render (reopened.viewer);
+	g_assert_cmpuint (reopened.viewer->page, ==, 2);
+	gint64 end = g_get_monotonic_time () + 5000000;
+	while (reopened.viewer->restore_offset >= 0 && g_get_monotonic_time () < end)
+		iterate_for (20);
+	g_assert_cmpfloat (reopened.viewer->restore_offset, <, 0);
+	g_assert_cmpfloat_with_epsilon (document_scroll_fraction (reopened.viewer), stored, 0.05);
+	harness_clear (&reopened);
+
+	/* A rewritten document invalidates the remembered page. */
+	g_assert_true (g_file_set_contents (path, "not a pdf any more", -1, NULL));
+	g_assert_false (nemo_document_position_lookup (file, &page, &offset));
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
 static gboolean
 detect_sandbox (void)
 {
@@ -754,6 +816,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/document/output-file-limit", test_output_file_limit);
 	g_test_add_func ("/document/output-validation", test_output_validation);
 	g_test_add_func ("/document/input-limit", test_input_limit);
+	g_test_add_func ("/document/reading-position", test_reading_position);
 	int result = g_test_run ();
 	iterate_for (200);
 	g_autofree char *cache = g_build_filename (g_get_user_cache_dir (), "nemo-document-preview", NULL);

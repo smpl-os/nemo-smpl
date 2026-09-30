@@ -34,6 +34,7 @@ Double Commander-style instant file viewer:
 - Text, image (including animated GIFs and camera RAW: DNG, ARW, CR2, NEF…), audio/video (GStreamer), and hex dump modes
 - Native paged Markdown, EPUB, plain UTF-8 FB2, basic DRM-free MOBI, PDF and CBZ previews, shared with the right preview pane; document paging, zoom and F3 search
 - Reflowable book previews follow the active theme's paper/text colors; PDFs and comics retain their original appearance, and embedded images are not inverted
+- Reading positions are remembered per document (page and scroll offset) and restored on the next preview; invalidated when the file changes, toggled under Preferences → Preview
 - Directory analysis: F3 on a folder shows Pareto bar chart + ranked biggest-files list
 - Paged text/hex viewer using `pread()` + LRU cache — handles multi-GB files with ~512 KB resident
 - **Timecode display**: live `hh:mm:ss:ff` timestamp (monospace) with auto-detected framerate

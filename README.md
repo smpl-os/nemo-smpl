@@ -140,6 +140,13 @@ not color-inverted. Reflowable books use controlled reader styles so publisher
 CSS cannot force white pages; structural headings, lists, tables and emphasis
 remain, but publisher-specific styling may be replaced.
 
+Nemo remembers where you stopped reading. When a document is closed or
+another file is previewed, its page and scroll position are saved, and the
+next preview of that document reopens there—in both F3 and the preview pane.
+Positions are stored per file in `~/.config/nemo/document-positions` and are
+discarded automatically when the document changes on disk. Turn this off with
+**Preferences → Preview → Remember the reading position in document previews**.
+
 The divider between file panes—and the right preview pane's resize handle—is
 a theme-colored **1-pixel line** that highlights on hover. Its invisible drag
 target stays wider so it is still easy to resize.

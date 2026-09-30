@@ -5,6 +5,7 @@
 #include <config.h>
 #include "nemo-document-viewer.h"
 #include "nemo-preview-utils.h"
+#include <libnemo-private/nemo-document-position.h>
 #include <libnemo-private/nemo-ui-utilities.h>
 
 #include <glib/gi18n.h>
@@ -80,7 +81,7 @@ struct _NemoDocumentViewer {
 	guint resize_source;
 	guint theme_source;
 	int viewport_width, viewport_height, scroll_edge;
-	double zoom, aspect;
+	double zoom, aspect, restore_offset;
 	gboolean destroyed, loading, render_pending;
 	gboolean search_pending, search_match, deferred_search, backwards;
 };
@@ -929,12 +930,54 @@ done:
 static void
 document_apply_edge (NemoDocumentViewer *self)
 {
-	if (!self->pixbuf || !self->scroll_edge)
+	if (!self->pixbuf)
 		return;
 	GtkAdjustment *adjustment = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll));
-	gtk_adjustment_set_value (adjustment, self->scroll_edge > 0 ? gtk_adjustment_get_lower (adjustment) :
-				  MAX (gtk_adjustment_get_lower (adjustment),
-				       gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment)));
+	double lower = gtk_adjustment_get_lower (adjustment);
+	double end = MAX (lower, gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment));
+	if (self->restore_offset >= 0) {
+		/* Wait for the page to be allocated before honouring a saved offset. */
+		if (end <= lower)
+			return;
+		gtk_adjustment_set_value (adjustment, CLAMP (lower + self->restore_offset * (end - lower), lower, end));
+		self->restore_offset = -1;
+		self->scroll_edge = 0;
+		return;
+	}
+	if (!self->scroll_edge)
+		return;
+	gtk_adjustment_set_value (adjustment, self->scroll_edge > 0 ? lower : end);
+}
+
+static double
+document_scroll_fraction (NemoDocumentViewer *self)
+{
+	if (!GTK_IS_SCROLLED_WINDOW (self->scroll))
+		return 0;
+	if (self->restore_offset >= 0)
+		return self->restore_offset;
+	GtkAdjustment *adjustment = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll));
+	double lower = gtk_adjustment_get_lower (adjustment);
+	double end = gtk_adjustment_get_upper (adjustment) - gtk_adjustment_get_page_size (adjustment);
+	if (end <= lower)
+		return 0;
+	return CLAMP ((gtk_adjustment_get_value (adjustment) - lower) / (end - lower), 0, 1);
+}
+
+/* Called whenever the viewer lets go of a document, so the position that is
+ * stored is always the last one the reader actually saw. */
+static void
+document_save_position (NemoDocumentViewer *self)
+{
+	if (self->file == NULL || self->pages == 0 || self->loading)
+		return;
+	nemo_document_position_store (self->file, self->page, document_scroll_fraction (self), self->pages);
+}
+
+static void
+document_forget_restore (NemoDocumentViewer *self)
+{
+	self->restore_offset = -1;
 }
 
 static void
@@ -1190,6 +1233,7 @@ document_change_page (NemoDocumentViewer *self, unsigned page, int edge)
 	self->search_serial++;
 	self->search_match = self->search_pending = self->deferred_search = FALSE;
 	g_clear_error (&self->search_error);
+	document_forget_restore (self);
 	self->page = page;
 	self->scroll_edge = edge;
 	g_clear_object (&self->pixbuf);
@@ -1204,6 +1248,7 @@ nemo_document_viewer_scroll_page (NemoDocumentViewer *self, gboolean forward)
 	g_return_if_fail (NEMO_IS_DOCUMENT_VIEWER (self));
 	if (self->destroyed || !self->pages)
 		return;
+	document_forget_restore (self);
 	self->scroll_edge = 0;
 	GtkAdjustment *adjustment = gtk_scrolled_window_get_vadjustment (GTK_SCROLLED_WINDOW (self->scroll));
 	double value = gtk_adjustment_get_value (adjustment);
@@ -1253,6 +1298,7 @@ document_button_press (GtkWidget *widget, GdkEventButton *event, gpointer data)
 static gboolean
 document_scroll (GtkWidget *widget, GdkEventScroll *event, gpointer data)
 {
+	document_forget_restore (data);
 	((NemoDocumentViewer *) data)->scroll_edge = 0;
 	return FALSE;
 }
@@ -1305,6 +1351,7 @@ document_retry_clicked (GtkButton *button, gpointer data)
 static void
 document_reset (NemoDocumentViewer *self)
 {
+	document_save_position (self);
 	self->generation++;
 	self->render_serial++;
 	self->search_serial++;
@@ -1333,6 +1380,7 @@ document_reset (NemoDocumentViewer *self)
 	self->zoom = 1;
 	self->aspect = 0.75;
 	self->scroll_edge = 1;
+	self->restore_offset = -1;
 }
 
 void
@@ -1340,6 +1388,7 @@ nemo_document_viewer_close (NemoDocumentViewer *self)
 {
 	g_return_if_fail (NEMO_IS_DOCUMENT_VIEWER (self));
 	document_reset (self);
+	nemo_document_position_flush ();
 	if (!self->destroyed) {
 		document_status (self, NULL);
 		document_update_controls (self);
@@ -1389,7 +1438,19 @@ document_begin_load (NemoDocumentViewer *self, GFile *file, const char *mime,
 void
 nemo_document_viewer_load_file (NemoDocumentViewer *self, GFile *file, const char *mime)
 {
-	document_begin_load (self, file, mime, 0, 1, NULL);
+	guint page = 0;
+	gdouble offset = 0;
+
+	g_return_if_fail (NEMO_IS_DOCUMENT_VIEWER (self));
+	g_return_if_fail (G_IS_FILE (file));
+
+	/* Resolve the saved position before the reset that stores the outgoing one. */
+	if (!nemo_document_position_lookup (file, &page, &offset)) {
+		page = 0;
+		offset = 0;
+	}
+	document_begin_load (self, file, mime, page, 1, NULL);
+	self->restore_offset = offset > 0 ? offset : -1;
 }
 
 static gboolean
@@ -1403,8 +1464,11 @@ document_check_theme (gpointer data)
 	g_autofree char *foreground = NULL;
 	document_theme_colors (self, &background, &foreground);
 	if (g_strcmp0 (background, self->theme_background) != 0 ||
-	    g_strcmp0 (foreground, self->theme_foreground) != 0)
+	    g_strcmp0 (foreground, self->theme_foreground) != 0) {
+		double pending = self->restore_offset;
 		document_begin_load (self, self->file, self->mime, self->page, self->zoom, self->needle);
+		self->restore_offset = pending;
+	}
 	return G_SOURCE_REMOVE;
 }
 
@@ -1542,6 +1606,7 @@ nemo_document_viewer_init (NemoDocumentViewer *self)
 	self->aspect = 0.75;
 	self->viewport_width = 600;
 	self->viewport_height = 800;
+	self->restore_offset = -1;
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (self), GTK_ORIENTATION_VERTICAL);
 	GtkWidget *controls = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
 	self->previous = document_control (controls, "go-previous-symbolic", _("Previous document page"),
@@ -1598,6 +1663,7 @@ nemo_document_viewer_destroy (GtkWidget *widget)
 	NemoDocumentViewer *self = NEMO_DOCUMENT_VIEWER (widget);
 	self->destroyed = TRUE;
 	document_reset (self);
+	nemo_document_position_flush ();
 	GTK_WIDGET_CLASS (nemo_document_viewer_parent_class)->destroy (widget);
 }
 

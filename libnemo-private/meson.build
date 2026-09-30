@@ -29,6 +29,7 @@ nemo_private_sources = [
   'nemo-desktop-utils.c',
   'nemo-directory-async.c',
   'nemo-directory.c',
+  'nemo-document-position.c',
   'nemo-dnd.c',
   'nemo-entry.c',
   'fzy-match.c',
