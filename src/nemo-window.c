@@ -52,6 +52,9 @@
 #include "nemo-list-view.h"
 #include "nemo-statusbar.h"
 #include "nemo-preview-pane.h"
+#ifdef NEMO_SMPL
+#include "nemo-window-alpha.h"
+#endif
 
 #include <eel/eel-debug.h>
 #include <eel/eel-gtk-extensions.h>
@@ -1220,6 +1223,10 @@ nemo_window_set_active_slot (NemoWindow *window, NemoWindowSlot *new_slot)
 static void
 nemo_window_realize (GtkWidget *widget)
 {
+#ifdef NEMO_SMPL
+	if (!NEMO_IS_DESKTOP_WINDOW (widget))
+		nemo_window_enable_native_alpha (widget);
+#endif
 	GTK_WIDGET_CLASS (nemo_window_parent_class)->realize (widget);
 	update_cursor (NEMO_WINDOW (widget));
 }

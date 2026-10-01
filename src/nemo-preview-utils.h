@@ -19,7 +19,7 @@
 #define NEMO_PREVIEW_UTILS_H
 
 #include <gio/gio.h>
-#if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+#ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
 #endif
 
@@ -32,6 +32,10 @@ gboolean nemo_preview_mime_is_text  (const gchar *mime_type);
 gboolean nemo_preview_mime_is_video (const gchar *mime_type);
 gboolean nemo_preview_mime_is_audio (const gchar *mime_type);
 gboolean nemo_preview_mime_is_media (const gchar *mime_type);
+
+#ifdef HAVE_GSTREAMER
+gboolean nemo_preview_media_init (GError **error);
+#endif
 
 #ifdef NEMO_SMPL
 /* Workers must not own widgets or acquire I/O resources before dispatch.

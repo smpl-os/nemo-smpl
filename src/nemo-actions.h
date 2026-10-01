@@ -72,9 +72,6 @@
 #define NEMO_ACTION_ZOOM_OUT "Zoom Out"
 #define NEMO_ACTION_ZOOM_NORMAL "Zoom Normal"
 #define NEMO_ACTION_SHOW_HIDDEN_FILES "Show Hidden Files"
-#ifdef NEMO_SMPL
-#define NEMO_ACTION_SHOW_PARENT_FOLDER_ENTRY "Show Parent Folder Entry"
-#endif
 #define NEMO_ACTION_CLOSE "Close"
 #define NEMO_ACTION_SEARCH "Search"
 #define NEMO_ACTION_FOLDER_WINDOW "Folder Window"
@@ -105,6 +102,10 @@
 #define NEMO_ACTION_PASTE_FILES_INTO "Paste Files Into"
 #define NEMO_ACTION_COPY_TO_NEXT_PANE "Copy to next pane"
 #define NEMO_ACTION_MOVE_TO_NEXT_PANE "Move to next pane"
+#ifdef NEMO_SMPL
+#define NEMO_ACTION_ARCHIVE_CREATE "ArchiveCreate"
+#define NEMO_ACTION_ARCHIVE_MOVE "ArchiveMove"
+#endif
 #define NEMO_ACTION_COPY_TO_HOME "Copy to Home"
 #define NEMO_ACTION_MOVE_TO_HOME "Move to Home"
 #define NEMO_ACTION_COPY_TO_DESKTOP "Copy to Desktop"

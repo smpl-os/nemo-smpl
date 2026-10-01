@@ -156,6 +156,8 @@ typedef struct {
                                                gboolean           visible);
 	char *       (* get_icon_description)     (NemoIconContainer *container,
 						   NemoIconData *data);
+	gboolean     (* is_navigation_icon)       (NemoIconContainer *container,
+	                                          NemoIconData *data);
 	int          (* compare_icons)            (NemoIconContainer *container,
 						   NemoIconData *icon_a,
 						   NemoIconData *icon_b);
@@ -384,4 +386,7 @@ void         nemo_icon_container_update_tooltip_text (NemoIconContainer  *contai
 gint         nemo_icon_container_get_additional_text_line_count (NemoIconContainer *container);
 void         nemo_icon_container_set_ok_to_load_deferred_attrs (NemoIconContainer *container,
                                                                 gboolean           ok);
+gboolean nemo_icon_container_is_navigation_icon (NemoIconContainer *container,
+                                                  NemoIconData *data);
+
 #endif /* NEMO_ICON_CONTAINER_H */

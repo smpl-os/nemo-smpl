@@ -85,6 +85,22 @@ new_tile (void)
 }
 
 static void
+test_parent_entry (void)
+{
+	NemoPreviewDetails *self = new_details ();
+	NemoFile *parent = nemo_file_new_parent_entry ();
+	GFile *location = nemo_file_get_location (parent);
+	nemo_preview_details_set_file (self, location);
+	g_assert_null (self->file);
+	g_assert_null (self->cancellable);
+	g_assert_null (self->size_file);
+	g_assert_cmpuint (self->size_timeout_id, ==, 0);
+	g_object_unref (location);
+	nemo_file_unref (parent);
+	destroy_details (self);
+}
+
+static void
 test_no_gps (void)
 {
 	NemoPreviewDetails *self = new_details ();
@@ -1027,6 +1043,7 @@ main (int argc, char **argv)
 	g_assert_cmpint (g_mkdir (scratch, 0700), ==, 0);
 	g_assert_cmpint (g_chdir (scratch), ==, 0);
 	g_test_add_func ("/preview-details/no-gps", test_no_gps);
+	g_test_add_func ("/preview-details/navigation-only-parent", test_parent_entry);
 	g_test_add_func ("/preview-details/directory-size", test_directory_size);
 	g_test_add_func ("/preview-details/directory-size-incomplete", test_directory_size_incomplete);
 	g_test_add_data_func ("/preview-details/directory-switch-before-scan",

@@ -119,6 +119,10 @@ struct _NemoTransferTransaction {
     gboolean finished;
     gboolean native_source;
     gboolean publication_uncertain;
+    gboolean archive_verified;
+    struct stat archive_identity;
+    struct stat publication_identity;
+    char *archive_checksum;
     TransferSnapshot original;
 };
 
@@ -2284,6 +2288,11 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
         changed (error);
         goto out;
     }
+    if (transaction->archive_checksum &&
+        g_strcmp0 (transaction->archive_checksum, transaction->installed.checksum) != 0) {
+        changed (error);
+        goto out;
+    }
     if (overwrite && expected) {
         if (!snapshot_at (parent->fd, transaction->destination_name, &current,
                           TRUE, TRUE, cancel, error))
@@ -2350,6 +2359,7 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
             changed (error);
         goto out;
     }
+    transaction->publication_identity = current.stat;
     if (!recovery_record (transaction, &transaction->recovery, "published", cancel, error))
         goto out;
     if (!check_directory_close (parent->fd, error) ||
@@ -2413,6 +2423,201 @@ restore_capture (NemoTransferTransaction *transaction, TransferRecovery *capture
         return FALSE;
     return sync_fd (capture->fd, NULL, error) &&
            sync_fd (transaction->source_parent->fd, NULL, error);
+}
+
+static gboolean
+archive_publication_check (NemoTransferTransaction *transaction, GError **error)
+{
+    struct stat current;
+    if (!transaction->archive_verified || !transaction->publication_confirmed ||
+        !transaction->finished)
+        return changed (error);
+    if (!nemo_transfer_guard_check (transaction->guard, error) ||
+        !directory_check (transaction->destination_parent, error))
+        return FALSE;
+    if (fstatat (transaction->destination_parent->fd, transaction->destination_name,
+                 &current, AT_SYMLINK_NOFOLLOW) < 0)
+        return transfer_error (error, _("Could not inspect the verified archive"));
+    if (!same_contents_metadata (&transaction->archive_identity, &current) ||
+        transaction->archive_identity.st_ctim.tv_sec != current.st_ctim.tv_sec ||
+        transaction->archive_identity.st_ctim.tv_nsec != current.st_ctim.tv_nsec)
+        return changed (error);
+    return TRUE;
+}
+
+gboolean
+nemo_transfer_transaction_expect_archive (NemoTransferTransaction *transaction,
+                                          const char *verified_sha256, GError **error)
+{
+    if (!transaction->stage_owned || transaction->published || transaction->finished ||
+        !verified_sha256 || strlen (verified_sha256) != 64)
+        return changed (error);
+    for (const char *p = verified_sha256; *p; p++)
+        if (!g_ascii_isxdigit (*p))
+            return changed (error);
+    g_free (transaction->archive_checksum);
+    transaction->archive_checksum = g_strdup (verified_sha256);
+    return TRUE;
+}
+
+gboolean
+nemo_transfer_transaction_confirm_archive (NemoTransferTransaction *transaction,
+                                           const char *verified_sha256, GError **error)
+{
+    struct stat current;
+    if (!transaction->publication_confirmed || !transaction->finished ||
+        !verified_sha256 || !transaction->archive_checksum ||
+        !S_ISREG (transaction->installed.stat.st_mode) ||
+        g_strcmp0 (verified_sha256, transaction->archive_checksum) != 0 ||
+        g_strcmp0 (verified_sha256, transaction->installed.checksum) != 0)
+        return changed (error);
+    if (!nemo_transfer_guard_check (transaction->guard, error) ||
+        !directory_check (transaction->destination_parent, error))
+        return FALSE;
+    if (fstatat (transaction->destination_parent->fd, transaction->destination_name,
+                 &current, AT_SYMLINK_NOFOLLOW) < 0)
+        return transfer_error (error, _("Could not inspect the verified archive"));
+    if (!same_contents_metadata (&transaction->installed.stat, &current) ||
+        transaction->publication_identity.st_ctim.tv_sec != current.st_ctim.tv_sec ||
+        transaction->publication_identity.st_ctim.tv_nsec != current.st_ctim.tv_nsec)
+        return changed (error);
+    transaction->archive_identity = current;
+    transaction->archive_verified = TRUE;
+    return TRUE;
+}
+
+gboolean
+nemo_transfer_transaction_retire_archived (NemoTransferTransaction *archive,
+                                          GFile *source_file,
+                                          const struct stat *identity,
+                                          const char *sha256,
+                                          const char *link_target,
+                                          GCancellable *cancel, GError **error)
+{
+    NemoTransferGuard *guard = archive->guard;
+    g_autoptr (GFile) parent_file = g_file_get_parent (source_file);
+    if (!guard->move || !identity || !parent_file)
+        return unsupported (error);
+    TransferDirectory *parent = guard_directory (guard, parent_file, FALSE, FALSE, error);
+    if (!parent)
+        return FALSE;
+    g_autoptr (TransferDirectory) parent_pin = directory_hold (parent);
+    g_autofree char *name = g_file_get_basename (source_file);
+    TransferRecovery capture = { .fd = -1 };
+    TransferSnapshot source = { 0 };
+    struct stat before;
+    gboolean is_directory = S_ISDIR (identity->st_mode);
+    g_autoptr (TransferDirectory) directory_pin = NULL;
+    if (is_directory) {
+        TransferDirectory *directory = guard_directory (guard, source_file, FALSE, FALSE, error);
+        if (!directory)
+            return FALSE;
+        directory_pin = directory_hold (directory);
+    }
+    gboolean captured = FALSE, ok = FALSE;
+    NemoTransferTransaction record = {
+        .guard = guard, .source = source_file, .destination = archive->destination,
+        .source_parent = parent, .source_name = name,
+        .source_before = { .stat = *identity }
+    };
+    if ((!is_directory && !S_ISREG (identity->st_mode) && !S_ISLNK (identity->st_mode)) ||
+        (S_ISREG (identity->st_mode) && (!sha256 || strlen (sha256) != 64)) ||
+        (S_ISLNK (identity->st_mode) && !link_target))
+        return unsupported (error);
+    if (!archive_publication_check (archive, error) ||
+        !directory_check (parent, error) ||
+        g_cancellable_set_error_if_cancelled (cancel, error))
+        goto out;
+    if (fstatat (parent->fd, name, &before, AT_SYMLINK_NOFOLLOW) < 0) {
+        transfer_error (error, _("Could not inspect an archived source"));
+        goto out;
+    }
+    /* Renaming changes ctime; compare it before capture, then compare the
+     * captured inode, content metadata and digest. Directory times necessarily
+     * change as our own archived children are retired. */
+    if (!same_inode (identity, &before) ||
+        (!is_directory &&
+         (!same_contents_metadata (identity, &before) ||
+          identity->st_ctim.tv_sec != before.st_ctim.tv_sec ||
+          identity->st_ctim.tv_nsec != before.st_ctim.tv_nsec))) {
+        changed (error);
+        goto out;
+    }
+    if (!recovery_new (recovery_parent (guard, parent, FALSE), &capture, cancel, error) ||
+        !recovery_record (&record, &capture, "archive-source-prepared", cancel, error) ||
+        !recovery_identity_check (&capture, error) ||
+        g_cancellable_set_error_if_cancelled (cancel, error))
+        goto out;
+    if (!rename_entry (parent->fd, name, capture.fd, "captured-source",
+                       RENAME_NOREPLACE, error)) {
+        captured = recovery_has_slot (&capture, "captured-source");
+        goto out;
+    }
+    captured = TRUE;
+    if (!sync_fd (parent->fd, cancel, error) || !sync_fd (capture.fd, cancel, error) ||
+        !snapshot_at (capture.fd, "captured-source", &source, TRUE, FALSE, cancel, error))
+        goto out;
+    if (!same_inode (identity, &source.stat) ||
+        (!is_directory &&
+         (!same_contents_metadata (identity, &source.stat) ||
+          (S_ISREG (identity->st_mode) && g_strcmp0 (source.checksum, sha256) != 0) ||
+          (S_ISLNK (identity->st_mode) && g_strcmp0 (source.link, link_target) != 0)))) {
+        changed (error);
+        goto out;
+    }
+    if (is_directory) {
+        struct statx current;
+        if (statx (capture.fd, "captured-source", AT_SYMLINK_NOFOLLOW,
+                   STATX_BASIC_STATS | STATX_BTIME | STATX_MNT_ID | STATX_MNT_ID_UNIQUE, &current) < 0) {
+            transfer_error (error, _("Could not inspect the captured archived folder"));
+            goto out;
+        }
+        if (!same_directory (&directory_pin->identity, &current)) {
+            changed (error);
+            goto out;
+        }
+        /* The captured directory deliberately no longer occupies its original
+         * path. Stop advertising that path as an active guard lease before
+         * checking the archive's still-live namespace. */
+        g_clear_pointer (&directory_pin, directory_unpin);
+    }
+    if (!archive_publication_check (archive, error) ||
+        !recovery_identity_check (&capture, error) ||
+        g_cancellable_set_error_if_cancelled (cancel, error))
+        goto out;
+    /* No recursive deletion: a new/unarchived child makes rmdir fail. */
+    if (unlinkat (capture.fd, "captured-source", is_directory ? AT_REMOVEDIR : 0) < 0) {
+        transfer_error (error, _("Could not remove the exact archived source"));
+        goto out;
+    }
+    captured = FALSE;
+    if (!sync_fd (capture.fd, cancel, error) || !sync_fd (parent->fd, cancel, error) ||
+        !check_directory_close (capture.fd, error) || !check_directory_close (parent->fd, error)) {
+        g_autofree char *path = g_file_get_parse_name (source_file);
+        g_string_append_printf (guard->details,
+                                _("\nArchived source removed; removal durability is uncertain: %s"), path);
+        goto out;
+    }
+    ok = TRUE;
+out:
+    if (captured) {
+        GError *restore_error = NULL;
+        if (!restore_capture (&record, &capture, "captured-source", &restore_error)) {
+            report_recovery_entry (guard, &capture, "captured-source",
+                                   _("An archived source was retained here; its original name could not be restored safely."));
+        } else {
+            g_autofree char *path = g_file_get_parse_name (source_file);
+            g_string_append_printf (guard->details, _("\nArchived source restored: %s"), path);
+        }
+        g_clear_error (&restore_error);
+    }
+    snapshot_clear (&source);
+    if (ok)
+        ok = recovery_finish (&capture, error);
+    if (ok)
+        ok = recovery_cleanup (guard, &capture, error);
+    recovery_close (&capture);
+    return ok;
 }
 
 gboolean
@@ -2625,6 +2830,7 @@ nemo_transfer_transaction_free (NemoTransferTransaction *transaction)
     g_clear_object (&transaction->stage);
     g_free (transaction->source_name);
     g_free (transaction->destination_name);
+    g_free (transaction->archive_checksum);
     nemo_transfer_guard_unref (transaction->guard);
     g_free (transaction);
 }

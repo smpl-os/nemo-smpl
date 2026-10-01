@@ -169,6 +169,7 @@ gboolean		nemo_window_slot_content_view_matches_iid (NemoWindowSlot	*slot,
 
 void    nemo_window_slot_go_home			   (NemoWindowSlot *slot,
 							    NemoWindowOpenFlags flags);
+gboolean nemo_window_slot_location_has_parent          (GFile *location);
 void    nemo_window_slot_go_up                         (NemoWindowSlot *slot,
 							    NemoWindowOpenFlags flags);
 void    nemo_window_slot_set_content_view_widget	   (NemoWindowSlot *slot,

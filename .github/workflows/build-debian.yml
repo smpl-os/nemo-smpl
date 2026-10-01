@@ -38,12 +38,14 @@ jobs:
             libx11-dev libxapp-dev libcinnamon-desktop-dev \
             libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev libgsf-1-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gobject-introspection libgirepository1.0-dev \
             gtk-doc-tools cinnamon-l10n libgtk-layer-shell-dev \
             libpango1.0-dev libatk1.0-dev libgail-3-dev \
             libxext-dev libxrender-dev libwayland-dev \
             python3 python3-gi x11proto-dev \
-            dbus-daemon xvfb xauth \
+            dbus-daemon xvfb xauth libarchive-dev libarchive-tools libsqlite3-dev \
+            libisofs-dev xorriso \
             libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap
 
       - name: Build Debian package

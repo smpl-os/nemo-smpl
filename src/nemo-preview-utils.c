@@ -18,6 +18,24 @@
 #include <glib/gi18n.h>
 #include <string.h>
 
+#if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+#include "nemo-archive-source.h"
+#endif
+
+#ifdef HAVE_GSTREAMER
+gboolean
+nemo_preview_media_init (GError **error)
+{
+	if (!gst_init_check (NULL, NULL, error))
+		return FALSE;
+#ifdef NEMO_SMPL
+	return nemo_archive_source_register (error);
+#else
+	return TRUE;
+#endif
+}
+#endif
+
 #ifdef NEMO_SMPL
 typedef struct {
 	GTask *task;

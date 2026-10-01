@@ -503,13 +503,16 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 		g_task_return_error (task, error);
 		return;
 	}
-	result->values[DETAIL_NAME] = g_strdup (g_file_info_get_display_name (info));
+	result->values[DETAIL_NAME] = g_strdup (g_file_info_get_attribute_string (
+		info, G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME));
+	if (result->values[DETAIL_NAME] == NULL)
+		result->values[DETAIL_NAME] = g_file_get_basename (data->location);
 	result->is_directory = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 	if (result->is_directory)
 		result->values[DETAIL_SIZE] = g_strdup (_("Calculating…"));
 	else if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
 		result->values[DETAIL_SIZE] = g_format_size (g_file_info_get_size (info));
-	mime = g_file_info_get_content_type (info);
+	mime = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
 	if (mime != NULL)
 		result->values[DETAIL_TYPE] = g_content_type_get_description (mime);
 	if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_TIME_MODIFIED)) {
@@ -858,6 +861,8 @@ nemo_preview_details_set_file (NemoPreviewDetails *self, GFile *file)
 	g_return_if_fail (file == NULL || G_IS_FILE (file));
 	if (self->destroyed)
 		return;
+	if (nemo_file_is_parent_entry_location (file))
+		file = NULL;
 	/* Deep-count completion emits NemoFile::changed. A metadata refresh for
 	 * the same selection must not invalidate the count that just finished. */
 	recompute = self->recompute_directory_size ||

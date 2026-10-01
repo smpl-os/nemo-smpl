@@ -1,3 +1,10 @@
+/* Secondary labels keep their stock dimming unless a native-alpha theme
+ * supplies an opaque muted foreground instead. */
+.nemo-secondary-label.nemo-dim-50 { opacity: 0.5; }
+.nemo-secondary-label.nemo-dim-60 { opacity: 0.6; }
+.nemo-secondary-label.nemo-dim-70 { opacity: 0.7; }
+.nemo-secondary-label.nemo-dim-80 { opacity: 0.8; }
+
 /* Desktop text stuff */
 
 .nemo-window.nemo-desktop-window notebook,

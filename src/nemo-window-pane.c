@@ -30,6 +30,7 @@
 #include "nemo-window-pane.h"
 
 #include "nemo-actions.h"
+#include "nemo-archive-mounter.h"
 #include "nemo-application.h"
 #include "nemo-location-bar.h"
 #include "nemo-notebook.h"
@@ -1158,6 +1159,11 @@ nemo_window_pane_sync_up_actions (NemoWindowPane *pane)
     allowed = FALSE;
     if (slot->location != NULL) {
         parent = g_file_get_parent (slot->location);
+        if (parent == NULL) {
+            g_autoptr (GFile) archive = nemo_archive_mounter_get_archive (slot->location);
+            if (archive != NULL)
+                parent = g_file_get_parent (archive);
+        }
         allowed = parent != NULL;
 
         g_clear_object (&parent);

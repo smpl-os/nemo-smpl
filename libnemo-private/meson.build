@@ -96,6 +96,18 @@ nemo_private_deps = [
   cinnamon, eel, gail, gio_unix, glib, gmodule, gtk, json, math, nemo_extension, x11, xapp
 ]
 
+if smpl_features_enabled
+  nemo_private_sources += ['nemo-archive-file.c', 'nemo-archive-iso.c',
+                          'nemo-archive-create.c']
+  nemo_private_deps += [libarchive, sqlite, libisofs]
+  archive_create_worker = executable('nemo-archive-create-worker',
+    'nemo-archive-create-worker.c',
+    dependencies: libarchive,
+    install: true,
+    install_dir: libExecPath,
+  )
+endif
+
 if libexif_enabled
   nemo_private_deps += libexif
 endif

@@ -379,8 +379,8 @@
     </key>
     <key name="show-parent-folder-entry" type="b">
       <default>false</default>
-      <summary>Whether to show a ".." parent folder entry at the top of file lists</summary>
-      <description>If set to true, a ".." entry is shown at the top of directory listings in list view, allowing quick navigation to the parent folder by double-clicking it.</description>
+      <summary>Deprecated parent folder entry visibility preference</summary>
+      <description>Retained for compatibility. Parent-folder entries are now always shown where navigation to a parent is available.</description>
     </key>
     <key name="show-full-path-titles" type="b">
       <default>false</default>
@@ -1345,6 +1345,14 @@
     <key name="move-to-other-pane" type="s">
       <default>''</default>
       <summary>Move selection to other pane</summary>
+    </key>
+    <key name="archive-create" type="s">
+      <default>'&lt;Alt&gt;F5'</default>
+      <summary>Copy selected files and folders into a new archive</summary>
+    </key>
+    <key name="archive-move" type="s">
+      <default>'&lt;Alt&gt;&lt;Shift&gt;F5'</default>
+      <summary>Move selected files and folders into a new verified archive</summary>
     </key>
 
     <!-- Clipboard -->

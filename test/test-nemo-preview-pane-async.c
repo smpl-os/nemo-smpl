@@ -85,6 +85,20 @@ test_stale_thumbnail (void)
 }
 
 static void
+test_parent_entry (void)
+{
+	NemoPreviewPane *pane = new_test_pane ();
+	NemoFile *parent = nemo_file_new_parent_entry ();
+	nemo_preview_pane_set_file (pane, parent);
+	g_assert_null (pane->current_file);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)),
+	                 ==, "empty");
+	nemo_file_unref (parent);
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+}
+
+static void
 test_generation_guard (void)
 {
 	NemoPreviewPane *pane = new_test_pane ();
@@ -193,6 +207,59 @@ static void
 document_file_ready (NemoFile *file, gpointer data)
 {
 	*(gboolean *) data = TRUE;
+}
+
+static void
+paged_file_loaded (NemoPagedViewer *viewer, GError *error, gpointer data)
+{
+	g_assert_no_error (error);
+	*(gboolean *) data = TRUE;
+}
+
+static void
+test_hex_fallback (void)
+{
+	NemoPreviewPane *pane = new_test_pane ();
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	GtkWidget *box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
+	GtkWidget *entry = gtk_entry_new ();
+	GFile *location = g_file_new_for_path ("unknown.bin");
+	NemoFile *file;
+	gboolean ready = FALSE, loaded = FALSE;
+	const char bytes[] = { 0, 1, 2, 3, (char) 0xff, (char) 0xfe };
+
+	g_assert_true (g_file_set_contents ("unknown.bin", bytes, sizeof bytes, NULL));
+	file = nemo_file_get (location);
+	nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_INFO, document_file_ready, &ready);
+	gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while (!ready && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (ready);
+	gtk_container_add (GTK_CONTAINER (window), box);
+	gtk_box_pack_start (GTK_BOX (box), entry, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (box), GTK_WIDGET (pane), TRUE, TRUE, 0);
+	gtk_widget_show_all (window);
+	gtk_widget_grab_focus (entry);
+	g_signal_connect (pane->paged_viewer, "load-finished", G_CALLBACK (paged_file_loaded), &loaded);
+	nemo_preview_pane_set_file (pane, file);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "text");
+	g_assert_cmpint (nemo_paged_viewer_get_mode (pane->paged_viewer), ==, NEMO_VIEWER_MODE_HEX);
+	deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while (!loaded && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (loaded);
+	g_assert_true (gtk_window_get_focus (GTK_WINDOW (window)) == entry);
+	g_assert_true (nemo_preview_pane_scroll_page (pane, TRUE));
+	g_signal_handlers_disconnect_by_data (pane->paged_viewer, &loaded);
+	gtk_widget_destroy (window);
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_remove ("unknown.bin"), ==, 0);
 }
 
 static void
@@ -432,10 +499,12 @@ main (int argc, char **argv)
 	g_assert_cmpint (g_mkdir (scratch, 0700), ==, 0);
 	g_assert_cmpint (g_chdir (scratch), ==, 0);
 	g_test_add_func ("/preview-pane/stale-thumbnail", test_stale_thumbnail);
+	g_test_add_func ("/preview-pane/navigation-only-parent", test_parent_entry);
 	g_test_add_func ("/preview-pane/generation", test_generation_guard);
 	g_test_add_func ("/preview-pane/destroy-pending", test_destroy_pending);
 	g_test_add_func ("/preview-pane/thumbnail-worker", test_thumbnail_worker);
 	g_test_add_func ("/preview-pane/details-ownership", test_details_ownership);
+	g_test_add_func ("/preview-pane/hex-fallback", test_hex_fallback);
 	g_test_add_func ("/preview-pane/directory-size-settles", test_directory_size_settles);
 #ifdef HAVE_DOCUMENT_PREVIEW
 	g_test_add_func ("/preview-pane/rich-document", test_rich_document_pane);

@@ -74,7 +74,9 @@ sudo apt-get install -y \
   libx11-dev libxapp-dev libcinnamon-desktop-dev \
   libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libgsf-1-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap \
+  libarchive-dev libarchive-tools libsqlite3-dev libisofs-dev xorriso \
   gobject-introspection libgirepository1.0-dev \
   intltool itstool gtk-doc-tools
 ```
@@ -106,13 +108,38 @@ sudo pacman -S --needed \
   base-devel meson ninja pkgconf \
   gtk3 glib2 json-glib libx11 xapp cinnamon-desktop \
   libexif libraw exempi gstreamer gst-plugins-base-libs \
+  gst-plugins-base gst-plugins-good \
   md4c poppler-glib mupdf-tools bubblewrap \
+  libarchive sqlite libisofs libisoburn \
   pango gobject-introspection libgsf intltool itstool
 ```
 
 </details>
 
 ---
+
+## Archive browsing dependencies
+
+Read-only archive and ISO browsing is built into Nemo using libarchive, including
+seek-dependent 7z support. Source builds need `libarchive` on Arch/smplOS or
+`libarchive-dev` on Debian/Ubuntu, plus `sqlite` or `libsqlite3-dev` respectively
+for the disk-backed directory index. ISO browsing also uses `libisofs`
+(`libisofs-dev` on Debian/Ubuntu) for Rock Ridge directory layouts.
+Packaged builds include the runtime dependencies.
+No FUSE mount helper or GVfs archive backend is needed. The archive regressions
+also use `bsdtar` (`libarchive` on Arch, `libarchive-tools` on Debian) to create
+disposable ISO and 7z fixtures. Rock Ridge fixtures additionally require `xorriso`
+(`libisoburn` on Arch, `xorriso` on Debian/Ubuntu).
+
+Archive audio/video previews need GStreamer's `giosrc` plugin and the relevant
+decoders. Packaged builds include the base/good plugin sets, also required for
+the WAV archive regression: `gst-plugins-base` and `gst-plugins-good` on Arch,
+or `gstreamer1.0-plugins-base` and `gstreamer1.0-plugins-good` on Debian/Ubuntu.
+
+Archive filename decoding requires an installed UTF-8 locale, including when
+Nemo runs under the `C` locale. Decoding uses a temporary thread-local locale;
+it does not change the application's language or process-wide locale. A missing
+UTF-8 locale produces an explicit error rather than dropping Unicode filenames.
 
 ## Native document preview dependencies
 

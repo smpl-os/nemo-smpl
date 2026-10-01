@@ -279,6 +279,12 @@ nemo_icon_view_container_get_icon_text_attributes_from_preferences (void)
 	return caption_attributes;
 }
 
+static gboolean
+is_navigation_icon (NemoIconContainer *container, NemoIconData *data)
+{
+	return nemo_file_is_parent_entry (NEMO_FILE (data));
+}
+
 static int
 quarkv_length (GQuark *attributes)
 {
@@ -352,6 +358,17 @@ nemo_icon_view_container_get_icon_text (NemoIconContainer *container,
 	g_return_if_fail (icon_view != NULL);
 
 	use_additional = (additional_text != NULL);
+
+	if (nemo_file_is_parent_entry (file)) {
+		*editable_text = g_strdup ("..");
+		if (additional_text != NULL)
+			*additional_text = NULL;
+		if (pinned != NULL)
+			*pinned = FALSE;
+		if (fav_unavailable != NULL)
+			*fav_unavailable = FALSE;
+		return;
+	}
 
 	/* In the smallest zoom mode, no text is drawn. */
 	if (nemo_icon_container_get_zoom_level (container) == NEMO_ZOOM_LEVEL_SMALLEST &&
@@ -1402,6 +1419,43 @@ nemo_icon_view_container_icon_set_position (NemoIconContainer *container,
 }
 
 static void
+position_manual_parent_entry (NemoIconContainer *container)
+{
+    NemoIcon *parent = NULL;
+    int top = 0;
+    int left = GET_VIEW_CONSTANT (container, container_pad_left);
+    gboolean found_file = FALSE;
+
+    if (container->details->auto_layout || nemo_icon_container_get_is_desktop (container))
+        return;
+
+    for (GList *l = container->details->icons; l != NULL; l = l->next) {
+        NemoIcon *icon = l->data;
+        if (nemo_file_is_parent_entry (NEMO_FILE (icon->data))) {
+            parent = icon;
+        } else if (nemo_icon_container_icon_is_positioned (icon)) {
+            int x, y;
+            nemo_icon_view_container_icon_get_bounding_box (icon, &x, &y, NULL, NULL,
+                                                            BOUNDS_USAGE_FOR_LAYOUT);
+            top = found_file ? MIN (top, y) : y;
+            left = found_file ? MIN (left, x) : x;
+            found_file = TRUE;
+        }
+    }
+    if (parent != NULL && nemo_icon_container_icon_is_positioned (parent)) {
+        int x1, y1, x2, y2;
+        nemo_icon_view_container_icon_get_bounding_box (parent, &x1, &y1, &x2, &y2,
+                                                        BOUNDS_USAGE_FOR_LAYOUT);
+        /* Manual coordinates remain untouched. Reserve navigation space above
+         * them; the manual-layout scroll region includes negative coordinates. */
+        nemo_icon_container_icon_set_position (container, parent,
+            left + parent->x - x1,
+            top - (y2 - parent->y) - GET_VIEW_CONSTANT (container, icon_pad_bottom));
+        parent->saved_ltr_x = parent->x;
+    }
+}
+
+static void
 nemo_icon_view_container_move_icon (NemoIconContainer *container,
                    NemoIcon *icon,
                    int x, int y,
@@ -1455,6 +1509,8 @@ nemo_icon_view_container_move_icon (NemoIconContainer *container,
     if (raise) {
         nemo_icon_container_icon_raise (container, icon);
     }
+
+    position_manual_parent_entry (container);
 
     /* FIXME bugzilla.gnome.org 42474:
      * Handling of the scroll region is inconsistent here. In
@@ -1677,6 +1733,7 @@ nemo_icon_view_container_align_icons (NemoIconContainer *container)
 
     if (!grid) {
         g_list_free (unplaced_icons);
+        position_manual_parent_entry (container);
         return;
     }
 
@@ -1702,6 +1759,7 @@ nemo_icon_view_container_align_icons (NemoIconContainer *container)
     if (nemo_icon_container_is_layout_rtl (container)) {
         nemo_icon_container_set_rtl_positions (container);
     }
+    position_manual_parent_entry (container);
 }
 
 static void
@@ -1756,6 +1814,7 @@ nemo_icon_view_container_reload_icon_positions (NemoIconContainer *container)
     /* Place all the other icons. */
     NEMO_ICON_CONTAINER_GET_CLASS (container)->lay_down_icons (container, no_position_icons, bottom + GET_VIEW_CONSTANT (container, icon_pad_bottom));
     g_list_free (no_position_icons);
+    position_manual_parent_entry (container);
 }
 
 static gboolean
@@ -1884,6 +1943,8 @@ nemo_icon_view_container_finish_adding_new_icons (NemoIconContainer *container)
         }
         g_list_free (no_position_icons);
     }
+
+    position_manual_parent_entry (container);
 
     if (container->details->store_layout_timestamps_when_finishing_new_icons) {
         nemo_icon_container_store_layout_timestamps_now (container);
@@ -2117,6 +2178,7 @@ nemo_icon_view_container_class_init (NemoIconViewContainerClass *klass)
     ic_class->get_max_layout_lines = nemo_icon_view_container_get_max_layout_lines;
 
 	ic_class->compare_icons = nemo_icon_view_container_compare_icons;
+	ic_class->is_navigation_icon = is_navigation_icon;
 	ic_class->freeze_updates = nemo_icon_view_container_freeze_updates;
 	ic_class->unfreeze_updates = nemo_icon_view_container_unfreeze_updates;
     ic_class->lay_down_icons = nemo_icon_view_container_lay_down_icons;

@@ -2042,6 +2042,13 @@ nemo_paged_viewer_search_has_match (NemoPagedViewer *self)
 
 #endif /* NEMO_SMPL */
 
+NemoViewerMode
+nemo_paged_viewer_get_mode (NemoPagedViewer *self)
+{
+	g_return_val_if_fail (NEMO_IS_PAGED_VIEWER (self), NEMO_VIEWER_MODE_TEXT);
+	return self->mode;
+}
+
 void
 nemo_paged_viewer_set_focus_on_load (NemoPagedViewer *self, gboolean focus_on_load)
 {

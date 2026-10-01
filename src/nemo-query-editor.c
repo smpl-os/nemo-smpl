@@ -338,6 +338,10 @@ nemo_query_editor_init (NemoQueryEditor *editor)
     GtkBuilder *builder;
     GtkWidget *separator;
 
+#ifdef NEMO_SMPL
+    gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (editor)),
+                                "nemo-query-editor");
+#endif
     editor->priv = G_TYPE_INSTANCE_GET_PRIVATE (editor,
                                                 NEMO_TYPE_QUERY_EDITOR,
                                                 NemoQueryEditorPrivate);

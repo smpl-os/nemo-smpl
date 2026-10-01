@@ -222,6 +222,13 @@ list_view_search_equal_func (GtkTreeModel *model,
 
 	(void) user_data;
 
+	NemoFile *file = NULL;
+	gtk_tree_model_get (model, iter, NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+	gboolean navigation = nemo_file_is_parent_entry (file);
+	nemo_file_unref (file);
+	if (navigation)
+		return TRUE;
+
 	if (key == NULL || key[0] == '\0') {
 		return TRUE;
 	}
@@ -452,27 +459,6 @@ activate_selected_items (NemoListView *view)
 		g_source_remove (view->details->renaming_file_activate_timeout);
 		view->details->renaming_file_activate_timeout = 0;
 	}
-
-	/* Check if the activated item is the ".." parent entry */
-#ifdef NEMO_SMPL
-	{
-		GtkTreePath *cursor_path = NULL;
-		gtk_tree_view_get_cursor (view->details->tree_view, &cursor_path, NULL);
-		if (cursor_path != NULL) {
-			GtkTreeIter iter;
-			if (gtk_tree_model_get_iter (GTK_TREE_MODEL (view->details->model), &iter, cursor_path)) {
-				if (nemo_list_model_is_parent_entry (view->details->model, &iter)) {
-					NemoWindowSlot *slot = nemo_view_get_nemo_window_slot (NEMO_VIEW (view));
-					nemo_window_slot_go_up (slot, 0);
-					gtk_tree_path_free (cursor_path);
-					nemo_file_list_free (file_list);
-					return;
-				}
-			}
-			gtk_tree_path_free (cursor_path);
-		}
-	}
-#endif /* NEMO_SMPL */
 
 	nemo_view_activate_files (NEMO_VIEW (view),
 				      file_list,
@@ -787,7 +773,12 @@ motion_notify_callback (GtkWidget *widget,
                                 gtk_tree_path_compare (view->details->double_click_path[0],
                                                        view->details->double_click_path[1]) != 0));
 
+        NemoFile *drag_file = nemo_list_model_file_for_path (view->details->model, path);
+        gboolean navigation = nemo_file_is_parent_entry (drag_file);
+        nemo_file_unref (drag_file);
         gtk_tree_path_free (path);
+        if (navigation)
+            return GDK_EVENT_STOP;
 
         /* We also want to further restrict rubber-banding to be initiated only in blank areas of the row.
          * This allows DnD to operate on a new selection like before, when the motion begins over text or
@@ -1603,7 +1594,7 @@ type_jump_collect_row (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter
     gtk_tree_model_get (model, iter,
                         scan->view->details->file_name_column_num, &name,
                         NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
-    if (file != NULL) {
+    if (file != NULL && !nemo_file_is_parent_entry (file)) {
         NemoTypeJumpMatch match = nemo_type_jump_match (scan->query, name, scan->prefix_only);
         if (match == NEMO_TYPE_JUMP_PREFIX) {
             g_ptr_array_add (scan->prefixes, gtk_tree_path_copy (path));
@@ -3300,7 +3291,6 @@ create_and_set_up_tree_view (NemoListView *view)
     g_signal_connect_swapped (nemo_preferences, "changed::" NEMO_PREFERENCES_DATE_FONT_CHOICE, G_CALLBACK (update_date_fonts), view);
     g_signal_connect_swapped (gnome_interface_preferences, "changed::" NEMO_PREFERENCES_MONO_FONT_NAME, G_CALLBACK (update_date_fonts), view);
 #ifdef NEMO_SMPL
-    g_signal_connect_swapped (nemo_preferences, "changed::" NEMO_PREFERENCES_SHOW_PARENT_FOLDER_ENTRY, G_CALLBACK (nemo_list_view_refresh_parent_entry), view);
 #endif
 	nemo_column_list_free (nemo_columns);
 
@@ -3952,7 +3942,8 @@ nemo_list_view_update_selection (NemoView *view)
         list_view->details->current_selection_count = 0;
     }
 
-    list_view->details->current_selection = nemo_list_view_get_selection (view);
+    list_view->details->current_selection = nemo_file_list_filter_parent_entries (
+        nemo_list_view_get_selection (view));
     list_view->details->current_selection_count = g_list_length (list_view->details->current_selection);
 }
 
@@ -3969,6 +3960,11 @@ nemo_list_view_get_selection_for_file_transfer_foreach_func (GtkTreeModel *model
 			    NEMO_LIST_MODEL_FILE_COLUMN, &file,
 			    -1);
 
+	if (nemo_file_is_parent_entry (file)) {
+		nemo_file_unref (file);
+		return;
+	}
+
 	if (file != NULL) {
 		/* If the parent folder is also selected, don't include this file in the
 		 * file operation, since that would copy it to the toplevel target instead
@@ -3978,12 +3974,12 @@ nemo_list_view_get_selection_for_file_transfer_foreach_func (GtkTreeModel *model
 		while (gtk_tree_model_iter_parent (model, &parent, &child)) {
 			if (gtk_tree_selection_iter_is_selected (selection_data->selection,
 								 &parent)) {
+				nemo_file_unref (file);
 				return;
 			}
 			child = parent;
 		}
 
-		nemo_file_ref (file);
 		selection_data->list = g_list_prepend (selection_data->list, file);
 	}
 }
@@ -4114,6 +4110,13 @@ nemo_list_view_set_selection (NemoView *view, GList *selection)
 		file = node->data;
 		iters = nemo_list_model_get_all_iters_for_file (list_view->details->model, file);
 
+		if (selection->next == NULL && iters != NULL) {
+			GtkTreePath *path = gtk_tree_model_get_path (
+				GTK_TREE_MODEL (list_view->details->model), iters->data);
+			gtk_tree_view_set_cursor (list_view->details->tree_view, path, NULL, FALSE);
+			gtk_tree_path_free (path);
+		}
+
 		for (l = iters; l != NULL; l = l->next) {
 			gtk_tree_selection_select_iter (tree_selection,
 							(GtkTreeIter *)l->data);
@@ -4123,6 +4126,18 @@ nemo_list_view_set_selection (NemoView *view, GList *selection)
 
 	g_signal_handlers_unblock_by_func (tree_selection, list_selection_changed_callback, view);
 	nemo_view_notify_selection_changed (view);
+}
+
+static gboolean
+unselect_parent_entry (GtkTreeModel *model, GtkTreePath *path, GtkTreeIter *iter,
+                       gpointer data)
+{
+	NemoFile *file = NULL;
+	gtk_tree_model_get (model, iter, NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+	if (nemo_file_is_parent_entry (file))
+		gtk_tree_selection_unselect_iter (data, iter);
+	nemo_file_unref (file);
+	return FALSE;
 }
 
 static void
@@ -4144,6 +4159,8 @@ nemo_list_view_invert_selection (NemoView *view)
 					     nemo_list_view_get_selection_foreach_func, &selection);
 
 	gtk_tree_selection_select_all (tree_selection);
+	gtk_tree_model_foreach (GTK_TREE_MODEL (list_view->details->model),
+	                       unselect_parent_entry, tree_selection);
 
 	for (node = selection; node != NULL; node = node->next) {
 		file = node->data;
@@ -4165,7 +4182,10 @@ nemo_list_view_invert_selection (NemoView *view)
 static void
 nemo_list_view_select_all (NemoView *view)
 {
-	gtk_tree_selection_select_all (gtk_tree_view_get_selection (NEMO_LIST_VIEW (view)->details->tree_view));
+	GtkTreeSelection *selection = gtk_tree_view_get_selection (NEMO_LIST_VIEW (view)->details->tree_view);
+	gtk_tree_selection_select_all (selection);
+	gtk_tree_model_foreach (GTK_TREE_MODEL (NEMO_LIST_VIEW (view)->details->model),
+	                       unselect_parent_entry, selection);
 }
 
 static void
@@ -4455,6 +4475,9 @@ nemo_list_view_start_renaming_file (NemoView *view,
 	GtkTreeIter iter;
 	GtkTreePath *path;
 
+	if (nemo_file_is_parent_entry (file))
+		return;
+
 	list_view = NEMO_LIST_VIEW (view);
 
 	/* Select all if we are in renaming mode already */
@@ -4656,7 +4679,6 @@ nemo_list_view_dispose (GObject *object)
 
 #ifdef NEMO_SMPL
     type_jump_shutdown (NULL, list_view);
-    g_signal_handlers_disconnect_by_func (nemo_preferences, nemo_list_view_refresh_parent_entry, list_view);
 #endif
     g_signal_handlers_disconnect_by_func (gtk_settings_get_default (), update_date_fonts, list_view);
     g_signal_handlers_disconnect_by_func (nemo_preferences, update_date_fonts, list_view);
@@ -4838,32 +4860,6 @@ list_view_notify_clipboard_info (NemoClipboardMonitor *monitor,
 	}
 }
 
-#ifdef NEMO_SMPL
-void
-nemo_list_view_refresh_parent_entry (NemoListView *view)
-{
-	/* Add or remove the '..' entry based on current preference */
-	nemo_list_model_remove_parent_entry (view->details->model);
-	if (g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_PARENT_FOLDER_ENTRY)) {
-		char *uri = nemo_view_get_uri (NEMO_VIEW (view));
-		if (uri != NULL) {
-			GFile *location = g_file_new_for_uri (uri);
-			GFile *parent = g_file_get_parent (location);
-			if (parent != NULL) {
-				NemoFile *parent_file = nemo_file_get (parent);
-				if (parent_file != NULL) {
-					nemo_list_model_add_parent_entry (view->details->model, parent_file);
-					nemo_file_unref (parent_file);
-				}
-				g_object_unref (parent);
-			}
-			g_object_unref (location);
-			g_free (uri);
-		}
-	}
-}
-#endif /* NEMO_SMPL */
-
 static void
 nemo_list_view_end_loading (NemoView *view,
 				gboolean all_files_seen)
@@ -4884,11 +4880,6 @@ nemo_list_view_end_loading (NemoView *view,
 	info = nemo_clipboard_monitor_get_clipboard_info (monitor);
 
 	list_view_notify_clipboard_info (monitor, info, list_view);
-
-	/* Add ".." parent folder entry if enabled in preferences */
-#ifdef NEMO_SMPL
-	nemo_list_view_refresh_parent_entry (list_view);
-#endif
 
 	/* In split-pane mode, if nothing is selected after loading,
 	 * select and cursor the first row so there's always a visible
@@ -5163,6 +5154,17 @@ nemo_list_view_select_first (NemoView *view)
 
     if (!gtk_tree_model_get_iter_first (model, &iter)) {
         return;
+    }
+
+    if (nemo_list_model_get_filter_active (list_view->details->model)) {
+        NemoFile *file = NULL;
+        gtk_tree_model_get (model, &iter, NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+        gboolean navigation = nemo_file_is_parent_entry (file);
+        nemo_file_unref (file);
+        if (navigation && !gtk_tree_model_iter_next (model, &iter)) {
+            gtk_tree_selection_unselect_all (gtk_tree_view_get_selection (list_view->details->tree_view));
+            return;
+        }
     }
 
     path = gtk_tree_model_get_path (model, &iter);

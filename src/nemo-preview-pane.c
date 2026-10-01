@@ -237,14 +237,13 @@ load_image_preview (NemoPreviewPane *self, NemoFile *file)
 }
 
 static void
-load_text_preview (NemoPreviewPane *self, NemoFile *file)
+load_paged_preview (NemoPreviewPane *self, NemoFile *file, NemoViewerMode mode)
 {
 	GFile *location;
 
 	location = nemo_file_get_location (file);
 #ifdef NEMO_SMPL
-	nemo_paged_viewer_set_mode (self->paged_viewer,
-				    NEMO_VIEWER_MODE_TEXT);
+	nemo_paged_viewer_set_mode (self->paged_viewer, mode);
 	nemo_paged_viewer_open_location (self->paged_viewer, location);
 	g_object_unref (location);
 #else
@@ -253,7 +252,7 @@ load_text_preview (NemoPreviewPane *self, NemoFile *file)
 		g_object_unref (location);
 		if (path == NULL)
 			return;
-		nemo_paged_viewer_set_mode (self->paged_viewer, NEMO_VIEWER_MODE_TEXT);
+		nemo_paged_viewer_set_mode (self->paged_viewer, mode);
 		if (!nemo_paged_viewer_open_file (self->paged_viewer, path, NULL)) {
 			g_free (path);
 			return;
@@ -827,12 +826,11 @@ load_media_preview (NemoPreviewPane *self,
 
 	stop_video (self);
 
-	if (!gst_is_initialized ()) {
-		if (!gst_init_check (NULL, NULL, NULL)) {
-			g_warning ("Preview pane: GStreamer init failed");
-			show_info_preview (self, file);
-			return;
-		}
+	g_autoptr (GError) init_error = NULL;
+	if (!nemo_preview_media_init (&init_error)) {
+		g_warning ("Preview pane: GStreamer init failed: %s", init_error->message);
+		show_info_preview (self, file);
+		return;
 	}
 
 	self->pipeline = gst_element_factory_make ("playbin",
@@ -975,7 +973,9 @@ refresh_file_preview (NemoPreviewPane *self, NemoFile *file)
 	} else if (nemo_preview_mime_is_image (mime)) {
 		load_image_preview (self, file);
 	} else if (nemo_preview_mime_is_text (mime)) {
-		load_text_preview (self, file);
+		load_paged_preview (self, file, NEMO_VIEWER_MODE_TEXT);
+	} else if (nemo_file_get_file_type (file) == G_FILE_TYPE_REGULAR) {
+		load_paged_preview (self, file, NEMO_VIEWER_MODE_HEX);
 	} else {
 		show_info_preview (self, file);
 	}
@@ -1020,7 +1020,7 @@ nemo_preview_pane_set_file (NemoPreviewPane *self,
 
 	if (self->destroyed)
 		return;
-	if (file == NULL) {
+	if (file == NULL || nemo_file_is_parent_entry (file)) {
 		nemo_preview_pane_clear (self);
 		return;
 	}
@@ -1216,6 +1216,10 @@ nemo_preview_pane_init (NemoPreviewPane *self)
 	GtkWidget *info_box;
 	GtkStyleContext *ctx;
 
+#ifdef NEMO_SMPL
+	gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (self)),
+				    "nemo-preview-pane");
+#endif
 	self->cancellable = g_cancellable_new ();
 	self->details_vpaned_set = FALSE;
 

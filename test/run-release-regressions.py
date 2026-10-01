@@ -18,6 +18,8 @@ REQUIRED_SUITES = {"copy-integrity", "copy-selection"}
 SUITES = REQUIRED_SUITES | {"transfer-safety"}
 CROSSFS_TEST = "copy-integrity-real-crossfs-move"
 REQUIRED_TESTS = {
+    "Live smplOS theme reload",
+    "Native background alpha",
     CROSSFS_TEST,
     "Copy source selection",
     "test-progress-completion",
@@ -46,6 +48,13 @@ REQUIRED_TESTS = {
     "test-nemo-preview-pane-async",
     "Nemo session persistence",
     "MTP empty folder state",
+    "Archive browsing real backend",
+    "Archive file provider",
+    "Archive media source",
+    "test-archive-dialog",
+    "test-archive-shortcuts",
+    "test-archive-actions",
+    "Archive creation real backend",
 }
 TOOLS = ("meson", "dbus-run-session", "dbus-daemon", "xvfb-run", "Xvfb", "xauth")
 SKIPPED_TAP = re.compile(

@@ -4,6 +4,7 @@
 
 #include <config.h>
 #include <gio/gio.h>
+#include <sys/stat.h>
 
 #ifdef NEMO_SMPL
 typedef struct _NemoTransferGuard NemoTransferGuard;
@@ -44,6 +45,25 @@ gboolean nemo_transfer_transaction_publish (NemoTransferTransaction *transaction
                                            GCancellable *cancellable, GError **error);
 gboolean nemo_transfer_transaction_retire_source (NemoTransferTransaction *transaction,
                                                  GCancellable *cancellable, GError **error);
+/* Archive-only proof: independently verify every member first, hash that
+ * verified archive, then bind its digest to a finished published transaction.
+ * expect_archive binds that digest before publication; confirm_archive binds
+ * the finished publication before source retirement.
+ * Retirement compares captured sources against the manifest, not the archive's
+ * raw digest. The published inode/metadata is checked before every unlink. */
+gboolean nemo_transfer_transaction_expect_archive (NemoTransferTransaction *transaction,
+                                                   const char *verified_sha256,
+                                                   GError **error);
+gboolean nemo_transfer_transaction_confirm_archive (NemoTransferTransaction *transaction,
+                                                    const char *verified_sha256,
+                                                    GError **error);
+gboolean nemo_transfer_transaction_retire_archived (NemoTransferTransaction *transaction,
+                                                   GFile *source,
+                                                   const struct stat *identity,
+                                                   const char *sha256,
+                                                   const char *link_target,
+                                                   GCancellable *cancellable,
+                                                   GError **error);
 gboolean nemo_transfer_transaction_finish (NemoTransferTransaction *transaction, GError **error);
 NemoTransferUndo *nemo_transfer_transaction_undo (NemoTransferTransaction *transaction,
                                                gboolean move);

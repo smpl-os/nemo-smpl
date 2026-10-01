@@ -827,6 +827,65 @@ test_media_frame_lifetime (void)
 }
 #endif
 
+static void
+test_optional_hidden_attribute (void)
+{
+	GFileInfo *info = g_file_info_new ();
+
+	g_file_info_set_name (info, "member.txt");
+	g_assert_false (preview_file_info_is_hidden (info));
+	g_file_info_set_name (info, ".hidden");
+	g_assert_true (preview_file_info_is_hidden (info));
+	g_file_info_set_is_hidden (info, FALSE);
+	g_assert_false (preview_file_info_is_hidden (info));
+	g_file_info_set_name (info, "member.txt");
+	g_file_info_set_is_hidden (info, TRUE);
+	g_assert_true (preview_file_info_is_hidden (info));
+	g_object_unref (info);
+}
+
+static void
+test_optional_file_information (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-preview-info-XXXXXX", NULL);
+	char *path = g_build_filename (directory, "unknown.dat", NULL);
+	GFile *file = g_file_new_for_path (path);
+	GFileInfo *info = g_file_info_new ();
+	NemoQuickPreview *preview = g_object_ref_sink (
+		g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+
+	g_assert_true (g_file_set_contents (path, "\0\1\2", 3, NULL));
+	g_file_info_set_file_type (info, G_FILE_TYPE_REGULAR);
+	show_file_content (preview, file, info);
+	g_assert_cmpint (preview->mode, ==, PREVIEW_HEX);
+	g_assert_cmpint (nemo_paged_viewer_get_mode (preview->paged_viewer), ==, NEMO_VIEWER_MODE_HEX);
+	g_assert_cmpstr (gtk_header_bar_get_subtitle (GTK_HEADER_BAR (preview->header_bar)),
+			 ==, "Size unknown — unknown");
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	g_object_unref (info);
+	remove_fixture (file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (path);
+	g_free (directory);
+}
+
+static void
+test_parent_entry (void)
+{
+	NemoQuickPreview *preview = g_object_ref_sink (
+		g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	NemoFile *parent = nemo_file_new_parent_entry ();
+	GFile *location = nemo_file_get_location (parent);
+	nemo_quick_preview_show_file (preview, location, NULL);
+	g_assert_null (preview->current_file);
+	g_assert_false (gtk_widget_get_visible (GTK_WIDGET (preview)));
+	g_object_unref (location);
+	nemo_file_unref (parent);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -854,6 +913,9 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/image/rapid-selection-worker-bound", test_rapid_selection_worker_bound);
 	g_test_add_func ("/preview/image/worker-creation-failure", test_worker_creation_failure);
 	g_test_add_func ("/preview/quick/metadata-navigation-races", test_quick_navigation_races);
+	g_test_add_func ("/preview/quick/navigation-only-parent", test_parent_entry);
+	g_test_add_func ("/preview/quick/optional-hidden-attribute", test_optional_hidden_attribute);
+	g_test_add_func ("/preview/quick/optional-file-information", test_optional_file_information);
 	g_test_add_func ("/preview/quick/filename-image-information", test_quick_image_information);
 	g_test_add_func ("/preview/quick/text-search-hex-folder", test_quick_text_search_and_modes);
 	g_test_add_func ("/preview/quick/page-and-file-shortcuts", test_quick_page_keys);

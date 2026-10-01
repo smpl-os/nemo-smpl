@@ -58,7 +58,6 @@ GType nemo_list_view_get_type (void);
 void  nemo_list_view_register (void);
 GtkTreeView* nemo_list_view_get_tree_view (NemoListView *list_view);
 #ifdef NEMO_SMPL
-void  nemo_list_view_refresh_parent_entry (NemoListView *list_view);
 #endif
 
 #endif /* NEMO_LIST_VIEW_H */

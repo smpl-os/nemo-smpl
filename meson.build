@@ -1,7 +1,7 @@
 # Meson build file
 
 # https://github.com/linuxmint/nemo
-project('nemo', 'c', version : '1.4.68', meson_version : '>=0.64.0')
+project('nemo', 'c', version : '1.4.71', meson_version : '>=0.64.0')
 
 # 1. If the library code has changed at all since last release, then increment revision.
 # 2. If any interfaces have been added, then increment current and set revision to 0.
@@ -79,7 +79,7 @@ endif
 ################################################################################
 # Find dependencies
 
-glib_version = '>=2.45.7'
+glib_version = smpl_features_enabled ? '>=2.50.0' : '>=2.45.7'
 
 math    = cc.find_library('m', required: true)
 
@@ -92,6 +92,9 @@ gmodule = dependency('gmodule-no-export-2.0',       version: glib_version)
 gobject = dependency('gobject-2.0',                 version: '>=2.0')
 go_intr = dependency('gobject-introspection-1.0',   version: '>=1.0')
 json    = dependency('json-glib-1.0',               version: '>=1.6')
+libarchive = dependency('libarchive',              version: '>=3.2.0', required: smpl_features_enabled)
+sqlite = dependency('sqlite3',                     version: '>=3.8.2', required: smpl_features_enabled)
+libisofs = dependency('libisofs-1',                 version: '>=1.4.0', required: smpl_features_enabled)
 
 cinnamon= dependency('cinnamon-desktop',            version: '>=4.8.0')
 gail    = dependency('gail-3.0')

@@ -10,6 +10,14 @@ typedef NemoIconContainer TestIconContainer;
 typedef NemoIconContainerClass TestIconContainerClass;
 G_DEFINE_TYPE (TestIconContainer, test_icon_container, NEMO_TYPE_ICON_CONTAINER)
 
+static guint finish_layout_count;
+
+static void
+fixture_finish_layout (NemoIconContainer *container)
+{
+	finish_layout_count++;
+}
+
 typedef struct {
 	GtkWidget *window;
 	NemoIconContainer *container;
@@ -73,6 +81,7 @@ test_icon_container_class_init (TestIconContainerClass *klass)
 	klass->get_max_layout_lines_for_pango = fixture_pango_lines;
 	klass->get_additional_text_line_count = fixture_additional_lines;
 	klass->icon_get_bounding_box = fixture_bounds;
+	klass->finish_adding_new_icons = fixture_finish_layout;
 }
 
 static void
@@ -607,12 +616,33 @@ test_grey_captions (Fixture *fixture, gconstpointer compact)
 	g_object_unref (provider);
 }
 
+static void
+test_layout_before_realize (void)
+{
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	NemoIconContainer *container = g_object_new (test_icon_container_get_type (), NULL);
+	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (container));
+	finish_layout_count = 0;
+	nemo_icon_container_redo_layout (container);
+	g_assert_cmpuint (finish_layout_count, ==, 0);
+	g_assert_false (gtk_widget_get_realized (window));
+	g_assert_false (gtk_widget_get_realized (GTK_WIDGET (container)));
+
+	gtk_widget_show_all (window);
+	drain_events ();
+	g_assert_true (gtk_widget_get_realized (GTK_WIDGET (container)));
+	g_assert_cmpuint (finish_layout_count, >, 0);
+	gtk_widget_destroy (window);
+	drain_events ();
+}
+
 int
 main (int argc, char **argv)
 {
 	g_assert_cmpstr (g_getenv ("NEMO_TEST_ISOLATED"), ==, "1");
 	gtk_test_init (&argc, &argv, NULL);
 	nemo_global_preferences_init ();
+	g_test_add_func ("/icon-type-jump/layout-before-realize", test_layout_before_realize);
 	g_test_add ("/icon-type-jump/ranked", Fixture, NULL, fixture_setup, test_ranked_navigation, fixture_teardown);
 	g_test_add ("/compact-type-jump/ranked", Fixture, GINT_TO_POINTER (1), fixture_setup, test_ranked_navigation, fixture_teardown);
 	g_test_add ("/icon-type-jump/incremental", Fixture, NULL, fixture_setup, test_incremental_queries, fixture_teardown);

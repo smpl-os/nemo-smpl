@@ -1,6 +1,20 @@
 if smpl_features_enabled
   hardening_python = find_program('python3')
   hardening_runner = files('run-isolated-regression.py')
+  smpl_theme_test = executable('test-nemo-smpl-theme',
+    'test-nemo-smpl-theme.c',
+    dependencies: gtk,
+  )
+  test('Live smplOS theme reload', hardening_python,
+    args: hardening_runner + [smpl_theme_test],
+    suite: 'theme',
+    timeout: 60,
+    is_parallel: false,
+  )
+  archive_source_test_sources = []
+  if gstreamer_enabled
+    archive_source_test_sources = ['../src/nemo-archive-source.c']
+  endif
   copy_integrity_schemas = custom_target('copy-integrity-schemas',
     input: '../libnemo-private/org.nemo.gschema.xml',
     output: 'gschemas.compiled',
@@ -11,6 +25,55 @@ if smpl_features_enabled
       meson.project_source_root() / 'libnemo-private',
     ],
   )
+  archive_browsing_test = executable('test-archive-browsing',
+    'test-archive-browsing.c',
+    objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+    include_directories: [rootInclude, include_directories('../src')],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions,
+    link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache',
+                '-Wl,--wrap=nemo_paged_viewer_open_location'],
+  )
+  test('Archive browsing real backend', hardening_python,
+    args: hardening_runner + [hardening_python.full_path(),
+                             files('test-archive-browsing.py')[0], archive_browsing_test],
+    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
+    depends: copy_integrity_schemas,
+    suite: 'hardening',
+    timeout: 240,
+    is_parallel: false,
+  )
+  archive_file_test = executable('test-archive-file',
+    ['test-archive-file.c', '../libnemo-private/nemo-archive-file.c',
+     '../libnemo-private/nemo-archive-iso.c'],
+    include_directories: [rootInclude],
+    dependencies: [gio, libarchive, sqlite, libisofs],
+    link_args: ['-Wl,--wrap=archive_read_next_header', '-Wl,--wrap=g_file_info_new'],
+  )
+  test('Archive file provider', archive_file_test,
+    env: {'GIO_USE_VFS': 'local', 'G_DEBUG': 'fatal-warnings',
+          'TMPDIR': meson.current_build_dir()},
+    suite: 'hardening',
+    protocol: 'tap',
+    timeout: 240,
+    is_parallel: false,
+  )
+  if gstreamer_enabled
+    archive_media_test = executable('test-archive-source',
+      ['test-archive-source.c', '../src/nemo-archive-source.c',
+       '../libnemo-private/nemo-archive-file.c',
+       '../libnemo-private/nemo-archive-iso.c'],
+      include_directories: [rootInclude],
+      dependencies: [gio, libarchive, sqlite, libisofs, gstreamer],
+    )
+    test('Archive media source', hardening_python,
+      args: hardening_runner + [archive_media_test],
+      suite: 'hardening',
+      protocol: 'tap',
+      timeout: 60,
+      is_parallel: false,
+    )
+  endif
 
   test('MTP empty folder state', hardening_python,
     args: hardening_runner + [hardening_python.full_path(), files('test-mtp-empty.py')[0]],
@@ -165,13 +228,13 @@ if smpl_features_enabled
       link_args: ['-Wl,--gc-sections'],
     ),
     executable('test-image-viewer',
-      ['test-image-viewer.c', '../src/nemo-preview-utils.c'],
+      ['test-image-viewer.c', '../src/nemo-preview-utils.c'] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions,
     ),
     executable('test-nemo-preview-details',
-      ['test-nemo-preview-details.c', '../src/nemo-preview-utils.c'],
+      ['test-nemo-preview-details.c', '../src/nemo-preview-utils.c'] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions,
@@ -182,7 +245,7 @@ if smpl_features_enabled
       dependencies: [gtk, nemo_private],
     ),
     executable('test-nemo-paged-viewer',
-      ['test-nemo-paged-viewer.c', '../src/nemo-preview-utils.c'],
+      ['test-nemo-paged-viewer.c', '../src/nemo-preview-utils.c'] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
     ),
@@ -194,7 +257,7 @@ if smpl_features_enabled
         '../src/nemo-paged-viewer.c',
         '../src/nemo-preview-utils.c',
         '../src/nemo-document-viewer.c',
-      ],
+      ] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,
@@ -206,7 +269,7 @@ if smpl_features_enabled
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
         '../src/nemo-document-viewer.c',
-      ],
+      ] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,
@@ -223,9 +286,61 @@ if smpl_features_enabled
       link_args: ['-Wl,--gc-sections'],
     ),
   ]
+  foreach pair : [['archive-dialog', 'nemo-archive-dialog'],
+                  ['archive-shortcuts', 'nemo-keybindings']]
+    ui_regressions += [executable('test-' + pair[0],
+      ['test-' + pair[0] + '.c', '../src/' + pair[1] + '.c'],
+      include_directories: [rootInclude],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+    )]
+  endforeach
+  ui_regressions += [executable('test-archive-actions',
+    'test-archive-actions.c',
+    objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+    include_directories: [rootInclude, include_directories('../src')],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions,
+    link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache',
+                '-Wl,--wrap=nemo_archive_dialog_show'],
+  )]
+  archive_test_worker = executable('test-archive-create-worker',
+    ['../libnemo-private/nemo-archive-create-worker.c', 'test-archive-create.c'],
+    dependencies: libarchive,
+    c_args: ['-DNEMO_ARCHIVE_TEST_WORKER'],
+    link_args: ['-Wl,--wrap=archive_write_set_options',
+                '-Wl,--wrap=archive_write_open_fd'],
+  )
+  archive_create_test = executable('test-archive-create',
+    ['test-archive-create.c', '../libnemo-private/nemo-archive-create.c'],
+    include_directories: [rootInclude],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions + [
+      '-DNEMO_ARCHIVE_CREATE_WORKER="@0@"'.format(archive_test_worker.full_path())],
+    link_args: [
+      '-Wl,--wrap=archive_write_data',
+      '-Wl,--wrap=archive_read_next_header',
+      '-Wl,--wrap=archive_read_data_block',
+      '-Wl,--wrap=fsync',
+      '-Wl,--wrap=renameat2',
+      '-Wl,--wrap=unlinkat',
+      '-Wl,--wrap=nemo_transfer_transaction_retire_archived',
+      '-Wl,--wrap=g_subprocess_launcher_spawn'],
+  )
+  test('Archive creation real backend', archive_create_test,
+    depends: [archive_test_worker, copy_integrity_schemas],
+    workdir: meson.current_build_dir(),
+    env: {'TMPDIR': meson.current_build_dir(),
+          'GSETTINGS_SCHEMA_DIR': meson.current_build_dir(),
+          'G_DEBUG': 'fatal-warnings'},
+    suite: 'hardening',
+    protocol: 'tap',
+    timeout: 180,
+    is_parallel: false,
+  )
   if document_preview_enabled
     ui_regressions += executable('test-document-viewer',
-      ['test-document-viewer.c', '../src/nemo-preview-utils.c'],
+      ['test-document-viewer.c', '../src/nemo-preview-utils.c'] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps + [json],
       c_args: nemo_definitions + document_test_args,
@@ -245,7 +360,7 @@ if smpl_features_enabled
       env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
       depends: ui_regression_dependencies,
       suite: regression_suites,
-      timeout: 60,
+      timeout: regression.name() == 'test-archive-actions' ? 120 : 60,
       is_parallel: false,
     )
   endforeach
@@ -506,6 +621,22 @@ if smpl_features_enabled
     include_directories: [rootInclude, include_directories('../src')],
     dependencies: nemo_deps,
     c_args: nemo_definitions,
+  )
+  native_alpha_test = executable('test-nemo-native-alpha',
+    'test-nemo-native-alpha.c',
+    objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+    include_directories: [rootInclude, include_directories('../src')],
+    dependencies: nemo_deps,
+    c_args: nemo_definitions,
+    link_args: ['-Wl,--wrap=gdk_screen_get_rgba_visual'],
+  )
+  test('Native background alpha', hardening_python,
+    args: hardening_runner + [native_alpha_test],
+    env: copy_integrity_base_env,
+    depends: copy_integrity_schemas,
+    suite: 'theme',
+    timeout: 90,
+    is_parallel: false,
   )
   test('Copy source selection', hardening_python,
     args: hardening_runner + [copy_selection_test],

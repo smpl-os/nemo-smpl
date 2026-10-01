@@ -49,6 +49,7 @@ void             nemo_paged_viewer_set_focus_on_load (NemoPagedViewer *self,
 void             nemo_paged_viewer_scroll_page (NemoPagedViewer *self, gboolean forward);
 void             nemo_paged_viewer_set_mode   (NemoPagedViewer *self,
                                                 NemoViewerMode   mode);
+NemoViewerMode   nemo_paged_viewer_get_mode   (NemoPagedViewer *self);
 
 /* Search — case-insensitive ASCII, incremental.
  *

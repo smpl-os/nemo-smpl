@@ -55,11 +55,22 @@ def main():
             GIO_USE_VOLUME_MONITOR="unix",
             NO_AT_BRIDGE="1",
             GTK_MODULES="",
+            GTK_USE_PORTAL="0",
             G_DEBUG="fatal-criticals",
             NEMO_TEST_ISOLATED="1",
         )
-        # Start the bus inside Xvfb so activated services inherit its display.
-        command = [xvfb, "-a", dbus, "--", *sys.argv[1:]]
+        # Do not auto-start host desktop services (notably document-portal
+        # FUSE mounts) inside a disposable test profile.
+        bus_config = root / "session.conf"
+        bus_config.write_text(
+            "<busconfig><type>session</type>"
+            f"<listen>unix:tmpdir={root / 'runtime'}</listen>"
+            '<policy context="default"><allow own="*"/>'
+            '<allow send_destination="*"/><allow receive_sender="*"/>'
+            "</policy></busconfig>",
+            encoding="utf-8",
+        )
+        command = [xvfb, "-a", dbus, "--config-file", str(bus_config), "--", *sys.argv[1:]]
         return subprocess.run(command, env=env, check=False).returncode
 
 

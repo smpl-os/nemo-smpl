@@ -27,6 +27,7 @@
 
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
+#include "nemo-style-utilities.h"
 
 /* ── Bar-chart layout constants ────────────────────────────────── */
 #define VBAR_W              28
@@ -565,7 +566,7 @@ create_ranked_list (GArray *entries)
 
 		size_lbl = gtk_label_new (sz);
 		gtk_widget_set_halign (size_lbl, GTK_ALIGN_START);
-		gtk_widget_set_opacity (size_lbl, 0.8);
+		nemo_label_set_secondary (size_lbl, 80);
 		gtk_grid_attach (GTK_GRID (list_grid), size_lbl,
 		                 0, (gint) i, 1, 1);
 		gtk_widget_show (size_lbl);
@@ -809,7 +810,7 @@ nemo_dir_analyzer_init (NemoDirAnalyzer *self)
 	gtk_widget_set_halign (self->status_label, GTK_ALIGN_START);
 	gtk_widget_set_margin_start (self->status_label, 8);
 	gtk_widget_set_margin_top (self->status_label, 4);
-	gtk_widget_set_opacity (self->status_label, 0.6);
+	nemo_label_set_secondary (self->status_label, 60);
 	gtk_box_pack_start (GTK_BOX (self), self->status_label,
 	                    FALSE, FALSE, 0);
 	gtk_widget_show (self->status_label);

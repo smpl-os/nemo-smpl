@@ -1,4 +1,4 @@
-/* nemo-archive-mounter.h - FUSE-based archive mounting for transparent browsing
+/* nemo-archive-mounter.h - Read-only archive locations
  *
  * Copyright (C) 2026 nemo-smpl contributors
  *
@@ -11,23 +11,15 @@
 #ifndef NEMO_ARCHIVE_MOUNTER_H
 #define NEMO_ARCHIVE_MOUNTER_H
 
-#include <glib.h>
+#include <gio/gio.h>
 
 G_BEGIN_DECLS
 
 gboolean nemo_archive_mounter_is_archive (const gchar *mime_type);
 
-/* Returns TRUE only if this MIME type is an archive AND the required
- * FUSE mount helper (fuse-zip / archivemount) is available on PATH.
- * Callers should skip the mount-and-browse interception when this
- * returns FALSE and fall back to the default GIO handler. */
-gboolean nemo_archive_mounter_can_mount (const gchar *mime_type);
-
-gchar *nemo_archive_mounter_mount (const gchar *archive_path,
-                                   const gchar *mime_type,
-                                   GError **error);
-
-void nemo_archive_mounter_unmount (const gchar *archive_path);
+/* URI-only helpers. Normal slot navigation loads the root asynchronously. */
+GFile *nemo_archive_mounter_get_root (GFile *archive);
+GFile *nemo_archive_mounter_get_archive (GFile *location);
 
 G_END_DECLS
 

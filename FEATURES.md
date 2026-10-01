@@ -152,15 +152,69 @@ Double Commander-style instant file viewer:
 ### smplOS Live Theming
 
 - Accent colors, backgrounds, and selection highlights update instantly via `theme-set`
-- `GFileMonitor` watches `~/.config/smplos/nemo-theme.css` for live CSS reload
-- All 15 smplOS themes ship pre-baked `nemo.css` files
-- Compiled under `#ifdef SMPLOS` — upstream patches contain none of this code
+- The loader prefers `$XDG_CONFIG_HOME/smplos/nemo-theme.css` when
+  `XDG_CONFIG_HOME` is absolute. Only a missing preferred file falls back to
+  `~/.config/smplos/nemo-theme.css`, the path written by smplOS `theme-set`.
+  An unset or relative XDG path uses the HOME path. Both candidates are watched
+  for debounced live reload, including creation and atomic replacement.
+  Malformed, empty, or unreadable preferred CSS logs a warning and preserves
+  the last valid theme, rather than falling through. Removing the preferred
+  file activates the HOME fallback; removing both restores the GTK theme.
+- smplOS themes ship generated `nemo.css` files. Their `app_background_opacity`
+  controls only the background, not window, text, or icon opacity.
+- RGBA-capable file-manager and F3 preview windows on a composited screen advertise
+  `.smplos-native-alpha`. Generated CSS paints the background once on
+  `.nemo-window.smplos-native-alpha:not(.nemo-desktop-window)` or
+  `.nemo-quick-preview.smplos-native-alpha`; structural descendants stay
+  transparent to avoid compounded alpha. GTK maintains native opaque regions
+  when the background changes, including returning to opacity `1.0`.
+- `.nemo-preview-pane` and `.nemo-query-editor` provide stable theme hooks.
+  `.nemo-secondary-label` keeps stock dimming without a smplOS theme; the native
+  alpha theme uses opaque muted text instead. Media pixels, selection/control
+  highlights, menus, and ordinary dialogs retain their own rendering.
+- Desktop windows never opt into this capability. Missing RGBA support,
+  noncomposited X11, and older Nemo versions retain opaque generated backgrounds.
+  Compositor loss/restoration updates the capability on already-open windows;
+  the RGBA visual is selected only before realization, never swapped live.
+  Without generated CSS, the ordinary GTK appearance remains in control.
+- Compiled under `#ifdef NEMO_SMPL` (`-Dsmpl_features=true`).
+
+The isolated regression suite can be run without changing the desktop:
+
+```bash
+meson setup build --prefix=/usr -Dtracker=false
+meson test -C build --suite theme --print-errorlogs
+```
+
+It uses a private Xvfb display, D-Bus session, home/config directories, and memory
+settings. Pixel checks cover single-layer alpha, opaque glyph/icon interiors,
+secondary labels, backdrop states, and the real Nemo icon/list/compact/sidebar
+and preview widget hierarchy. A synthetic X11 compositor-selection owner tests
+real GDK availability events and opaque fallback transitions, not compositor
+blending. These Cairo/X11 checks do not replace a native Wayland compositor check
+when validating a release.
 
 ### Archive Support
 
-- **Browsing**: Double-click ZIP/7z/TAR archives to browse contents via FUSE
-- **Creation**: Right-click "Compress to Archive" with progress feedback
-- Supports ZIP, 7z, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, RAR
+- **Browsing**: Enter/double-click ZIP, 7z, TAR/compressed TAR, RAR and ISO images
+  to browse their contents read-only through Nemo's native virtual folders
+- **ISO paths**: A dedicated ISO reader preserves Rock Ridge names and relocated
+  deep directories instead of exposing conflicting internal relocation paths
+- **Preview/extract**: F3 and sidebar previews work on archive members; copy
+  individual files or folders out with the normal copy commands
+- **Navigation**: Up/Backspace from an archive root returns to its containing
+  folder with the archive selected
+- No whole-archive temporary extraction or writable FUSE mount helpers
+- Large listings use a temporary disk-backed metadata index rather than keeping
+  every member's full file information in memory; unchanged archives reuse it
+- **Creation**: Alt+F5 copies selections into a new maximum-compression 7z archive;
+  Alt+Shift+F5 removes originals only after the new archive is complete and verified
+- The archive destination defaults to the other pane when open, otherwise the
+  current folder. Directory structure is retained, but original security metadata
+  (ownership, permissions, ACLs and extended attributes) is not stored
+- **Parent navigation**: An always-present `..` entry leads up where a parent
+  exists; it stays first and is excluded from file operations and Select All
+- Unsupported/encrypted formats and corrupt archives report errors
 
 ### MTP Device Support
 

@@ -51,6 +51,10 @@
 #include "nemo-window-slot.h"
 #include "nemo-statusbar.h"
 
+#ifdef NEMO_SMPL
+#include "nemo-smpl-theme.h"
+#endif
+
 #include <libnemo-private/nemo-dbus-manager.h>
 #include <libnemo-private/nemo-directory-private.h>
 #include <libnemo-private/nemo-file-utilities.h>
@@ -106,12 +110,6 @@ static gboolean save_of_accel_map_requested = FALSE;
 
 static GtkCssProvider *mandatory_css_provider = NULL;
 
-#ifdef NEMO_SMPL
-/* smplOS: per-theme CSS override loaded from ~/.config/smplos/nemo-theme.css */
-static GtkCssProvider *smplos_css_provider    = NULL;
-static GFileMonitor   *smplos_css_monitor     = NULL;
-#endif /* NEMO_SMPL */
-
 static gboolean
 css_provider_load_from_resource (GtkCssProvider *provider,
                      const char     *resource_path,
@@ -154,152 +152,6 @@ load_file_contents_from_resource (const char     *resource_path,
 
    return retval;
 }
-
-#ifdef NEMO_SMPL
-/* smplOS theme loader ------------------------------------------------
- * Loads ~/.config/smplos/nemo-theme.css at GTK_STYLE_PROVIDER_PRIORITY_USER
- * (800), which overrides everything including Adwaita and nemo's own CSS.
- * A GFileMonitor keeps the provider in sync when theme-set rewrites the file,
- * giving live theme switching with no nemo restart.
- *
- * Robustness measures:
- *   - The provider is destroyed and re-created on each reload so no stale
- *     internal GTK3 CSS cache can survive across theme switches.
- *   - A 200 ms debounce timer consolidates rapid inotify events (truncation
- *     + write from `cp`, or multiple rapid theme switches) into a single
- *     reload after the dust settles.
- *   - We listen for CHANGES_DONE_HINT (close-after-write) as well as
- *     CHANGED, so we reliably see the final state of the file.
- *   - If the file is smaller than a sane minimum (100 bytes) we skip the
- *     reload — it was likely caught mid-truncation by `cp`.
- * ------------------------------------------------------------------ */
-
-/* Minimum CSS file size to accept.  A valid smplOS nemo.css is ~15 KB;
- * anything smaller than this is almost certainly a truncated/empty file
- * caught between cp's open(O_TRUNC) and the completed write().          */
-#define SMPLOS_CSS_MIN_SIZE 100
-
-/* Debounce interval in milliseconds. */
-#define SMPLOS_CSS_DEBOUNCE_MS 200
-
-static guint smplos_reload_timer_id = 0;
-
-static gboolean
-reload_smplos_theme_tick (gpointer user_data)
-{
-    gchar *css_path;
-    GError *error = NULL;
-    GStatBuf st;
-
-    (void) user_data;
-    smplos_reload_timer_id = 0;   /* one-shot */
-
-    css_path = g_build_filename (g_get_home_dir (), ".config", "smplos",
-                                 "nemo-theme.css", NULL);
-
-    if (!g_file_test (css_path, G_FILE_TEST_EXISTS)) {
-        g_free (css_path);
-        return G_SOURCE_REMOVE;
-    }
-
-    /* Guard against reading a truncated file (cp opens with O_TRUNC
-     * before writing — inotify can fire on the empty file).           */
-    if (g_stat (css_path, &st) != 0 || st.st_size < SMPLOS_CSS_MIN_SIZE) {
-        g_free (css_path);
-        return G_SOURCE_REMOVE;
-    }
-
-    /* Tear down old provider completely so GTK3 builds a fresh CSS
-     * stylesheet object with no cached colour / rule state.           */
-    if (smplos_css_provider != NULL) {
-        gtk_style_context_remove_provider_for_screen (
-            gdk_screen_get_default (),
-            GTK_STYLE_PROVIDER (smplos_css_provider));
-        g_clear_object (&smplos_css_provider);
-    }
-
-    smplos_css_provider = gtk_css_provider_new ();
-
-    gtk_css_provider_load_from_path (smplos_css_provider, css_path, &error);
-
-    if (error != NULL) {
-        g_warning ("smplOS: failed to load nemo-theme.css: %s", error->message);
-        g_error_free (error);
-        g_clear_object (&smplos_css_provider);
-    } else {
-        gtk_style_context_add_provider_for_screen (
-            gdk_screen_get_default (),
-            GTK_STYLE_PROVIDER (smplos_css_provider),
-            GTK_STYLE_PROVIDER_PRIORITY_USER);
-        gtk_style_context_reset_widgets (gdk_screen_get_default ());
-    }
-
-    g_free (css_path);
-    return G_SOURCE_REMOVE;
-}
-
-static void
-reload_smplos_theme (void)
-{
-    /* Called directly at startup (no debounce needed). */
-    reload_smplos_theme_tick (NULL);
-}
-
-static void
-schedule_smplos_reload (void)
-{
-    /* Reset the debounce timer — only the LAST event in a burst matters. */
-    if (smplos_reload_timer_id != 0)
-        g_source_remove (smplos_reload_timer_id);
-    smplos_reload_timer_id =
-        g_timeout_add (SMPLOS_CSS_DEBOUNCE_MS, reload_smplos_theme_tick, NULL);
-}
-
-static void
-on_smplos_theme_changed (GFileMonitor      *monitor,
-                         GFile             *file,
-                         GFile             *other_file,
-                         GFileMonitorEvent  event_type,
-                         gpointer           user_data)
-{
-    (void) monitor; (void) file; (void) other_file; (void) user_data;
-
-    if (event_type == G_FILE_MONITOR_EVENT_CHANGED ||
-        event_type == G_FILE_MONITOR_EVENT_CREATED ||
-        event_type == G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT) {
-        schedule_smplos_reload ();
-    }
-}
-
-static void
-load_smplos_theme (void)
-{
-    gchar *css_path;
-    GFile *css_file;
-    GError *error = NULL;
-
-    css_path = g_build_filename (g_get_home_dir (), ".config", "smplos",
-                                 "nemo-theme.css", NULL);
-    css_file = g_file_new_for_path (css_path);
-
-    reload_smplos_theme ();
-
-    smplos_css_monitor = g_file_monitor_file (css_file,
-                                              G_FILE_MONITOR_NONE,
-                                              NULL, &error);
-    if (smplos_css_monitor != NULL) {
-        g_signal_connect (smplos_css_monitor, "changed",
-                          G_CALLBACK (on_smplos_theme_changed), NULL);
-    } else {
-        g_warning ("smplOS: could not watch nemo-theme.css: %s",
-                   error != NULL ? error->message : "unknown");
-        g_clear_error (&error);
-    }
-
-    g_object_unref (css_file);
-    g_free (css_path);
-}
-#endif /* NEMO_SMPL */
 
 /* ------------------------------------------------------------------ */
 
@@ -482,10 +334,7 @@ init_icons_and_styles (void)
                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
 #ifdef NEMO_SMPL
-    /* smplOS: load per-theme accent/color overrides at USER priority (800),
-     * above Adwaita and nemo's own CSS.  Also installs a GFileMonitor for
-     * live reload when theme-set rewrites the file. */
-    load_smplos_theme ();
+    nemo_smpl_theme_init ();
     /* Keep the resize affordance visible even when a theme hides generic
      * separators. Its colors still come from the active theme. */
     add_css_provider_at_priority ("/org/nemo/nemo-style-affordances.css",
@@ -804,8 +653,7 @@ nemo_application_quit_mainloop (GApplication *app)
     g_object_unref (NEMO_APPLICATION (app)->undo_manager);
     g_clear_object (&mandatory_css_provider);
 #ifdef NEMO_SMPL
-    g_clear_object (&smplos_css_monitor);
-    g_clear_object (&smplos_css_provider);
+    nemo_smpl_theme_shutdown ();
 #endif /* NEMO_SMPL */
 
     nemo_mount_operation_shutdown ();
@@ -842,6 +690,7 @@ nemo_application_shutdown (GApplication *app)
 static void
 nemo_application_dispose (GObject *object)
 {
+    nemo_smpl_theme_shutdown ();
     g_clear_object (&NEMO_APPLICATION (object)->priv->progress_handler);
     G_OBJECT_CLASS (nemo_application_parent_class)->dispose (object);
 }

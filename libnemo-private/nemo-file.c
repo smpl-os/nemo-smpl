@@ -530,6 +530,68 @@ nemo_file_clear_info (NemoFile *file)
 	clear_metadata (file);
 }
 
+gboolean
+nemo_file_is_parent_entry_location (GFile *location)
+{
+	return location != NULL && g_file_has_uri_scheme (location, "nemo-parent");
+}
+
+gboolean
+nemo_file_is_parent_entry (NemoFile *file)
+{
+	return file != NULL &&
+	       g_object_get_data (G_OBJECT (file), "nemo-parent-entry") != NULL;
+}
+
+GList *
+nemo_file_list_filter_parent_entries (GList *files)
+{
+	GList *l = files;
+
+	while (l != NULL) {
+		GList *next = l->next;
+		if (nemo_file_is_parent_entry (l->data)) {
+			nemo_file_unref (l->data);
+			files = g_list_delete_link (files, l);
+		}
+		l = next;
+	}
+	return files;
+}
+
+NemoFile *
+nemo_file_new_parent_entry (void)
+{
+	g_autofree char *id = g_uuid_string_random ();
+	g_autofree char *uri = g_strdup_printf ("nemo-parent:///%s", id);
+	g_autoptr (GFileInfo) info = g_file_info_new ();
+	g_autoptr (GIcon) icon = g_themed_icon_new ("go-up");
+	NemoDirectory *directory = nemo_directory_get_by_uri (uri);
+	NemoFile *file;
+
+	/* The unsupported URI is deliberately unrelated to the navigation target.
+	 * Even a consumer that forgets the marker cannot operate on a real parent. */
+	g_file_info_set_name (info, "up");
+	g_file_info_set_display_name (info, "..");
+	g_file_info_set_file_type (info, G_FILE_TYPE_DIRECTORY);
+	g_file_info_set_content_type (info, "inode/directory");
+	g_file_info_set_icon (info, icon);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_READ, FALSE);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE, FALSE);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE, FALSE);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_DELETE, FALSE);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_TRASH, FALSE);
+	g_file_info_set_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_RENAME, FALSE);
+	file = nemo_file_new_from_info (directory, info);
+	g_object_set_data (G_OBJECT (file), "nemo-parent-entry", GINT_TO_POINTER (1));
+	file->details->got_link_info = TRUE;
+	file->details->link_info_is_up_to_date = TRUE;
+	file->details->thumbnail_is_up_to_date = TRUE;
+	file->details->directory_count_is_up_to_date = TRUE;
+	nemo_directory_unref (directory);
+	return file;
+}
+
 static NemoFile *
 nemo_file_new_from_filename (NemoDirectory *directory,
 				 const char *filename,
@@ -814,7 +876,7 @@ finalize (GObject *object)
 	if (nemo_file_is_self_owned (file)) {
 		directory->details->as_file = NULL;
 	} else {
-		if (!file->details->is_gone) {
+		if (!file->details->is_gone && !nemo_file_is_parent_entry (file)) {
 			nemo_directory_remove_file (directory, file);
 		}
 	}
@@ -2309,7 +2371,7 @@ update_info_internal (NemoFile *file,
 	gboolean free_owner, free_group;
     const char *edit_name;
 
-	if (file->details->is_gone) {
+	if (file->details->is_gone || nemo_file_is_parent_entry (file)) {
 		return FALSE;
 	}
 
@@ -3858,6 +3920,9 @@ nemo_file_set_metadata (NemoFile *file,
 {
 	const char *val;
 
+	if (nemo_file_is_parent_entry (file))
+		return;
+
 	g_return_if_fail (NEMO_IS_FILE (file));
 	g_return_if_fail (key != NULL);
 	g_return_if_fail (key[0] != '\0');
@@ -3878,6 +3943,9 @@ nemo_file_set_metadata_list (NemoFile *file,
 	char **val;
 	int len, i;
 	GList *l;
+
+	if (nemo_file_is_parent_entry (file))
+		return;
 
 	g_return_if_fail (NEMO_IS_FILE (file));
 	g_return_if_fail (key != NULL);
@@ -4229,7 +4297,8 @@ nemo_file_monitor_add (NemoFile *file,
 	g_return_if_fail (NEMO_IS_FILE (file));
 	g_return_if_fail (client != NULL);
 
-	NEMO_FILE_CLASS (G_OBJECT_GET_CLASS (file))->monitor_add (file, client, attributes);
+	if (!nemo_file_is_parent_entry (file))
+		NEMO_FILE_CLASS (G_OBJECT_GET_CLASS (file))->monitor_add (file, client, attributes);
 }
 
 void
@@ -4239,7 +4308,8 @@ nemo_file_monitor_remove (NemoFile *file,
 	g_return_if_fail (NEMO_IS_FILE (file));
 	g_return_if_fail (client != NULL);
 
-	NEMO_FILE_CLASS (G_OBJECT_GET_CLASS (file))->monitor_remove (file, client);
+	if (!nemo_file_is_parent_entry (file))
+		NEMO_FILE_CLASS (G_OBJECT_GET_CLASS (file))->monitor_remove (file, client);
 }
 
 gboolean
@@ -4569,6 +4639,9 @@ get_custom_icon_internal (NemoFile *file, gboolean cached_cover)
 	if (file == NULL) {
 		return NULL;
 	}
+
+	if (nemo_file_is_parent_entry (file))
+		return g_object_ref (file->details->icon);
 
 	icon = NULL;
 
@@ -8867,7 +8940,7 @@ nemo_file_mark_gone (NemoFile *file)
 {
 	NemoDirectory *directory;
 
-	if (file->details->is_gone)
+	if (file->details->is_gone || nemo_file_is_parent_entry (file))
 		return;
 
 	file->details->is_gone = TRUE;
@@ -9031,7 +9104,7 @@ nemo_file_check_if_ready (NemoFile *file,
 	/* To be parallel with call_when_ready, return
 	 * TRUE for NULL file.
 	 */
-	if (file == NULL) {
+	if (file == NULL || nemo_file_is_parent_entry (file)) {
 		return TRUE;
 	}
 
@@ -9047,7 +9120,7 @@ nemo_file_call_when_ready (NemoFile *file,
 			       gpointer callback_data)
 
 {
-	if (file == NULL) {
+	if (file == NULL || nemo_file_is_parent_entry (file)) {
 		(* callback) (file, callback_data);
 		return;
 	}
@@ -9065,7 +9138,7 @@ nemo_file_cancel_call_when_ready (NemoFile *file,
 {
 	g_return_if_fail (callback != NULL);
 
-	if (file == NULL) {
+	if (file == NULL || nemo_file_is_parent_entry (file)) {
 		return;
 	}
 
@@ -9457,6 +9530,9 @@ void
 nemo_file_invalidate_attributes (NemoFile *file,
 				     NemoFileAttributes file_attributes)
 {
+	if (nemo_file_is_parent_entry (file))
+		return;
+
 	/* Cancel possible in-progress loads of any of these attributes */
 	nemo_directory_cancel_loading_file_attributes (file->details->directory,
 							   file,

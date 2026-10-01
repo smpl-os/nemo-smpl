@@ -336,7 +336,7 @@ nemo_icon_container_each_selected_icon (NemoIconContainer *container,
 
 	for (p = container->details->icons; p != NULL; p = p->next) {
 		icon = p->data;
-		if (!icon->is_selected) {
+		if (!icon->is_selected || nemo_icon_container_is_navigation_icon (container, icon->data)) {
 			continue;
 		}
 		if (!each_function (icon, data)) {
@@ -1676,6 +1676,10 @@ nemo_icon_dnd_begin_drag (NemoIconContainer *container,
 
 	g_return_if_fail (NEMO_IS_ICON_CONTAINER (container));
 	g_return_if_fail (event != NULL);
+
+	if (container->details->drag_icon != NULL &&
+	    nemo_icon_container_is_navigation_icon (container, container->details->drag_icon->data))
+		return;
 
 	dnd_info = container->details->dnd_info;
 	g_return_if_fail (dnd_info != NULL);

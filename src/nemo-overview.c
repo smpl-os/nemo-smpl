@@ -27,6 +27,7 @@
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
 #include "nemo-dir-analyzer.h"
+#include "nemo-style-utilities.h"
 
 /* ── Donut layout ──────────────────────────────────────────────── */
 #define DONUT_SIZE         110
@@ -440,7 +441,7 @@ create_volume_card (VolumeInfo *v)
 
 	detail_label = gtk_label_new (detail);
 	gtk_label_set_ellipsize (GTK_LABEL (detail_label), PANGO_ELLIPSIZE_END);
-	gtk_widget_set_opacity (detail_label, 0.7);
+	nemo_label_set_secondary (detail_label, 70);
 	gtk_box_pack_start (GTK_BOX (vbox), detail_label, FALSE, FALSE, 0);
 
 	g_free (used_str);
@@ -451,7 +452,7 @@ create_volume_card (VolumeInfo *v)
 	/* Mount point */
 	if (v->mount_path != NULL) {
 		GtkWidget *mount_label = gtk_label_new (v->mount_path);
-		gtk_widget_set_opacity (mount_label, 0.5);
+		nemo_label_set_secondary (mount_label, 50);
 		gtk_label_set_ellipsize (GTK_LABEL (mount_label), PANGO_ELLIPSIZE_MIDDLE);
 		gtk_label_set_max_width_chars (GTK_LABEL (mount_label), 22);
 		gtk_box_pack_start (GTK_BOX (vbox), mount_label, FALSE, FALSE, 0);

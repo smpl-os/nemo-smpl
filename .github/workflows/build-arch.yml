@@ -74,8 +74,9 @@ jobs:
                 base-devel git meson ninja pkgconf intltool \
                 gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop \
                 libexif libraw exempi gstreamer gst-plugins-base-libs \
+                gst-plugins-base gst-plugins-good \
                 pango gobject-introspection libgsf python zstd \
-                dbus xorg-server-xvfb xorg-xauth \
+                dbus xorg-server-xvfb xorg-xauth libarchive sqlite libisofs libisoburn \
                 md4c poppler-glib mupdf-tools bubblewrap
 
               meson setup build \
@@ -116,7 +117,7 @@ jobs:
             gdk-pixbuf2 glib2 glibc gtk3 gvfs gvfs-mtp hicolor-icon-theme
             json-glib libexif libx11 libxmlb pango python python-cairo
             python-gobject xapp gstreamer gst-plugins-base gst-plugins-good
-            webp-pixbuf-loader libraw md4c poppler-glib mupdf-tools bubblewrap
+            webp-pixbuf-loader libraw md4c poppler-glib mupdf-tools bubblewrap libarchive sqlite libisofs
           )
           provides=(nemo)
           conflicts=(nemo)
@@ -160,7 +161,12 @@ jobs:
             cp pkg-build/nemo-smpl-*.pkg.tar.zst .
 
       - name: List outputs
-        run: ls -lh nemo-smpl-*
+        run: |
+          sha256sum \
+            "nemo-smpl-${{ env.VERSION }}-1-${{ matrix.arch }}.pkg.tar.zst" \
+            "nemo-smpl-${{ env.VERSION }}-arch-${{ matrix.arch }}-rootfs.tar.zst" \
+            > "SHA256SUMS-${{ matrix.arch }}"
+          ls -lh nemo-smpl-* "SHA256SUMS-${{ matrix.arch }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -169,6 +175,7 @@ jobs:
           path: |
             nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
             nemo-smpl-${{ env.VERSION }}-1-${{ matrix.arch }}.pkg.tar.zst
+            SHA256SUMS-${{ matrix.arch }}
           retention-days: 14
 
       - name: Create or update GitHub Release
@@ -178,6 +185,7 @@ jobs:
           files: |
             nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst
             nemo-smpl-${{ env.VERSION }}-1-${{ matrix.arch }}.pkg.tar.zst
+            SHA256SUMS-${{ matrix.arch }}
           tag_name: v${{ env.VERSION }}
           name: nemo-smpl ${{ env.VERSION }}
           generate_release_notes: true

@@ -3,6 +3,14 @@
 #include "../src/nemo-list-view.h"
 #include "../src/nemo-keybindings.h"
 #include "../src/nemo-mime-actions.h"
+#include "../src/nemo-icon-view.h"
+#include "../src/nemo-list-model.h"
+#include "../src/nemo-archive-mounter.h"
+#include <libnemo-private/nemo-file-private.h>
+#include <libnemo-private/nemo-metadata.h>
+#include <libnemo-private/nemo-icon-private.h>
+#include <archive.h>
+#include <archive_entry.h>
 
 static const char *names[] = {
     "curveycase.txt", "misscurve.txt", "misscurve2.txt", "missile.txt", "z-last.txt"
@@ -494,6 +502,241 @@ test_timeout_and_destroy (void)
         iterate ();
 }
 
+static void
+find_parent_icon (NemoIconData *data, gpointer user_data)
+{
+    NemoFile **parent = user_data;
+    if (nemo_file_is_parent_entry (NEMO_FILE (data))) {
+        g_assert_null (*parent);
+        *parent = nemo_file_ref (NEMO_FILE (data));
+    }
+}
+
+static NemoFile *
+pane_parent (NemoView *view)
+{
+    NemoFile *parent = NULL;
+    if (NEMO_IS_ICON_VIEW (view)) {
+        nemo_icon_container_for_each (nemo_icon_view_get_icon_container (NEMO_ICON_VIEW (view)),
+                                      find_parent_icon, &parent);
+    } else {
+        GtkTreeView *tree = NULL;
+        GtkTreeIter iter;
+        find_tree (GTK_WIDGET (view), &tree);
+        g_assert_nonnull (tree);
+        GtkTreeModel *model = gtk_tree_view_get_model (tree);
+        gboolean valid = gtk_tree_model_get_iter_first (model, &iter);
+        while (valid) {
+            NemoFile *file = NULL;
+            gtk_tree_model_get (model, &iter, NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+            if (nemo_file_is_parent_entry (file)) {
+                g_assert_null (parent);
+                parent = nemo_file_ref (file);
+            }
+            nemo_file_unref (file);
+            valid = gtk_tree_model_iter_next (model, &iter);
+        }
+    }
+    return parent;
+}
+
+static void
+assert_parent_first (NemoView *view, NemoFile *parent, NemoFile *real)
+{
+    if (NEMO_IS_ICON_VIEW (view)) {
+        g_assert_cmpint (nemo_icon_view_compare_files (NEMO_ICON_VIEW (view), parent, real), <, 0);
+        g_assert_cmpint (nemo_icon_view_compare_files (NEMO_ICON_VIEW (view), parent, parent), ==, 0);
+    } else {
+        GtkTreeView *tree = NULL;
+        GtkTreeIter iter;
+        find_tree (GTK_WIDGET (view), &tree);
+        GtkTreeModel *model = gtk_tree_view_get_model (tree);
+        gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (model),
+                                              gtk_tree_view_get_search_column (tree), GTK_SORT_DESCENDING);
+        g_assert_true (gtk_tree_model_get_iter_first (model, &iter));
+        NemoFile *first = NULL;
+        gtk_tree_model_get (model, &iter, NEMO_LIST_MODEL_FILE_COLUMN, &first, -1);
+        g_assert_true (first == parent);
+        g_assert_false (gtk_tree_model_iter_has_child (model, &iter));
+        nemo_file_unref (first);
+    }
+}
+
+static void
+test_parent_all_views (void)
+{
+    const char *views[] = { NEMO_LIST_VIEW_ID, NEMO_ICON_VIEW_ID, FM_COMPACT_VIEW_ID };
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_DEFAULT_SORT_IN_REVERSE_ORDER, TRUE);
+    /* Obsolete saved false values cannot disable navigation. */
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_SHOW_PARENT_FOLDER_ENTRY, FALSE);
+    Fixture fixture = fixture_new ();
+    NemoFile *real = nemo_file_get (fixture.containing);
+    for (guint i = 0; i < G_N_ELEMENTS (views); i++) {
+        nemo_window_slot_set_content_view (fixture.slot, views[i]);
+        WAIT_FOR (g_strcmp0 (nemo_view_get_view_id (fixture.slot->content_view), views[i]) == 0 &&
+                  !nemo_view_get_loading (fixture.slot->content_view));
+        NemoView *view = fixture.slot->content_view;
+        NemoFile *parent = pane_parent (view);
+        g_assert_nonnull (parent);
+        g_autofree char *uri = nemo_file_get_uri (parent);
+        g_assert_true (g_str_has_prefix (uri, "nemo-parent:"));
+        g_assert_null (nemo_file_get_path (parent));
+        g_assert_false (nemo_file_can_rename (parent));
+        g_assert_false (nemo_file_can_delete (parent));
+        assert_parent_first (view, parent, real);
+        if (g_str_equal (views[i], NEMO_ICON_VIEW_ID)) {
+            NemoIconContainer *container = nemo_icon_view_get_icon_container (NEMO_ICON_VIEW (view));
+            nemo_icon_container_set_auto_layout (container, FALSE);
+            NemoIcon *up_icon = g_hash_table_lookup (container->details->icon_set, parent);
+            NemoIcon *real_icon = g_hash_table_lookup (container->details->icon_set, real);
+            g_assert_nonnull (up_icon);
+            g_assert_nonnull (real_icon);
+            WAIT_FOR (nemo_icon_container_icon_is_positioned (up_icon) &&
+                      nemo_icon_container_icon_is_positioned (real_icon) &&
+                      up_icon->y < real_icon->y);
+            nemo_icon_container_set_auto_layout (container, TRUE);
+        }
+
+        GList both_real = { .data = real };
+        GList both = { .data = parent, .next = &both_real };
+        nemo_view_set_selection (view, &both);
+        GList *files = nemo_view_get_selection (view);
+        g_assert_cmpuint (g_list_length (files), ==, 1);
+        g_assert_true (files->data == real);
+        nemo_file_list_free (files);
+        files = nemo_view_get_selection_for_file_transfer (view);
+        g_assert_cmpuint (g_list_length (files), ==, 1);
+        g_assert_true (files->data == real);
+        nemo_file_list_free (files);
+        nemo_view_update_menus (view);
+        g_assert_true (key_press (fixture.window, "<Control>c"));
+        GtkClipboard *clipboard = gtk_clipboard_get (GDK_SELECTION_CLIPBOARD);
+        GtkSelectionData *payload = gtk_clipboard_wait_for_contents (
+            clipboard, gdk_atom_intern_static_string ("x-special/gnome-copied-files"));
+        g_assert_nonnull (payload);
+        const char *clipboard_data = (const char *) gtk_selection_data_get_data (payload);
+        g_assert_nonnull (strstr (clipboard_data, "/nested"));
+        g_assert_null (strstr (clipboard_data, "nemo-parent:"));
+        gtk_selection_data_free (payload);
+        gtk_clipboard_clear (clipboard);
+
+        NEMO_VIEW_GET_CLASS (view)->select_all (view);
+        files = NEMO_VIEW_GET_CLASS (view)->get_selection (view);
+        g_assert_cmpuint (g_list_length (files), ==, 1);
+        g_assert_false (nemo_file_is_parent_entry (files->data));
+        nemo_file_list_free (files);
+        GList only_parent = { .data = parent };
+        nemo_view_set_selection (view, &only_parent);
+        g_assert_null (nemo_view_get_selection (view));
+        g_assert_null (nemo_view_get_selection_for_file_transfer (view));
+        g_assert_null (nemo_view_peek_selection (view));
+        g_assert_cmpint (nemo_view_get_selection_count (view), ==, 0);
+        NEMO_VIEW_GET_CLASS (view)->trash (view);
+        NEMO_VIEW_GET_CLASS (view)->delete (view);
+        g_assert_true (g_file_query_exists (fixture.containing, NULL));
+        g_assert_true (g_file_query_exists (fixture.item, NULL));
+
+        nemo_view_set_filter_text (view, "no-such-name");
+        WAIT_FOR (NEMO_VIEW_GET_CLASS (view)->get_item_count (view) == 1);
+        NemoFile *filtered_parent = pane_parent (view);
+        g_assert_true (filtered_parent == parent);
+        nemo_file_unref (filtered_parent);
+        NEMO_VIEW_GET_CLASS (view)->select_all (view);
+        g_assert_null (NEMO_VIEW_GET_CLASS (view)->get_selection (view));
+        nemo_view_set_filter_text (view, NULL);
+        WAIT_FOR (NEMO_VIEW_GET_CLASS (view)->get_item_count (view) == 2);
+        /* Refreshing folder/file metadata must not turn '..' into a real path. */
+        nemo_file_invalidate_all_attributes (parent);
+        g_autoptr (GFileInfo) info = g_file_info_new ();
+        g_file_info_set_name (info, "replacement");
+        g_assert_false (nemo_file_update_info (parent, info));
+        g_autofree char *name = nemo_file_get_display_name (parent);
+        g_assert_cmpstr (name, ==, "..");
+        nemo_file_unref (parent);
+        nemo_window_slot_open_location (fixture.slot, fixture.containing, 0);
+        WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+        view = fixture.slot->content_view;
+        parent = pane_parent (view);
+        GList up_selection = { .data = parent };
+        nemo_view_set_selection (view, &up_selection);
+        nemo_view_grab_focus (view);
+        g_assert_true (key_press (fixture.window, "Return"));
+        WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+        nemo_file_unref (parent);
+    }
+    nemo_file_unref (real);
+    g_autoptr (GFile) root = g_file_new_for_path ("/");
+    g_assert_false (nemo_window_slot_location_has_parent (root));
+    const char *virtual_roots[] = { "recent:///", "favorites:///", "x-nemo-search:///1", "network:///" };
+    for (guint i = 0; i < G_N_ELEMENTS (virtual_roots); i++) {
+        g_autoptr (GFile) location = g_file_new_for_uri (virtual_roots[i]);
+        g_assert_false (nemo_window_slot_location_has_parent (location));
+    }
+    fixture_clear (&fixture);
+}
+
+static void
+test_parent_empty_and_archive (void)
+{
+    Fixture fixture = fixture_new ();
+    g_autoptr (GFile) empty = g_file_get_child (fixture.origin, "empty");
+    g_assert_true (g_file_make_directory (empty, NULL, NULL));
+    nemo_window_slot_open_location (fixture.slot, empty, 0);
+    WAIT_FOR (slot_at (fixture.slot, empty));
+    NemoFile *parent = pane_parent (fixture.slot->content_view);
+    g_assert_nonnull (parent);
+    nemo_view_activate_file (fixture.slot->content_view, parent, 0);
+    nemo_file_unref (parent);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+
+    g_autoptr (GFile) archive = g_file_get_child (fixture.origin, "empty.tar");
+    g_autofree char *archive_path = g_file_get_path (archive);
+    char empty_tar[1024] = { 0 };
+    char outer_tar[16384] = { 0 };
+    size_t tar_size = 0;
+    struct archive *writer = archive_write_new ();
+    g_assert_cmpint (archive_write_set_format_pax_restricted (writer), ==, ARCHIVE_OK);
+    g_assert_cmpint (archive_write_set_bytes_per_block (writer, 512), ==, ARCHIVE_OK);
+    g_assert_cmpint (archive_write_open_memory (writer, outer_tar, sizeof outer_tar, &tar_size), ==, ARCHIVE_OK);
+    struct archive_entry *entry = archive_entry_new ();
+    archive_entry_set_pathname (entry, "nested.tar");
+    archive_entry_set_filetype (entry, AE_IFREG);
+    archive_entry_set_perm (entry, 0644);
+    archive_entry_set_size (entry, sizeof empty_tar);
+    g_assert_cmpint (archive_write_header (writer, entry), ==, ARCHIVE_OK);
+    g_assert_cmpint (archive_write_data (writer, empty_tar, sizeof empty_tar), ==, sizeof empty_tar);
+    archive_entry_free (entry);
+    g_assert_cmpint (archive_write_close (writer), ==, ARCHIVE_OK);
+    archive_write_free (writer);
+    g_assert_true (g_file_set_contents (archive_path, outer_tar, tar_size, NULL));
+    g_autoptr (GFile) archive_root = nemo_archive_mounter_get_root (archive);
+    g_assert_true (nemo_window_slot_location_has_parent (archive_root));
+    nemo_window_slot_open_location (fixture.slot, archive_root, 0);
+    WAIT_FOR (slot_at (fixture.slot, archive_root));
+    g_autoptr (GFile) nested = g_file_get_child (archive_root, "nested.tar");
+    g_autoptr (GFile) nested_root = nemo_archive_mounter_get_root (nested);
+    g_assert_true (nemo_window_slot_location_has_parent (nested_root));
+    nemo_window_slot_open_location (fixture.slot, nested_root, 0);
+    WAIT_FOR (slot_at (fixture.slot, nested_root));
+    parent = pane_parent (fixture.slot->content_view);
+    g_assert_nonnull (parent);
+    nemo_view_activate_file (fixture.slot->content_view, parent, 0);
+    nemo_file_unref (parent);
+    WAIT_FOR (slot_at (fixture.slot, archive_root));
+    g_assert_true (selected (fixture.slot->content_view, "nested.tar"));
+    parent = pane_parent (fixture.slot->content_view);
+    g_assert_nonnull (parent);
+    GList selection = { .data = parent };
+    nemo_view_activate_files (fixture.slot->content_view, &selection, 0, FALSE);
+    nemo_file_unref (parent);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    g_assert_true (selected (fixture.slot->content_view, "empty.tar"));
+    g_assert_true (g_file_delete (archive, NULL, NULL));
+    g_assert_true (g_file_delete (empty, NULL, NULL));
+    fixture_clear (&fixture);
+}
+
 typedef struct { const char *path; GTestFunc run; } ListCase;
 
 static void
@@ -529,6 +772,8 @@ main (int argc, char **argv)
         { "/list-type-jump/timeout-destroy", test_timeout_and_destroy },
         { "/list-type-jump/file-colors", test_file_type_colors },
         { "/list-type-jump/grey-details", test_grey_details },
+        { "/parent-entry/all-views-selection-filter-sort", test_parent_all_views },
+        { "/parent-entry/empty-folder-archive-exit", test_parent_empty_and_archive },
     };
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
         g_test_add_data_func (cases[i].path, &cases[i], run_case);

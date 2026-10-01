@@ -1773,6 +1773,9 @@ nemo_icon_view_compare_files (NemoIconView   *icon_view,
 	NemoView *view = NEMO_VIEW (icon_view);
 	NemoIconContainer *container = nemo_icon_view_get_icon_container (icon_view);
 
+	if (nemo_file_is_parent_entry (a) || nemo_file_is_parent_entry (b))
+		return nemo_file_is_parent_entry (b) - nemo_file_is_parent_entry (a);
+
 	if (container != NULL &&
 	    nemo_icon_container_get_filter_highlight (container) != NULL) {
 		gint pos_a = nemo_view_get_filter_match (view, a);

@@ -297,35 +297,6 @@ action_show_hidden_files_callback (GtkAction *action,
 	nemo_window_set_hidden_files_mode (window, mode);
 }
 
-#ifdef NEMO_SMPL
-static void
-action_show_parent_folder_entry_callback (GtkAction *action,
-					  gpointer callback_data)
-{
-	NemoWindow *window;
-	gboolean active;
-	GList *l;
-
-	window = NEMO_WINDOW (callback_data);
-	active = gtk_toggle_action_get_active (GTK_TOGGLE_ACTION (action));
-	g_settings_set_boolean (nemo_preferences,
-				NEMO_PREFERENCES_SHOW_PARENT_FOLDER_ENTRY,
-				active);
-
-	/* Explicitly refresh all panes (the GSettings signal may only
-	 * reach the active pane's list view). */
-	for (l = window->details->panes; l != NULL; l = l->next) {
-		NemoWindowPane *pane = NEMO_WINDOW_PANE (l->data);
-		if (pane->active_slot != NULL &&
-		    pane->active_slot->content_view != NULL &&
-		    NEMO_IS_LIST_VIEW (pane->active_slot->content_view)) {
-			nemo_list_view_refresh_parent_entry (
-				NEMO_LIST_VIEW (pane->active_slot->content_view));
-		}
-	}
-}
-#endif /* NEMO_SMPL */
-
 static void
 action_preferences_callback (GtkAction *action,
 			     gpointer user_data)
@@ -2545,13 +2516,6 @@ static const GtkToggleActionEntry main_toggle_entries[] = {
   /* tooltip */                  N_("Toggle the display of hidden files in the current window"),
                                  G_CALLBACK (action_show_hidden_files_callback),
                                  TRUE },
-#ifdef NEMO_SMPL
-  /* name, stock id */         { NEMO_ACTION_SHOW_PARENT_FOLDER_ENTRY, NULL,
-  /* label, accelerator */       N_("Show _Parent Folder Entry"), NULL,
-  /* tooltip */                  N_("Show a \"..\" entry at the top of the file list for navigating to the parent folder"),
-                                 G_CALLBACK (action_show_parent_folder_entry_callback),
-  /* is_active */                FALSE },
-#endif
   /* name, stock id */     { "Show Hide Toolbar", NULL,
   /* label, accelerator */   N_("_Main Toolbar"), NULL,
   /* tooltip */              N_("Change the visibility of this window's main toolbar"),
@@ -3020,19 +2984,6 @@ nemo_window_initialize_menus (NemoWindow *window)
         g_signal_handlers_unblock_by_func (action, action_show_hidden_files_callback, window);
     }
 
-#ifdef NEMO_SMPL
-	action = gtk_action_group_get_action (action_group, NEMO_ACTION_SHOW_PARENT_FOLDER_ENTRY);
-
-    if (NEMO_IS_DESKTOP_WINDOW (window)) {
-        gtk_action_set_visible (action, FALSE);
-    } else {
-        g_signal_handlers_block_by_func (action, action_show_parent_folder_entry_callback, window);
-        gtk_toggle_action_set_active (GTK_TOGGLE_ACTION (action),
-                                      g_settings_get_boolean (nemo_preferences,
-                                      NEMO_PREFERENCES_SHOW_PARENT_FOLDER_ENTRY));
-        g_signal_handlers_unblock_by_func (action, action_show_parent_folder_entry_callback, window);
-    }
-#endif /* NEMO_SMPL */
 
     g_signal_connect_object ( NEMO_WINDOW (window), "notify::sidebar-view-id",
                              G_CALLBACK (update_side_bar_radio_buttons), window, 0);

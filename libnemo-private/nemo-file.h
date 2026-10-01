@@ -148,6 +148,12 @@ GType                   nemo_file_get_type                          (void);
 NemoFile *          nemo_file_get                               (GFile                          *location);
 NemoFile *          nemo_file_get_by_uri                        (const char                     *uri);
 
+/* View-only navigation, never a filesystem parent or a directory-cache member. */
+NemoFile *          nemo_file_new_parent_entry                  (void);
+gboolean            nemo_file_is_parent_entry                   (NemoFile *file);
+gboolean            nemo_file_is_parent_entry_location          (GFile *location);
+GList *             nemo_file_list_filter_parent_entries        (GList *files);
+
 /* Get a file only if the nemo version already exists */
 NemoFile *          nemo_file_get_existing                      (GFile                          *location);
 NemoFile *          nemo_file_get_existing_by_uri               (const char                     *uri);

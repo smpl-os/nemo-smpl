@@ -1008,6 +1008,12 @@ align_icons (NemoIconContainer *container)
 static void
 redo_layout_internal (NemoIconContainer *container)
 {
+    /* Preloaded navigation icons can arrive before the window is realized.
+     * Showing an Eel item during GTK's initial allocation would recursively
+     * realize the canvas and its still-realizing toplevel. */
+    if (!gtk_widget_get_realized (GTK_WIDGET (container)))
+        return;
+
     container->details->fixed_text_height = -1;
 
     if (NEMO_ICON_CONTAINER_GET_CLASS (container)->finish_adding_new_icons != NULL) {
@@ -2955,6 +2961,7 @@ realize (GtkWidget *widget)
 	g_signal_connect (vadj, "value_changed",
 			  G_CALLBACK (handle_vadjustment_changed), widget);
 
+	schedule_redo_layout (container);
 }
 
 static void
@@ -3957,6 +3964,13 @@ nemo_icon_container_get_icon_text (NemoIconContainer *container,
     klass->get_icon_text (container, data, editable_text, additional_text, pinned, fav_unavailable, include_invisible);
 }
 
+gboolean
+nemo_icon_container_is_navigation_icon (NemoIconContainer *container, NemoIconData *data)
+{
+	NemoIconContainerClass *klass = NEMO_ICON_CONTAINER_GET_CLASS (container);
+	return klass->is_navigation_icon != NULL && klass->is_navigation_icon (container, data);
+}
+
 static gboolean
 nemo_icon_container_search_iter (NemoIconContainer *container,
 				     const char *key, gint n)
@@ -3993,6 +4007,9 @@ nemo_icon_container_search_iter (NemoIconContainer *container,
 			EelCanvasItem *item = EEL_CANVAS_ITEM (icon->item);
 			char *name = NULL;
 			NemoTypeJumpMatch result;
+
+			if (nemo_icon_container_is_navigation_icon (container, icon->data))
+				continue;
 
 			if (!(item->flags & EEL_CANVAS_ITEM_VISIBLE) ||
 			    !(item->flags & EEL_CANVAS_ITEM_MAPPED)) {
@@ -6256,7 +6273,10 @@ nemo_icon_container_invert_selection (NemoIconContainer *container)
 		NemoIcon *icon;
 
 		icon = p->data;
-		icon_toggle_selected (container, icon);
+		if (nemo_icon_container_is_navigation_icon (container, icon->data))
+			icon_set_selected (container, icon, FALSE);
+		else
+			icon_toggle_selected (container, icon);
 	}
 
 	g_signal_emit (container, signals[SELECTION_CHANGED], 0);
@@ -6326,7 +6346,8 @@ nemo_icon_container_select_all (NemoIconContainer *container)
 	for (p = container->details->icons; p != NULL; p = p->next) {
 		icon = p->data;
 
-		selection_changed |= icon_set_selected (container, icon, TRUE);
+		selection_changed |= icon_set_selected (container, icon,
+			!nemo_icon_container_is_navigation_icon (container, icon->data));
 	}
 
 	if (selection_changed) {
@@ -6360,6 +6381,14 @@ nemo_icon_container_select_first (NemoIconContainer *container)
     }
 
     icon = container->details->icons->data;
+    if (container->details->filter_highlight_text != NULL &&
+        nemo_icon_container_is_navigation_icon (container, icon->data)) {
+        if (container->details->icons->next == NULL) {
+            nemo_icon_container_unselect_all (container);
+            return;
+        }
+        icon = container->details->icons->next->data;
+    }
 
     /* Drop any stale keyboard focus from the previous selection so arrow-key
      * navigation starts from this new selection. */
@@ -7110,7 +7139,7 @@ nemo_icon_container_start_renaming_selected_item (NemoIconContainer *container,
 
 	/* Find selected icon */
 	icon = get_first_selected_icon (container);
-	if (icon == NULL) {
+	if (icon == NULL || nemo_icon_container_is_navigation_icon (container, icon->data)) {
 		return;
 	}
 

@@ -430,6 +430,7 @@ void              nemo_view_new_file_with_initial_contents (NemoView *view,
 /* selection handling */
 int               nemo_view_get_selection_count        (NemoView      *view);
 GList *           nemo_view_get_selection              (NemoView      *view);
+GList *           nemo_view_get_selection_for_file_transfer (NemoView *view);
 GList *           nemo_view_peek_selection             (NemoView      *view);
 gint              nemo_view_get_selection_count        (NemoView      *view);
 void              nemo_view_set_selection              (NemoView      *view,

@@ -137,6 +137,10 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "pin-file",              "<Actions>/DirViewActions/Pin File",         N_("Pin/Unpin File"),             N_("File Operations"), "<Control><Shift>d", NULL, NULL },
 	{ "copy-to-other-pane",    "<Actions>/DirViewActions/Copy to next pane", N_("Copy to Other Pane"),         N_("File Operations"), "",                  NULL, NULL },
 	{ "move-to-other-pane",    "<Actions>/DirViewActions/Move to next pane", N_("Move to Other Pane"),         N_("File Operations"), "",                  NULL, NULL },
+#ifdef NEMO_SMPL
+	{ "archive-create",        "<Actions>/DirViewActions/ArchiveCreate",    N_("Copy into New Archive"),      N_("File Operations"), "<Alt>F5",           NULL, NULL },
+	{ "archive-move",          "<Actions>/DirViewActions/ArchiveMove",      N_("Move into New Archive"),      N_("File Operations"), "<Alt><Shift>F5",    NULL, NULL },
+#endif
 
 	/* File Operations — binding-set entries (unified from nemo-view.c) */
 	{ "trash",                 NULL,                                        N_("Move to Trash"),              N_("File Operations"), "Delete",             "NemoView", "trash" },

@@ -86,7 +86,6 @@
 		</placeholder>
 		<separator/>
 		<placeholder name="View Preferences Placeholder"/>
-		<menuitem name="Show Parent Folder Entry" action="Show Parent Folder Entry"/>
 		<separator/>
 		<placeholder name="View Items Placeholder"/>
 		<separator/>

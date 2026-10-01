@@ -27,6 +27,7 @@
 #include "nemo-window-slot.h"
 
 #include "nemo-actions.h"
+#include "nemo-archive-mounter.h"
 #include "nemo-desktop-window.h"
 #include "nemo-filter-bar.h"
 #include "nemo-floating-bar.h"
@@ -1288,6 +1289,29 @@ nemo_window_slot_go_home (NemoWindowSlot *slot,
 	g_object_unref (home);
 }
 
+gboolean
+nemo_window_slot_location_has_parent (GFile *location)
+{
+	g_autoptr (GFile) parent = NULL;
+	g_autoptr (GFile) archive = NULL;
+
+	if (location == NULL ||
+	    g_file_has_uri_scheme (location, "search") ||
+	    g_file_has_uri_scheme (location, "x-nemo-search") ||
+	    g_file_has_uri_scheme (location, "recent") ||
+	    g_file_has_uri_scheme (location, "favorites") ||
+	    g_file_has_uri_scheme (location, "desktop"))
+		return FALSE;
+
+	parent = g_file_get_parent (location);
+	if (parent != NULL)
+		return TRUE;
+	archive = nemo_archive_mounter_get_archive (location);
+	if (archive != NULL)
+		parent = g_file_get_parent (archive);
+	return parent != NULL || g_file_has_uri_scheme (location, "smb");
+}
+
 void
 nemo_window_slot_go_up (NemoWindowSlot *slot,
 			    NemoWindowOpenFlags flags)
@@ -1304,6 +1328,21 @@ nemo_window_slot_go_up (NemoWindowSlot *slot,
 	}
 
 	parent = g_file_get_parent (slot->location);
+	if (parent == NULL) {
+		g_autoptr (GFile) archive = nemo_archive_mounter_get_archive (slot->location);
+
+		if (archive != NULL)
+			parent = g_file_get_parent (archive);
+		if (parent != NULL) {
+			NemoFile *file = nemo_file_get (archive);
+			GList selection = { .data = file };
+
+			nemo_window_slot_open_location_full (slot, parent, flags, &selection, NULL, NULL);
+			nemo_file_unref (file);
+			g_object_unref (parent);
+			return;
+		}
+	}
 	if (parent == NULL) {
 		if (g_file_has_uri_scheme (slot->location, "smb")) {
 			uri = g_file_get_uri (slot->location);

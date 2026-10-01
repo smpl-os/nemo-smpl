@@ -18,6 +18,7 @@ libnemo-extension/nemo-column.c
 libnemo-extension/nemo-menu-item.c
 libnemo-extension/nemo-property-page.c
 libnemo-private/nemo-action.c
+libnemo-private/nemo-archive-create.c
 libnemo-private/nemo-bookmark.c
 libnemo-private/nemo-clipboard.c
 libnemo-private/nemo-column-chooser.c
@@ -49,6 +50,7 @@ libnemo-private/nemo-vfs-file.c
 libnemo-private/org.nemo.gschema.xml.in
 src/nemo-action-config-widget.c
 src/nemo-application.c
+src/nemo-archive-dialog.c
 src/nemo-autorun-software.c
 src/nemo-blank-desktop-window.c
 src/nemo-bookmarks-window.c
@@ -73,6 +75,7 @@ src/nemo-icon-view-grid-container.c
 src/nemo-icon-view-ui.xml
 src/nemo-image-properties-page.c
 src/nemo-interesting-folder-bar.c
+src/nemo-keybindings.c
 src/nemo-list-model.c
 src/nemo-list-view.c
 src/nemo-list-view-ui.xml

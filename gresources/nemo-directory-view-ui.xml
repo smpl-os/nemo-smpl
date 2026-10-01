@@ -75,6 +75,7 @@
 			<menuitem name="Duplicate" action="Duplicate"/>
 			<menuitem name="Create Link" action="Create Link"/>
 			<menuitem name="Rename" action="Rename"/>
+			<placeholder name="ArchiveActions"/>
 			<menu action="CopyToMenu">
 				<menuitem name="Copy to next pane" action="Copy to next pane"/>
 				<menuitem name="Copy to Home" action="Copy to Home"/>
@@ -197,6 +198,7 @@
         <menuitem name="Unpin File" action="Unpin File"/>
 		<menuitem name="Create Link" action="Create Link"/>
 		<menuitem name="Rename" action="Rename"/>
+		<placeholder name="ArchiveActions"/>
 		<menu name="CopyToMenu" action="CopyToMenu">
 			<menuitem name="Copy to next pane" action="Copy to next pane"/>
 			<menuitem name="Copy to Home" action="Copy to Home"/>

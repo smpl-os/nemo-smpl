@@ -28,6 +28,9 @@
 
 #include "nemo-file-utilities.h"
 #include "nemo-file.h"
+#ifdef NEMO_SMPL
+#include "nemo-archive-file.h"
+#endif
 #include <eel/eel-glib-extensions.h>
 #include <eel/eel-gtk-extensions.h>
 #include <eel/eel-stock-dialogs.h>
@@ -462,6 +465,9 @@ nemo_global_preferences_init (void)
 
 	initialized = TRUE;
 
+#ifdef NEMO_SMPL
+	nemo_archive_file_register ();
+#endif
 	nemo_preferences = g_settings_new("org.nemo.preferences");
 	if (nemo_keybinding_settings == NULL)
 		nemo_keybinding_settings = g_settings_new ("org.nemo.keybindings");

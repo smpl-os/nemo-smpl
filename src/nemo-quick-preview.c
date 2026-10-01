@@ -23,6 +23,7 @@
 
 #include <config.h>
 #include <libnemo-private/nemo-global-preferences.h>
+#include <libnemo-private/nemo-file.h>
 #include "nemo-document-viewer.h"
 #include "nemo-quick-preview.h"
 #include "nemo-paged-viewer.h"
@@ -33,6 +34,9 @@
 #include "nemo-preview-utils.h"
 #include "nemo-dir-analyzer.h"
 #include "nemo-keybindings.h"
+#ifdef NEMO_SMPL
+#include "nemo-window-alpha.h"
+#endif
 
 #include <glib/gi18n.h>
 #include <string.h>
@@ -755,8 +759,10 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	self->video_fps = 25.0;
 
 	/* Initialise GStreamer early (safe to call multiple times) */
-	if (!gst_init_check (NULL, NULL, NULL)) {
-		g_warning ("Quick preview: GStreamer initialisation failed");
+	g_autoptr (GError) init_error = NULL;
+	if (!nemo_preview_media_init (&init_error)) {
+		g_warning ("Quick preview: GStreamer initialisation failed: %s",
+			   init_error->message);
 	}
 #endif
 
@@ -1074,6 +1080,13 @@ nemo_quick_preview_finalize (GObject *object)
 
 #ifdef NEMO_SMPL
 static void
+nemo_quick_preview_realize (GtkWidget *widget)
+{
+	nemo_window_enable_native_alpha (widget);
+	GTK_WIDGET_CLASS (nemo_quick_preview_parent_class)->realize (widget);
+}
+
+static void
 nemo_quick_preview_destroy (GtkWidget *widget)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (widget);
@@ -1105,6 +1118,7 @@ nemo_quick_preview_class_init (NemoQuickPreviewClass *klass)
 	object_class->finalize = nemo_quick_preview_finalize;
 #ifdef NEMO_SMPL
 	GTK_WIDGET_CLASS (klass)->destroy = nemo_quick_preview_destroy;
+	GTK_WIDGET_CLASS (klass)->realize = nemo_quick_preview_realize;
 #endif
 }
 
@@ -1185,6 +1199,15 @@ compare_files_by_name (gconstpointer a, gconstpointer b)
 	return result;
 }
 
+static gboolean
+preview_file_info_is_hidden (GFileInfo *info)
+{
+	if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN))
+		return g_file_info_get_is_hidden (info);
+	const char *name = g_file_info_get_name (info);
+	return name != NULL && name[0] == '.';
+}
+
 #ifdef NEMO_SMPL
 static void
 directory_list_thread (GTask *task, gpointer source, gpointer task_data,
@@ -1205,7 +1228,7 @@ directory_list_thread (GTask *task, gpointer source, gpointer task_data,
 			G_FILE_QUERY_INFO_NONE, cancellable, &error);
 		if (enumerator != NULL) {
 			while ((info = g_file_enumerator_next_file (enumerator, cancellable, &error)) != NULL) {
-				if (!g_file_info_get_is_hidden (info)) {
+				if (!preview_file_info_is_hidden (info)) {
 					GFile *child = g_file_get_child (parent, g_file_info_get_name (info));
 					found |= g_file_equal (child, request->file);
 					g_ptr_array_add (files, child);
@@ -1319,7 +1342,7 @@ populate_dir_file_list (NemoQuickPreview *self, GFile *file)
 		GFile *child;
 
 		/* Skip hidden files */
-		if (g_file_info_get_is_hidden (child_info)) {
+		if (preview_file_info_is_hidden (child_info)) {
 			g_object_unref (child_info);
 			continue;
 		}
@@ -1388,12 +1411,10 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 	const gchar *content_type;
 	const gchar *display_name;
 	gchar *size_str;
-	goffset size;
 	char *subtitle;
 
-	content_type = g_file_info_get_content_type (info);
-	display_name = g_file_info_get_display_name (info);
-	size = g_file_info_get_size (info);
+	content_type = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
+	display_name = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME);
 
 	/* Title = filename */
 	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar),
@@ -1431,7 +1452,8 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 	}
 
 	/* Subtitle = size + type */
-	size_str = g_format_size (size);
+	size_str = g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE) ?
+		g_format_size (g_file_info_get_size (info)) : g_strdup (_("Size unknown"));
 	subtitle = g_strdup_printf ("%s — %s", size_str,
 	                            content_type ? content_type : _("unknown"));
 	gtk_header_bar_set_subtitle (GTK_HEADER_BAR (self->header_bar), subtitle);
@@ -2009,12 +2031,11 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 
 	media_stop (self);
 
-	if (!gst_is_initialized ()) {
-		if (!gst_init_check (NULL, NULL, NULL)) {
-			g_warning ("Quick preview: GStreamer init failed");
-			preview_show_paged (self, file, NEMO_VIEWER_MODE_HEX);
-			return;
-		}
+	g_autoptr (GError) init_error = NULL;
+	if (!nemo_preview_media_init (&init_error)) {
+		g_warning ("Quick preview: GStreamer init failed: %s", init_error->message);
+		preview_show_paged (self, file, NEMO_VIEWER_MODE_HEX);
+		return;
 	}
 
 	self->pipeline = gst_element_factory_make ("playbin", "quick-preview-player");
@@ -2188,6 +2209,11 @@ nemo_quick_preview_show_file (NemoQuickPreview *self,
 {
 	g_return_if_fail (NEMO_IS_QUICK_PREVIEW (self));
 	g_return_if_fail (G_IS_FILE (file));
+
+	if (nemo_file_is_parent_entry_location (file)) {
+		nemo_quick_preview_dismiss (self);
+		return;
+	}
 
 	/* In the modal quick preview, make sure the toplevel exists before
 	 * media setup tries to create a native child window for video. */

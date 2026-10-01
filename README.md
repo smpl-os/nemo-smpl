@@ -19,7 +19,7 @@ nemo-smpl
 | Copy verification by default (SHA-256) | ❌ | ✅ |
 | Preview Pane (Alt+F3) with GPS map | ❌ | ✅ |
 | Disk Usage Overview (Pareto charts) | ❌ | ✅ |
-| Archive browsing (ZIP/7z/TAR as folders) | ❌ | ✅ |
+| Archive browsing (ZIP/7z/TAR/ISO as folders) | ❌ | ✅ |
 | Configurable keyboard shortcuts | ❌ | ✅ |
 | Theme-aware filename colors and outline icons | ❌ | ✅ |
 | Substring search | ❌ | ✅ |
@@ -128,6 +128,10 @@ In F3, **Ctrl+Left / Ctrl+Right** switch files; both are configurable under
 **Preferences → Keyboard Shortcuts → Quick Preview**. The file-navigation
 button tooltips follow those settings. Plain Left/Right still seek in media.
 
+Unrecognized regular files use the same paged **hex preview** in the sidebar as
+in F3, without taking focus from the file list. Directories and special files
+keep their information view rather than being read as byte streams.
+
 Rendering uses open-source **md4c**, the separate stock **MuPDF `mutool`**
 program, and **Poppler/Cairo**—not an embedded browser. Conversion/rendering
 runs in a restricted Bubblewrap process with no network or access to the
@@ -162,6 +166,63 @@ discarded automatically when the document changes on disk. Turn this off with
 The divider between file panes—and the right preview pane's resize handle—is
 a theme-colored **1-pixel line** that highlights on hover. Its invisible drag
 target stays wider so it is still easy to resize.
+
+## Browsing Archives and ISO Images
+
+Press **Enter** or double-click a ZIP, 7z, TAR/compressed TAR, RAR or ISO image to
+browse it like a folder. Open subfolders, preview individual files with **F3**
+or the sidebar, and use **Copy/F5** or copy-and-paste to extract selected files
+and folders to supported local storage. **Up/Backspace** from the archive root
+returns to its containing folder and selects the archive.
+
+List, icon and compact panes always show **`..` first** when the location has
+an Up destination, including empty folders and nested archive roots. Enter or
+double-click uses the same Up navigation. Sorting, reverse order and filename
+filters do not hide or reorder it. It is navigation only: Select All, file
+counts, clipboard, dragging, archive creation and file operations exclude it.
+It is absent at the filesystem root, on the desktop, and in search, Recent and
+Favorites views; search still exits using the existing Up/Backspace command.
+
+Browsing is **read-only**: it does not add, modify or delete archive contents,
+and does not extract the entire archive to a temporary directory. A native
+virtual folder reads selected members on demand using libarchive, including
+7z archives that require seeking. A dedicated libisofs reader preserves ISO
+Rock Ridge paths, including relocated deep directories. Neither needs FUSE
+mounts or a GVfs archive backend. Damaged archives and unsupported
+formats/password protection produce an error. ISO support does not include
+encrypted discs, UDF-only images, or compressed zisofs members.
+**Open With** remains available for an external archive manager.
+
+**Alt+F5** packs the selected files and folders into a new **7z** archive using
+maximum LZMA2 compression. **Alt+Shift+F5** packs them and removes the originals
+only after the archive has been completed and verified. The save dialog starts
+in the other pane's folder when split view is open, otherwise in the current
+folder; the destination and archive name can be changed before starting.
+Both shortcuts are configurable under **Keyboard Shortcuts → File Operations**.
+Selections must share a source folder, and names must be representable as UTF-8.
+Selections containing multiple hard links to the same file are rejected.
+Moves require supported local source storage; read-only archive members can be
+copied into a new archive, but cannot be moved out by this command.
+
+Selected folder names, their contents (including hidden files and empty folders),
+and modification times are retained. Original ownership, permissions, ACLs and
+extended attributes are not preserved. Maximum compression can require substantial
+CPU, memory and temporary disk space. Compression and verification run in the
+background, with progress and cancellation in File Operations.
+Temporary compressed data is stored alongside the destination, so leave room
+for both it and the finished archive.
+
+Directory metadata is cached in a private temporary SQLite index, with a bounded
+in-memory page cache. Listings create file-information objects only as requested,
+and subsequent lookups reuse the index while the archive is unchanged. Opening
+an archive no longer requires holding every member's full metadata in memory,
+and there is no 100,000-entry archive limit. The first opening still scans archive
+headers; compressed TAR and solid formats can require more work than ZIP.
+
+Archive links cannot be read or followed. At most 16 nested archive levels are
+supported, and unsafe or excessive member paths are rejected.
+Compressed members support seeking by replaying decompression when necessary;
+seeking in large or solid archives can therefore be slower than in local files.
 
 ## Zen Mode
 
@@ -241,6 +302,8 @@ Bookmarks**. The new Favorites shortcut leaves an existing assignment alone.
 | **Ctrl+Shift+K** | Edit keyboard shortcuts |
 | **Alt+Z** | Toggle Zen mode |
 | **F5** | Copy dialog |
+| **Alt+F5** | Copy selected files and folders into a new 7z archive |
+| **Alt+Shift+F5** | Pack into a new verified 7z archive, then remove originals |
 | **F6** | Move dialog |
 | **Ctrl+Left / Ctrl+Right** | Previous / next visited folder |
 | **Ctrl+Up** | Parent folder |
@@ -324,6 +387,9 @@ Open PRs to upstream:
 Release Packages**, which bumps the version once and builds both Arch and Debian
 packages from that same commit. Both package builds include LibRaw and run the
 transfer-safety and image-preview regressions before uploading packages.
+Arch releases include `SHA256SUMS-x86_64` for the pacman package and root filesystem
+archive. The packages include the document renderer and archive-creation worker;
+the native theme, archive, preview, and transfer release regressions must pass.
 The old `release` branch is retained for
 history; it is no longer the publishing source. To publish manually, run **Build
 and Release Packages** on `main`; dispatching **Build Debian Package** alone only
