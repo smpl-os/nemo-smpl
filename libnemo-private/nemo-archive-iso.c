@@ -4,6 +4,7 @@
 #endif
 #include "nemo-archive-iso.h"
 
+#include <stdint.h>
 #include <libisofs.h>
 #include <stdio.h>
 #include <stdlib.h>
