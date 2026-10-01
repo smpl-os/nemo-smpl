@@ -79,8 +79,12 @@ jobs:
                 dbus xorg-server-xvfb xorg-xauth libarchive sqlite libisofs libisoburn \
                 md4c poppler-glib mupdf-tools bubblewrap
 
-              useradd -m builder
-              chown -R builder:builder /src
+              BUILD_UID=$(stat -c %u /src)
+              if [ "$BUILD_UID" -eq 0 ]; then
+                echo "The release workspace must belong to an unprivileged user." >&2
+                exit 1
+              fi
+              useradd -m -u "$BUILD_UID" builder
 
               runuser -u builder -- meson setup build \
                 --prefix=/usr \
