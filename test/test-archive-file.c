@@ -208,8 +208,10 @@ check_archive (const char *path)
     g_assert_cmpstr (g_file_info_get_etag (info), ==, g_file_info_get_etag (stream_info));
     g_object_unref (info);
     g_object_unref (stream_info);
-    g_assert_true (g_input_stream_read_all (G_INPUT_STREAM (stream), bytes, sizeof bytes, &size, NULL, &error));
+    gboolean success = g_input_stream_read_all (G_INPUT_STREAM (stream), bytes, sizeof bytes,
+                                                &size, NULL, &error);
     g_assert_no_error (error);
+    g_assert_true (success);
     g_assert_cmpuint (size, ==, strlen (payload));
     g_assert_cmpstr (bytes, ==, payload);
     g_assert_true (g_input_stream_close (G_INPUT_STREAM (stream), NULL, &error));
@@ -283,6 +285,8 @@ test_bsdtar (void)
     g_assert_cmpint (g_mkdir (sub, 0700), ==, 0);
     source = g_build_filename (sub, "hello %.txt", NULL);
     large_path = g_build_filename (top, "large.bin", NULL);
+    /* Keep the preceding member aligned to the 7z decoder's buffer boundary:
+     * deferred solid skips at this boundary fail on libarchive before 3.7.5. */
     for (guint i = 0; i < 1024 * 1024; i++)
         large[i] = (guint8) g_test_rand_int ();
     g_assert_true (g_file_set_contents (large_path, (char *) large, 1024 * 1024, &error));

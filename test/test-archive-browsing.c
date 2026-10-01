@@ -515,6 +515,7 @@ assert_image_preview (GtkWidget *container)
     g_assert_nonnull (drawing);
     WAIT_FOR (gtk_widget_get_mapped (drawing));
     gboolean found = FALSE;
+    guint32 center_pixel = 0;
     gint64 deadline = g_get_monotonic_time () + 10000000;
     while (!found && g_get_monotonic_time () < deadline) {
         iterate ();
@@ -530,6 +531,9 @@ assert_image_preview (GtkWidget *container)
         cairo_surface_flush (surface);
         const guchar *pixels = cairo_image_surface_get_data (surface);
         int stride = cairo_image_surface_get_stride (surface);
+        if (width > 0 && height > 0)
+            memcpy (&center_pixel, pixels + (height / 2) * stride + (width / 2) * 4,
+                    sizeof center_pixel);
         for (int y = 0; y < height && !found; y++)
             for (int x = 0; x < width; x++) {
                 guint32 pixel;
@@ -540,6 +544,17 @@ assert_image_preview (GtkWidget *container)
                 }
             }
         cairo_surface_destroy (surface);
+    }
+    if (!found) {
+        GString *labels = g_string_new (NULL);
+        append_dialog_text (viewer, labels);
+        g_printerr ("Image preview in %s: drawing=%dx%d, center pixel=%#010x "
+                    "(expected %#010x); labels: %s\n",
+                    G_OBJECT_TYPE_NAME (container),
+                    gtk_widget_get_allocated_width (drawing),
+                    gtk_widget_get_allocated_height (drawing),
+                    center_pixel, 0xff12ab34, labels->str);
+        g_string_free (labels, TRUE);
     }
     g_assert_true (found);
 }
@@ -655,6 +670,10 @@ static void
 test_image_media (void)
 {
     Fixture fixture = fixture_new ();
+    /* A minimally sized window can leave only 12px above the details pane.
+     * Fit then shrinks the image to one antialiased pixel, not an opaque one. */
+    gtk_window_resize (GTK_WINDOW (fixture.window), 1000, 800);
+    WAIT_FOR (gtk_widget_get_allocated_height (GTK_WIDGET (fixture.window)) >= 800);
     g_autofree char *path = g_build_filename (g_getenv ("NEMO_TEST_ARCHIVES"), "media # %.zip", NULL);
     GFile *archive = g_file_new_for_path (path);
     GFile *root = nemo_archive_mounter_get_root (archive);

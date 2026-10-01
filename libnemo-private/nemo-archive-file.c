@@ -1418,6 +1418,32 @@ input_can_seek (GFileInputStream *stream)
     return TRUE;
 }
 
+static gboolean
+reader_skip_member (Reader *reader, GCancellable *cancellable, GError **error)
+{
+    if (archive_format (reader->archive) == ARCHIVE_FORMAT_7ZIP &&
+        archive_version_number () < 3007005) {
+        /* Before libarchive 3.7.5, a deferred solid skip ending exactly at a
+         * decoder buffer boundary can report false truncation. Consume prior
+         * members while opening/replaying a stream, but keep indexing lazy. */
+        const void *buffer;
+        size_t size;
+        la_int64_t offset;
+        int status;
+        do {
+            if (cancelled (cancellable, error))
+                return FALSE;
+            status = archive_read_data_block (reader->archive, &buffer, &size, &offset);
+        } while (status == ARCHIVE_OK);
+        if (status == ARCHIVE_EOF)
+            return TRUE;
+    } else if (archive_read_data_skip (reader->archive) == ARCHIVE_OK) {
+        return TRUE;
+    }
+    reader_error (reader, error);
+    return FALSE;
+}
+
 static Reader *
 reader_at_member_utf8 (GFile *file, gint64 member_ordinal, const char *identity,
                        GCancellable *cancellable, GError **error)
@@ -1439,8 +1465,7 @@ reader_at_member_utf8 (GFile *file, gint64 member_ordinal, const char *identity,
             reader_error (reader, error);
             goto failed;
         }
-        if (ordinal < member_ordinal && archive_read_data_skip (reader->archive) != ARCHIVE_OK) {
-            reader_error (reader, error);
+        if (ordinal < member_ordinal && !reader_skip_member (reader, cancellable, error)) {
             goto failed;
         }
     }

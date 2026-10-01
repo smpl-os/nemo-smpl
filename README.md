@@ -223,6 +223,8 @@ Archive links cannot be read or followed. At most 16 nested archive levels are
 supported, and unsafe or excessive member paths are rejected.
 Compressed members support seeking by replaying decompression when necessary;
 seeking in large or solid archives can therefore be slower than in local files.
+With libarchive older than 3.7.5, opening later 7z members also replays preceding
+members to avoid a solid-archive skipping bug; directory indexing remains lazy.
 
 ## Zen Mode
 
