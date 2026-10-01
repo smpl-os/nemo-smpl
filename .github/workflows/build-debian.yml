@@ -60,7 +60,8 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
           useradd -m builder
-          BUILD_ROOT=$(mktemp -d /tmp/nemo-debian-build.XXXXXX)
+          # Keep transfer fixtures on the host filesystem, not container overlayfs.
+          BUILD_ROOT=$(mktemp -d "$(dirname "$PWD")/nemo-debian-build.XXXXXX")
           cp -a . "$BUILD_ROOT/source"
           chown -R builder:builder "$BUILD_ROOT"
           runuser -u builder -- sh -c \
