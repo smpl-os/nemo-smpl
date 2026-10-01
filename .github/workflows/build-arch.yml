@@ -79,13 +79,16 @@ jobs:
                 dbus xorg-server-xvfb xorg-xauth libarchive sqlite libisofs libisoburn \
                 md4c poppler-glib mupdf-tools bubblewrap
 
-              meson setup build \
+              useradd -m builder
+              chown -R builder:builder /src
+
+              runuser -u builder -- meson setup build \
                 --prefix=/usr \
                 --buildtype=release \
                 -Dtracker=false
 
-              ninja -C build
-              python3 test/run-release-regressions.py build
+              runuser -u builder -- ninja -C build
+              runuser -u builder -- python3 test/run-release-regressions.py build
 
               rm -rf stage
               DESTDIR="$PWD/stage" ninja -C build install

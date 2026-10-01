@@ -392,6 +392,8 @@ transfer-safety and image-preview regressions before uploading packages.
 Arch releases include `SHA256SUMS-x86_64` for the pacman package and root filesystem
 archive. The packages include the document renderer and archive-creation worker;
 the native theme, archive, preview, and transfer release regressions must pass.
+Compilation and the release gate run as an unprivileged container user so
+unreadable-source tests exercise real permission failures instead of root bypasses.
 The old `release` branch is retained for
 history; it is no longer the publishing source. To publish manually, run **Build
 and Release Packages** on `main`; dispatching **Build Debian Package** alone only

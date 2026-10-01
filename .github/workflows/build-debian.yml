@@ -59,14 +59,19 @@ jobs:
           VERSION=$(grep -Po "version\s*:\s*'\K[^']+" meson.build | head -n1)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-          dpkg-buildpackage -us -uc -b
+          useradd -m builder
+          BUILD_ROOT=$(mktemp -d /tmp/nemo-debian-build.XXXXXX)
+          cp -a . "$BUILD_ROOT/source"
+          chown -R builder:builder "$BUILD_ROOT"
+          runuser -u builder -- sh -c \
+            'cd "$1" && dpkg-buildpackage -us -uc -b' sh "$BUILD_ROOT/source"
 
           mkdir -p debian-build
-          cp ../nemo_*_amd64.deb "debian-build/nemo-smpl_${VERSION}_amd64.deb"
-          cp ../nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb"
-          cp ../libnemo-extension1_*_amd64.deb \
-             ../libnemo-extension-dev_*_amd64.deb \
-             ../gir1.2-nemo-3.0_*_amd64.deb debian-build/
+          cp "$BUILD_ROOT"/nemo_*_amd64.deb "debian-build/nemo-smpl_${VERSION}_amd64.deb"
+          cp "$BUILD_ROOT"/nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb"
+          cp "$BUILD_ROOT"/libnemo-extension1_*_amd64.deb \
+             "$BUILD_ROOT"/libnemo-extension-dev_*_amd64.deb \
+             "$BUILD_ROOT"/gir1.2-nemo-3.0_*_amd64.deb debian-build/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
