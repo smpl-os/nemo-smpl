@@ -268,7 +268,9 @@ window**, including both panes, tab order, active tabs and the active pane.
 Closing the final tab also remembers its folder. Search tabs reopen the folder
 where the search started, not stale search results. Explicitly opening a folder
 still opens that requested folder; turning this option off stops saving and
-restoring the window. Remote folders require their connection to be available.
+restoring the window. Saved folders that no longer exist (for example, on an
+unplugged USB drive) reopen at Home without an error dialog; other tabs and the
+pane layout are preserved. Remote folders require their connection to be available.
 
 Right-click any directory in the breadcrumb bar to **Add to Favorites** or
 **Add Bookmark** without navigating there. These act on the clicked directory,

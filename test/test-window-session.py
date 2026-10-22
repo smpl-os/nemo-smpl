@@ -15,8 +15,10 @@ def main():
     inspector = str(Path(sys.argv[2]).resolve())
     first = profile / "remember-first"
     second = profile / "remember-second"
+    unplugged = profile / "unplugged-drive"
     first.mkdir()
     second.mkdir()
+    unplugged.mkdir()
     env = os.environ.copy()
     env.update(
         GSETTINGS_BACKEND="keyfile", G_DEBUG="fatal-criticals",
@@ -37,6 +39,9 @@ def main():
                 ([str(second)], second, None),
                 ([], None, "false"),
                 ([], second, "true"),
+                ([str(unplugged)], unplugged, None),
+                ([], None, None),
+                ([], None, None),
             ]
             for args, expected, restore in cases:
                 if restore is not None:
@@ -62,6 +67,8 @@ def main():
                 )
                 if process.wait(timeout=10) != 0:
                     raise RuntimeError(f"Nemo exited with status {process.returncode}")
+                if expected == unplugged:
+                    unplugged.rmdir()
         except (RuntimeError, subprocess.SubprocessError):
             log.flush()
             print(log_path.read_text(), file=sys.stderr)
