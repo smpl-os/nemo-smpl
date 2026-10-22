@@ -2533,7 +2533,9 @@ open_uri_list_in_pane (NemoWindowPane *pane, char **uris)
 		}
 
 		location = g_file_new_for_uri (uris[i]);
-		nemo_window_slot_open_location (slot, location, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+		nemo_window_slot_open_location (slot, location,
+		                               NEMO_WINDOW_OPEN_FLAG_SAME_SLOT |
+		                               NEMO_WINDOW_OPEN_FLAG_RESTORE);
 		g_object_unref (location);
 	}
 }

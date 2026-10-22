@@ -85,7 +85,7 @@ static void begin_location_change                     (NemoWindowSlot         *s
                                                        NemoLocationChangeType  type,
                                                        guint                       distance,
                                                        const char                 *scroll_pos,
-                                                       gboolean                    mount,
+                                                       NemoWindowOpenFlags         flags,
                                                        NemoWindowGoToCallback      callback,
                                                        gpointer                    user_data);
 static void free_location_change                      (NemoWindowSlot         *slot);
@@ -797,7 +797,7 @@ nemo_window_slot_open_location_full (NemoWindowSlot *slot,
                            new_selection,
                            NEMO_LOCATION_CHANGE_STANDARD,
                            0, NULL,
-                           (flags & NEMO_WINDOW_OPEN_FLAG_MOUNT),
+                           flags,
                            callback,
                            user_data);
 
@@ -814,7 +814,7 @@ nemo_window_slot_open_location_full (NemoWindowSlot *slot,
                                    new_selection,
                                    NEMO_LOCATION_CHANGE_STANDARD,
                                    0, NULL,
-                                   (flags & NEMO_WINDOW_OPEN_FLAG_MOUNT),
+                                   flags,
                                    NULL,
                                    NULL);
         }
@@ -870,7 +870,7 @@ report_callback (NemoWindowSlot *slot,
  * @distance: If type is back or forward, the index into the back or forward chain. If
  * type is standard or reload, this is ignored, and must be 0.
  * @scroll_pos: The file to scroll to when the location is loaded.
- * @mount: is a mount (always force a reload).
+ * @flags: opening options, including forced mount reload and session restoration.
  * @callback: function to be called when the location is changed.
  * @user_data: data for @callback.
  *
@@ -885,7 +885,7 @@ begin_location_change (NemoWindowSlot        *slot,
                        NemoLocationChangeType type,
                        guint                  distance,
                        const char            *scroll_pos,
-                       gboolean               mount,
+                       NemoWindowOpenFlags    flags,
                        NemoWindowGoToCallback callback,
                        gpointer               user_data)
 {
@@ -939,6 +939,7 @@ begin_location_change (NemoWindowSlot        *slot,
         slot->location_change_type = type;
         slot->location_change_distance = distance;
 	slot->tried_mount = FALSE;
+	slot->restoring_location = (flags & NEMO_WINDOW_OPEN_FLAG_RESTORE) != 0;
 	slot->pending_selection = eel_g_object_list_copy (new_selection);
 
 	slot->pending_scroll_to = g_strdup (scroll_pos);
@@ -1028,7 +1029,7 @@ begin_location_change (NemoWindowSlot        *slot,
 	 * after determining an initial view (in the components), then
 	 * we end up fetching things twice.
 	 */
-	if (type == NEMO_LOCATION_CHANGE_RELOAD || mount) {
+	if (type == NEMO_LOCATION_CHANGE_RELOAD || (flags & NEMO_WINDOW_OPEN_FLAG_MOUNT)) {
 		force_reload = TRUE;
 	} else if (!nemo_monitor_active ()) {
 		force_reload = TRUE;
@@ -1147,6 +1148,19 @@ got_file_info_for_view_selection_callback (NemoFile *file,
 		error = slot->mount_error;
 	} else {
 		error = nemo_file_get_file_info_error (file);
+	}
+
+	if (slot->restoring_location &&
+	    (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ||
+	     g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))) {
+		GFile *home = g_file_new_for_path (g_get_home_dir ());
+
+		nemo_window_slot_open_location_full (slot, home, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT,
+		                                     NULL, slot->open_callback,
+		                                     slot->open_callback_user_data);
+		g_object_unref (home);
+		nemo_file_unref (file);
+		return;
 	}
 
 	if (error && error->domain == G_IO_ERROR && error->code == G_IO_ERROR_NOT_MOUNTED &&
@@ -1960,6 +1974,7 @@ free_location_change (NemoWindowSlot *slot)
 	window = nemo_window_slot_get_window (slot);
 
 	g_clear_object (&slot->pending_location);
+	slot->restoring_location = FALSE;
 	g_list_free_full (slot->pending_selection, g_object_unref);
 	slot->pending_selection = NULL;
 
@@ -2240,7 +2255,7 @@ nemo_window_back_or_forward (NemoWindow *window,
 			 back ? NEMO_LOCATION_CHANGE_BACK : NEMO_LOCATION_CHANGE_FORWARD,
 			 distance,
 			 scroll_pos,
-             FALSE,
+             0,
 			 NULL, NULL);
 
 		g_clear_object (&old_location);
@@ -2277,7 +2292,7 @@ nemo_window_slot_force_reload (NemoWindowSlot *slot)
 	begin_location_change
 		(slot, location, location, selection,
 		 NEMO_LOCATION_CHANGE_RELOAD, 0, current_pos,
-		 FALSE, NULL, NULL);
+		 0, NULL, NULL);
         g_free (current_pos);
 	g_object_unref (location);
 	g_list_free_full (selection, g_object_unref);

@@ -105,6 +105,96 @@ test_last_tab_close (void)
 }
 
 static void
+assert_no_error_dialog (void)
+{
+    GList *windows = gtk_window_list_toplevels ();
+    for (GList *l = windows; l != NULL; l = l->next)
+        g_assert_false (GTK_IS_MESSAGE_DIALOG (l->data) &&
+                        gtk_widget_get_visible (GTK_WIDGET (l->data)));
+    g_list_free (windows);
+}
+
+static void
+record_open_error (NemoWindow *window, GError *error, gpointer user_data)
+{
+    GError **result = user_data;
+    g_assert_nonnull (error);
+    *result = g_error_copy (error);
+}
+
+static void
+test_restore_missing_folder (void)
+{
+    Fixture fixture = fixture_new ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP, TRUE);
+    nemo_window_close (fixture.window);
+    g_autofree char *path = g_build_filename (g_getenv ("NEMO_TEST_PROFILE"), "unplugged", "folder", NULL);
+    g_autoptr(GFile) missing = g_file_new_for_path (path);
+    g_autofree char *uri = g_file_get_uri (missing);
+    const char *uris[] = { uri, NULL };
+    g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_LEFT, uris);
+    reopen_fixture (&fixture, FALSE);
+    g_autoptr(GFile) home = g_file_new_for_path (g_get_home_dir ());
+    WAIT_FOR (slot_at (fixture.slot, home));
+    g_assert_true (gtk_widget_get_visible (GTK_WIDGET (fixture.window)));
+    assert_no_error_dialog ();
+    nemo_window_close (fixture.window);
+    assert_saved_folder (NEMO_WINDOW_STATE_SAVED_TABS_LEFT, home);
+    reopen_fixture (&fixture, FALSE);
+    WAIT_FOR (slot_at (fixture.slot, home));
+    assert_no_error_dialog ();
+    /* A later explicit request must still report its error, not restore Home. */
+    g_autoptr(GError) error = NULL;
+    nemo_window_slot_open_location_full (fixture.slot, missing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT,
+                                        NULL, record_open_error, &error);
+    WAIT_FOR (error != NULL);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    WAIT_FOR (slot_at (fixture.slot, home));
+    fixture_clear (&fixture);
+}
+
+static void
+test_restore_missing_pane_tabs (void)
+{
+    Fixture fixture = fixture_new ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP, TRUE);
+    nemo_window_close (fixture.window);
+    g_autofree char *missing_path = g_build_filename (g_getenv ("NEMO_TEST_PROFILE"), "unplugged", NULL);
+    g_autoptr(GFile) missing = g_file_new_for_path (missing_path);
+    g_autofree char *missing_uri = g_file_get_uri (missing);
+    g_autofree char *origin_uri = g_file_get_uri (fixture.origin);
+    g_autofree char *containing_uri = g_file_get_uri (fixture.containing);
+    /* A formerly saved directory can also have been replaced by a file. */
+    g_autofree char *item_uri = g_file_get_uri (fixture.item);
+    g_autofree char *not_directory_uri = g_strconcat (item_uri, "/child", NULL);
+    const char *left_uris[] = { missing_uri, origin_uri, NULL };
+    const char *right_uris[] = { containing_uri, not_directory_uri, missing_uri, NULL };
+    g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_LEFT, left_uris);
+    g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_RIGHT, right_uris);
+    g_settings_set_boolean (nemo_window_state, NEMO_WINDOW_STATE_SAVED_SPLIT_VIEW, TRUE);
+    g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_LEFT, 1);
+    g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_RIGHT, 2);
+    g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_PANE, 1);
+    reopen_fixture (&fixture, FALSE);
+    GtkPaned *paned = GTK_PANED (fixture.window->details->split_view_hpane);
+    NemoWindowPane *left = NEMO_WINDOW_PANE (gtk_paned_get_child1 (paned));
+    NemoWindowPane *right = NEMO_WINDOW_PANE (gtk_paned_get_child2 (paned));
+    g_autoptr(GFile) home = g_file_new_for_path (g_get_home_dir ());
+    WAIT_FOR (slot_at (pane_tab (left, 0), home));
+    WAIT_FOR (slot_at (pane_tab (left, 1), fixture.origin));
+    WAIT_FOR (slot_at (pane_tab (right, 0), fixture.containing));
+    WAIT_FOR (slot_at (pane_tab (right, 1), home));
+    WAIT_FOR (slot_at (pane_tab (right, 2), home));
+    g_assert_cmpint (gtk_notebook_get_n_pages (GTK_NOTEBOOK (left->notebook)), ==, 2);
+    g_assert_cmpint (gtk_notebook_get_n_pages (GTK_NOTEBOOK (right->notebook)), ==, 3);
+    g_assert_cmpint (gtk_notebook_get_current_page (GTK_NOTEBOOK (left->notebook)), ==, 1);
+    g_assert_cmpint (gtk_notebook_get_current_page (GTK_NOTEBOOK (right->notebook)), ==, 2);
+    g_assert_true (nemo_window_get_active_pane (fixture.window) == right);
+    assert_no_error_dialog ();
+    fixture_clear (&fixture);
+}
+
+static void
 test_disabled_restore (void)
 {
     Fixture fixture = fixture_new ();
@@ -357,6 +447,8 @@ main (int argc, char **argv)
     static const FolderCase cases[] = {
         { "/folders/restore-panes-and-tabs", test_restore_panes_and_tabs },
         { "/folders/last-tab-close", test_last_tab_close },
+        { "/folders/restore-missing-folder", test_restore_missing_folder },
+        { "/folders/restore-missing-pane-tabs", test_restore_missing_pane_tabs },
         { "/folders/disabled-restore", test_disabled_restore },
         { "/folders/explicit-location", test_explicit_location },
         { "/folders/search-origin", test_search_origin_saved },

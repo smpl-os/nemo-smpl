@@ -47,7 +47,9 @@ typedef enum {
         NEMO_WINDOW_OPEN_FLAG_SEARCH = 1<<3,
         NEMO_WINDOW_OPEN_FLAG_MOUNT = 1<<4,
         /* Explicit panel navigation must not open a spatial-mode window. */
-        NEMO_WINDOW_OPEN_FLAG_SAME_SLOT = 1<<5
+        NEMO_WINDOW_OPEN_FLAG_SAME_SLOT = 1<<5,
+        /* Missing saved locations reopen at Home without an error dialog. */
+        NEMO_WINDOW_OPEN_FLAG_RESTORE = 1<<6
 } NemoWindowOpenFlags;
 
 #endif /* __NEMO_WINDOW_TYPES_H__ */
