@@ -78,6 +78,7 @@ sudo apt-get install -y \
   libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap \
   libarchive-dev libarchive-tools libsqlite3-dev libisofs-dev xorriso \
   gobject-introspection libgirepository1.0-dev \
+  gir1.2-gio-2.0-dev gir1.2-gtk-3.0-dev \
   intltool itstool gtk-doc-tools
 ```
 
@@ -117,6 +118,11 @@ sudo pacman -S --needed \
 </details>
 
 ---
+
+Release packaging checks Arch runtime dependencies and verifies the staged
+rootfs archive against its SHA-256 checksum before creating the pacman package.
+Debian packaging uses the Python and GObject introspection debhelper sequences
+to generate runtime dependencies and extension development metadata.
 
 ## Archive browsing dependencies
 

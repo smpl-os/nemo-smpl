@@ -122,7 +122,6 @@ nemo_launch_application_by_uri (GAppInfo *application,
 	GdkDisplay *display;
 	GdkAppLaunchContext *launch_context;
 	NemoIconInfo *icon;
-	int count;
 
 	g_assert (uris != NULL);
 
@@ -169,16 +168,11 @@ nemo_launch_application_by_uri (GAppInfo *application,
 		return;
 	}
 
-	/* count the number of uris with local paths */
-	count = 0;
 	locations = NULL;
 	for (l = uris; l != NULL; l = l->next) {
 		uri = l->data;
 		
 		location = g_file_new_for_uri (uri);
-		if (g_file_is_native (location)) {
-			count++;
-		}
 		locations = g_list_prepend (locations, location);
 	}
 	locations = g_list_reverse (locations);

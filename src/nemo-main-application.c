@@ -211,11 +211,9 @@ mount_removed_callback (GVolumeMonitor *monitor,
 	NemoWindowSlot *force_no_close_slot;
 	GFile *root, *computer;
 	gchar *uri;
-	guint n_slots;
 
 	close_list = NULL;
 	force_no_close_slot = NULL;
-	n_slots = 0;
 
 	/* Check and see if any of the open windows are displaying contents from the unmounted mount */
 	window_list = gtk_application_get_windows (GTK_APPLICATION (application));
@@ -246,7 +244,6 @@ mount_removed_callback (GVolumeMonitor *monitor,
 				pane = (NemoWindowPane*) lp->data;
 				for (l = pane->slots; l != NULL; l = l->next) {
 					slot = l->data;
-					n_slots++;
 					if (nemo_window_slot_should_close_with_mount (slot, mount)) {
 						close_list = g_list_prepend (close_list, slot);
 					}

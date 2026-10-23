@@ -7735,7 +7735,6 @@ move_files (CopyMoveJob *job,
 	GList *l;
 	GFile *src;
 	gboolean same_fs;
-	int i;
 	GdkPoint *point;
 	gboolean skipped_file;
 	MoveFileCopyFallback *fallback;
@@ -7743,7 +7742,6 @@ common = &job->common;
 
 	report_copy_progress (job, source_info, transfer_info);
 
-	i = 0;
 	for (l = fallbacks;
 	     l != NULL && !job_aborted (common);
 	     l = l->next) {
@@ -7771,7 +7769,6 @@ common = &job->common;
 				source_info, transfer_info,
 				job->debuting_files,
 				point, fallback->overwrite, &skipped_file, FALSE);
-		i++;
 	}
 }
 
