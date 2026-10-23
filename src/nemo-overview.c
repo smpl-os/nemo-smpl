@@ -17,6 +17,7 @@
 
 #include <glib/gi18n.h>
 #include <gio/gio.h>
+#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <string.h>
@@ -55,9 +56,14 @@ static inline void
 set_thread_low_priority (void)
 {
 	/* Idle I/O class: only use disk when nobody else needs it */
-	syscall (SYS_ioprio_set, IOPRIO_WHO_THREAD, 0,
-	         IOPRIO_PRIO_VALUE (IOPRIO_CLASS_IDLE, 0));
-	nice (19);
+	if (syscall (SYS_ioprio_set, IOPRIO_WHO_THREAD, 0,
+	             IOPRIO_PRIO_VALUE (IOPRIO_CLASS_IDLE, 0)) == -1) {
+		g_warning ("Could not lower disk overview I/O priority: %s", g_strerror (errno));
+	}
+	errno = 0;
+	if (nice (19) == -1 && errno != 0) {
+		g_warning ("Could not lower disk overview CPU priority: %s", g_strerror (errno));
+	}
 }
 #else
 static inline void set_thread_low_priority (void) { }

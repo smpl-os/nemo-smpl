@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.build-ref || github.ref }}
 
@@ -40,6 +40,7 @@ jobs:
             libgstreamer-plugins-base1.0-dev libgsf-1-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gobject-introspection libgirepository1.0-dev \
+            gir1.2-gio-2.0-dev gir1.2-gtk-3.0-dev \
             gtk-doc-tools cinnamon-l10n libgtk-layer-shell-dev \
             libpango1.0-dev libatk1.0-dev libgail-3-dev \
             libxext-dev libxrender-dev libwayland-dev \
@@ -75,7 +76,7 @@ jobs:
              "$BUILD_ROOT"/gir1.2-nemo-3.0_*_amd64.deb debian-build/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nemo-smpl-debian
           path: debian-build/*.deb
@@ -83,7 +84,7 @@ jobs:
 
       - name: Add to GitHub Release
         if: inputs.publish-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: debian-build/*.deb
           tag_name: v${{ env.VERSION }}

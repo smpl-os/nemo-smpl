@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.bump.outputs.sha || github.ref }}
 
@@ -107,6 +107,7 @@ jobs:
           ROOTFS="nemo-smpl-${{ env.VERSION }}-arch-${{ matrix.arch }}-rootfs.tar.zst"
           mkdir -p pkg-build
           cp "$ROOTFS" pkg-build/
+          ROOTFS_SHA256=$(sha256sum "$ROOTFS" | cut -d ' ' -f1)
 
           cat > pkg-build/PKGBUILD << PKGEOF
           pkgname=nemo-smpl
@@ -129,8 +130,10 @@ jobs:
           provides=(nemo)
           conflicts=(nemo)
           replaces=(nemo)
+          # The staged release binaries have no debug information to split out.
+          options=(!debug)
           source=("$ROOTFS")
-          sha256sums=(SKIP)
+          sha256sums=("$ROOTFS_SHA256")
 
           package() {
             tar -xf "\$srcdir/$ROOTFS" -C "\$pkgdir"
@@ -157,7 +160,7 @@ jobs:
               echo "PKGDEST=/home/builder/output" > /home/builder/.makepkg.conf
               chown builder:builder /home/builder/.makepkg.conf
               cd /home/builder/pkg
-              sudo -u builder makepkg -d --noconfirm --skipchecksums --skipinteg
+              sudo -u builder makepkg --syncdeps --noconfirm
               ls -lh /home/builder/output/
               cp /home/builder/output/*.pkg.tar.zst /build/
             '
@@ -176,7 +179,7 @@ jobs:
           ls -lh nemo-smpl-* "SHA256SUMS-${{ matrix.arch }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nemo-smpl-arch-${{ matrix.arch }}
           path: |
@@ -187,7 +190,7 @@ jobs:
 
       - name: Create or update GitHub Release
         if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             nemo-smpl-*-arch-${{ matrix.arch }}-rootfs.tar.zst

@@ -43,7 +43,12 @@ G_BEGIN_DECLS
 typedef struct NemoFile          NemoFile;
 #endif
 
+/* The scanner needs the interface's own opaque type, not the implementation alias. */
+#ifdef __GI_SCANNER__
+typedef struct _NemoFileInfo NemoFileInfo;
+#else
 typedef NemoFile NemoFileInfo;
+#endif
 typedef struct _NemoFileInfoInterface NemoFileInfoInterface;
 
 struct _NemoFileInfoInterface 
