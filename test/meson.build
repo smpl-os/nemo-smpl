@@ -210,7 +210,9 @@ if smpl_features_enabled
       include_directories: [rootInclude, include_directories('../src')],
       dependencies: nemo_deps,
       c_args: nemo_definitions,
-      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=nemo_mime_activate_files'],
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=nemo_mime_activate_files',
+                  '-Wl,--wrap=nemo_file_operations_trash_or_delete',
+                  '-Wl,--wrap=eel_vfs_supports_uri_scheme'],
     ),
     executable('test-search-navigation',
       'test-search-navigation.c',
@@ -273,6 +275,7 @@ if smpl_features_enabled
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,
+      link_args: ['-Wl,--wrap=nemo_inhibit_power_manager'],
     ),
     executable('test-nemo-properties-volume',
       [

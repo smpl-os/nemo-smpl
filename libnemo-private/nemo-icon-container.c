@@ -2253,6 +2253,33 @@ keyboard_move_to (NemoIconContainer *container,
 		return;
 	}
 
+#ifdef NEMO_SMPL
+	if (!nemo_icon_container_get_is_desktop (container) && event != NULL &&
+	    (event->state & (gtk_accelerator_get_default_mod_mask () & ~GDK_SHIFT_MASK)) == 0) {
+		gboolean shift = (event->state & GDK_SHIFT_MASK) != 0;
+		gboolean marking = shift &&
+			(event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_KP_Up ||
+			 event->keyval == GDK_KEY_Down || event->keyval == GDK_KEY_KP_Down ||
+			 event->keyval == GDK_KEY_Left || event->keyval == GDK_KEY_KP_Left ||
+			 event->keyval == GDK_KEY_Right || event->keyval == GDK_KEY_KP_Right ||
+			 event->keyval == GDK_KEY_Insert || event->keyval == GDK_KEY_KP_Insert);
+		if (marking || (!shift && container->details->keyboard_marking)) {
+			if (!container->details->keyboard_marking && from != NULL &&
+			    !has_multiple_selection (container))
+				unselect_all (container);
+			container->details->keyboard_marking = TRUE;
+			if (marking && from != NULL) {
+				icon_toggle_selected (container, from);
+				g_signal_emit (container, signals[SELECTION_CHANGED], 0);
+			}
+			set_keyboard_focus (container, icon);
+			clear_keyboard_rubberband_start (container);
+			schedule_keyboard_icon_reveal (container, icon);
+			return;
+		}
+	}
+#endif
+
 	if (event != NULL &&
 	    (event->state & GDK_CONTROL_MASK) != 0 &&
 	    (event->state & GDK_SHIFT_MASK) == 0) {
@@ -2325,6 +2352,10 @@ keyboard_home (NemoIconContainer *container,
 	from = find_best_selected_icon (container, NULL,
 					rightmost_in_bottom_row,
 					NULL);
+#ifdef NEMO_SMPL
+	if (container->details->keyboard_marking && container->details->keyboard_focus != NULL)
+		from = container->details->keyboard_focus;
+#endif
 	to = find_best_icon (container, NULL, leftmost_in_top_row, NULL);
 
 	keyboard_move_to (container, to, from, event);
@@ -2343,6 +2374,10 @@ keyboard_end (NemoIconContainer *container,
 	from = find_best_selected_icon (container, NULL,
 					leftmost_in_top_row,
 					NULL);
+#ifdef NEMO_SMPL
+	if (container->details->keyboard_marking && container->details->keyboard_focus != NULL)
+		from = container->details->keyboard_focus;
+#endif
 	to = find_best_icon (container, NULL,
 			     nemo_icon_container_is_layout_vertical (container) ?
 			     last_column_lowest :
@@ -3037,6 +3072,10 @@ button_press_event (GtkWidget *widget,
 	gboolean clicked_on_item;
 
 	container = NEMO_ICON_CONTAINER (widget);
+#ifdef NEMO_SMPL
+	if (event->button == GDK_BUTTON_PRIMARY)
+		container->details->keyboard_marking = FALSE;
+#endif
         container->details->button_down_time = event->time;
 
         /* Forget about the old keyboard selection now that we've started mousing. */
@@ -4258,6 +4297,9 @@ nemo_icon_container_ensure_interactive_directory (NemoIconContainer *container)
 static gboolean
 nemo_icon_container_start_interactive_search (NemoIconContainer *container)
 {
+#ifdef NEMO_SMPL
+	container->details->keyboard_marking = FALSE;
+#endif
 	/* We only start interactive search if we have focus.  If one of our
 	 * children have focus, we don't want to start the search.
 	 */
@@ -4354,6 +4396,21 @@ key_press_event (GtkWidget *widget,
 		return handled;
 	} else {
 		switch (event->keyval) {
+		case GDK_KEY_Insert:
+		case GDK_KEY_KP_Insert:
+#ifdef NEMO_SMPL
+			if (!nemo_icon_container_get_is_desktop (container) &&
+			    (event->state & gtk_accelerator_get_default_mod_mask ()) == 0) {
+				GdkEventKey mark_event = *event;
+				mark_event.state |= GDK_SHIFT_MASK;
+				if (nemo_icon_container_is_layout_vertical (container))
+					keyboard_down (container, &mark_event);
+				else
+					keyboard_right (container, &mark_event);
+				handled = TRUE;
+			}
+#endif
+			break;
 		case GDK_KEY_Home:
 		case GDK_KEY_KP_Home:
 			keyboard_home (container, event);
@@ -4428,6 +4485,23 @@ key_press_event (GtkWidget *widget,
 			break;
  		case GDK_KEY_Escape:
 			handled = undo_stretching (container);
+#ifdef NEMO_SMPL
+			if (!handled && !nemo_icon_container_get_is_desktop (container) &&
+			    (event->state & gtk_accelerator_get_default_mod_mask ()) == 0) {
+				g_signal_emit (container, signals[CHECK_FILTER_EVENT], 0, (GdkEvent *) event, &handled);
+				if (!handled) {
+					NemoIcon *cursor = container->details->keyboard_focus;
+					if (cursor == NULL)
+						cursor = get_first_selected_icon (container);
+					unselect_all (container);
+					if (cursor != NULL)
+						set_keyboard_focus (container, cursor);
+					container->details->keyboard_marking = FALSE;
+					g_signal_emit (container, signals[SELECTION_CHANGED], 0);
+					handled = TRUE;
+				}
+			}
+#endif
 			break;
  		case GDK_KEY_plus:
  		case GDK_KEY_minus:
@@ -5412,6 +5486,9 @@ nemo_icon_container_clear (NemoIconContainer *container)
 	g_return_if_fail (NEMO_IS_ICON_CONTAINER (container));
 
 	details = container->details;
+#ifdef NEMO_SMPL
+	details->keyboard_marking = FALSE;
+#endif
 	nemo_icon_container_search_dialog_hide (details->search_window, container);
 	details->layout_timestamp = UNDEFINED_TIME;
 	details->store_layout_timestamps_when_finishing_new_icons = FALSE;

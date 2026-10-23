@@ -127,6 +127,11 @@ keyboard focus.
 In F3, **Ctrl+Left / Ctrl+Right** switch files; both are configurable under
 **Preferences → Keyboard Shortcuts → Quick Preview**. The file-navigation
 button tooltips follow those settings. Plain Left/Right still seek in media.
+**Delete** in F3 sends only the currently previewed file to Trash using Nemo's
+normal confirmations and error handling, including a permanent-delete prompt
+if trashing is unavailable. After successful removal, preview advances to the
+next file (or the previous file at the end); removing the last file closes F3.
+Delete still edits text when a preview search entry has focus.
 
 Unrecognized regular files use the same paged **hex preview** in the sidebar as
 in F3, without taking focus from the file list. Directories and special files
@@ -295,6 +300,23 @@ Favorites. Both are configurable under **Preferences → Keyboard Shortcuts →
 Bookmarks**. The new Favorites shortcut leaves an existing assignment alone.
 
 ## Keyboard Shortcuts
+
+### Marking files with the keyboard
+
+List, icon and compact views support Commander-style persistent marks.
+**Shift+Up/Down** (or **Shift+Left/Right** across icon rows) toggles the file
+you are leaving and moves the cursor;
+**Insert** toggles the current file and advances to the next one. Once marking
+starts, plain arrows move the cursor without clearing your marks, so you can
+skip files and mark another group. **Delete** acts on the marked files.
+**Escape** clears all marks and exits keyboard marking; cancelling renaming,
+type-to-jump or an active filter takes precedence. A normal left click also
+returns to regular mouse selection.
+
+The cursor and the marks are separate: the file the cursor moves onto is not
+automatically added to the marked files. **Ctrl+Up/Down** retain their folder
+navigation shortcuts. Space retains its existing preview/filter behavior.
+Desktop icons retain their existing selection behavior.
 
 | Shortcut | Action |
 |----------|--------|

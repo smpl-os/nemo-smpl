@@ -30,6 +30,7 @@
 #include "nemo-image-viewer.h"
 #ifdef NEMO_SMPL
 #include "nemo-preview-details.h"
+#include <libnemo-private/nemo-file-operations.h>
 #endif
 #include "nemo-preview-utils.h"
 #include "nemo-dir-analyzer.h"
@@ -67,6 +68,10 @@ typedef enum {
 	PREVIEW_HEX,
 	PREVIEW_DIR,
 } PreviewMode;
+
+#ifdef NEMO_SMPL
+typedef struct _PreviewRequest PreviewRequest;
+#endif
 
 struct _NemoQuickPreview {
 	GtkWindow parent_instance;
@@ -149,6 +154,7 @@ struct _NemoQuickPreview {
 	GtkWidget   *status_label;
 	GCancellable *content_cancel;
 	GCancellable *navigation_cancel;
+	PreviewRequest *delete_request;
 	gboolean     destroyed;
 #endif
 };
@@ -207,10 +213,10 @@ image_load_failed (NemoImageViewer *viewer, const char *message,
 	}
 }
 
-typedef struct {
+struct _PreviewRequest {
 	GWeakRef preview;
 	GFile *file;
-} PreviewRequest;
+};
 
 static PreviewRequest *
 preview_request_new (NemoQuickPreview *self, GFile *file)
@@ -458,6 +464,86 @@ static void     load_file_content      (NemoQuickPreview *self, GFile *file);
 static void     navigate_to_offset     (NemoQuickPreview *self, gint offset);
 static void     update_navigation_ui   (NemoQuickPreview *self);
 
+#ifdef NEMO_SMPL
+static void
+preview_deleted_file_checked (GObject *source, GAsyncResult *result, gpointer data)
+{
+	PreviewRequest *request = data;
+	NemoQuickPreview *self = g_weak_ref_get (&request->preview);
+	GError *error = NULL;
+	GFileInfo *info = g_file_query_info_finish (G_FILE (source), result, &error);
+
+	if (self != NULL && !self->destroyed && self->delete_request == request) {
+		self->delete_request = NULL;
+		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)) {
+			cancel_request (&self->navigation_cancel);
+			if (self->dir_files != NULL) {
+				for (guint i = 0; i < self->dir_files->len; i++) {
+					if (g_file_equal (g_ptr_array_index (self->dir_files, i), request->file)) {
+						g_ptr_array_remove_index (self->dir_files, i);
+						self->current_index = MIN ((gint) i, (gint) self->dir_files->len - 1);
+						break;
+					}
+				}
+			}
+			if (self->dir_files == NULL || self->dir_files->len == 0) {
+				nemo_quick_preview_dismiss (self);
+			} else {
+				GFile *next = g_ptr_array_index (self->dir_files, self->current_index);
+				g_set_object (&self->current_file, next);
+				load_file_content (self, next);
+				update_navigation_ui (self);
+			}
+		} else {
+			update_navigation_ui (self);
+			if (error != NULL) {
+				gtk_label_set_text (GTK_LABEL (self->counter_label), _("Could not check deleted file"));
+				gtk_widget_set_tooltip_text (self->counter_label, error->message);
+				g_warning ("Quick preview delete check: %s", error->message);
+			}
+		}
+	}
+	g_clear_object (&info);
+	g_clear_error (&error);
+	g_clear_object (&self);
+	preview_request_free (request);
+}
+
+static void
+preview_delete_done (GHashTable *uris, gboolean user_cancel, gpointer data)
+{
+	PreviewRequest *request = data;
+	NemoQuickPreview *self = g_weak_ref_get (&request->preview);
+	gboolean current = self != NULL && !self->destroyed && self->delete_request == request;
+
+	if (current && user_cancel) {
+		self->delete_request = NULL;
+		update_navigation_ui (self);
+	}
+	g_clear_object (&self);
+	if (current && !user_cancel) {
+		/* Completion can also mean an error was skipped, not that removal succeeded. */
+		g_file_query_info_async (request->file, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+		                         G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, G_PRIORITY_DEFAULT,
+		                         NULL, preview_deleted_file_checked, request);
+	} else {
+		preview_request_free (request);
+	}
+}
+
+static void
+preview_delete_current_file (NemoQuickPreview *self)
+{
+	if (self->delete_request != NULL || self->current_file == NULL)
+		return;
+	PreviewRequest *request = preview_request_new (self, self->current_file);
+	self->delete_request = request;
+	update_navigation_ui (self);
+	GList files = { .data = request->file };
+	nemo_file_operations_trash_or_delete (&files, GTK_WINDOW (self), preview_delete_done, request);
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Key press — search bindings, navigation, media controls            */
 /* ------------------------------------------------------------------ */
@@ -523,6 +609,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 	}
 	if (editing && event->keyval != GDK_KEY_Escape)
 		return GDK_EVENT_PROPAGATE;
+	if ((event->keyval == GDK_KEY_Delete || event->keyval == GDK_KEY_KP_Delete) && modifiers == 0) {
+		preview_delete_current_file (self);
+		return GDK_EVENT_STOP;
+	}
 #endif
 
 	switch (event->keyval) {
@@ -1175,6 +1265,7 @@ navigation_clear (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
 	cancel_request (&self->navigation_cancel);
+	self->delete_request = NULL;
 #endif
 	g_clear_object (&self->current_file);
 	g_clear_object (&self->current_dir);
@@ -1397,6 +1488,12 @@ update_navigation_ui (NemoQuickPreview *self)
 	                          self->current_index > 0);
 	gtk_widget_set_sensitive (self->next_button,
 	                          self->current_index < (gint) self->dir_files->len - 1);
+#ifdef NEMO_SMPL
+	if (self->delete_request != NULL) {
+		gtk_widget_set_sensitive (self->prev_button, FALSE);
+		gtk_widget_set_sensitive (self->next_button, FALSE);
+	}
+#endif
 
 	text = g_strdup_printf ("%d / %d",
 	                         self->current_index + 1,
@@ -1568,6 +1665,10 @@ navigate_to_offset (NemoQuickPreview *self, gint offset)
 	gint new_index;
 	GFile *file;
 
+#ifdef NEMO_SMPL
+	if (self->delete_request != NULL)
+		return;
+#endif
 	if (self->dir_files == NULL || self->dir_files->len == 0)
 		return;
 

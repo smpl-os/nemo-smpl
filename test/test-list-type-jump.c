@@ -7,6 +7,7 @@
 #include "../src/nemo-list-model.h"
 #include "../src/nemo-archive-mounter.h"
 #include <libnemo-private/nemo-file-private.h>
+#include <libnemo-private/nemo-file-operations.h>
 #include <libnemo-private/nemo-metadata.h>
 #include <libnemo-private/nemo-icon-private.h>
 #include <archive.h>
@@ -16,6 +17,29 @@ static const char *names[] = {
     "curveycase.txt", "misscurve.txt", "misscurve2.txt", "missile.txt", "z-last.txt"
 };
 static guint activations;
+static guint trash_requests;
+
+gboolean __real_eel_vfs_supports_uri_scheme (const char *scheme);
+
+gboolean
+__wrap_eel_vfs_supports_uri_scheme (const char *scheme)
+{
+    /* The private local VFS has no GVfs trash browser, but can trash local files. */
+    return g_str_equal (scheme, "trash") || __real_eel_vfs_supports_uri_scheme (scheme);
+}
+
+void
+__wrap_nemo_file_operations_trash_or_delete (GList *files, GtkWindow *window,
+                                             NemoDeleteCallback callback, gpointer data)
+{
+    g_assert_cmpuint (g_list_length (files), ==, 2);
+    for (GList *l = files; l != NULL; l = l->next) {
+        g_autofree char *name = g_file_get_basename (l->data);
+        g_assert_true (g_str_equal (name, names[2]) || g_str_equal (name, names[3]));
+    }
+    trash_requests++;
+    callback (NULL, TRUE, data);
+}
 
 void
 __wrap_nemo_mime_activate_files (GtkWindow *window, NemoWindowSlot *slot, GList *files,
@@ -67,6 +91,42 @@ selected (NemoView *view, const char *name)
     return matches;
 }
 
+static gboolean
+send_selection_key (GtkWidget *widget, guint key, GdkModifierType modifiers)
+{
+    GdkEvent *event = gdk_event_new (GDK_KEY_PRESS);
+    event->key.window = g_object_ref (gtk_widget_get_window (widget));
+    event->key.keyval = key;
+    event->key.state = modifiers;
+    event->key.send_event = TRUE;
+    GdkKeymapKey *entries = NULL;
+    int n_entries = 0;
+    if (gdk_keymap_get_entries_for_keyval (gdk_keymap_get_for_display (
+        gtk_widget_get_display (widget)), key, &entries, &n_entries)) {
+        event->key.hardware_keycode = entries[0].keycode;
+        event->key.group = entries[0].group;
+        g_free (entries);
+    }
+    GdkSeat *seat = gdk_display_get_default_seat (gtk_widget_get_display (widget));
+    gdk_event_set_device (event, gdk_seat_get_keyboard (seat));
+    gboolean handled = gtk_widget_event (widget, event);
+    gdk_event_free (event);
+    return handled;
+}
+
+static void
+assert_marks (NemoView *view, const char *first, const char *second)
+{
+    GList *files = nemo_view_get_selection (view);
+    g_assert_cmpuint (g_list_length (files), ==, (first != NULL) + (second != NULL));
+    for (GList *l = files; l != NULL; l = l->next) {
+        g_autofree char *name = nemo_file_get_name (l->data);
+        if (g_strcmp0 (name, second) != 0)
+            g_assert_cmpstr (name, ==, first);
+    }
+    nemo_file_list_free (files);
+}
+
 static Fixture
 list_fixture (GtkTreeView **tree)
 {
@@ -100,6 +160,78 @@ list_fixture_clear (Fixture *fixture)
         g_object_unref (file);
     }
     fixture_clear (fixture);
+}
+
+static void
+test_keyboard_marking (void)
+{
+    GtkTreeView *tree = NULL;
+    Fixture fixture = list_fixture (&tree);
+    const char *views[] = { NEMO_LIST_VIEW_ID, NEMO_ICON_VIEW_ID, FM_COMPACT_VIEW_ID };
+    for (guint i = 0; i < G_N_ELEMENTS (views); i++) {
+        g_test_message ("Commander marking in %s", views[i]);
+        nemo_window_slot_set_content_view (fixture.slot, views[i]);
+        WAIT_FOR (g_strcmp0 (nemo_view_get_view_id (fixture.slot->content_view), views[i]) == 0 &&
+                  !nemo_view_get_loading (fixture.slot->content_view));
+        NemoView *view = fixture.slot->content_view;
+        g_autoptr(GFile) first = g_file_get_child (fixture.origin, names[0]);
+        NemoFile *file = nemo_file_get (first);
+        GList one = { .data = file };
+        nemo_view_set_selection (view, &one);
+        nemo_file_unref (file);
+        nemo_view_grab_focus (view);
+        GtkWidget *keys;
+        guint down, up;
+        if (NEMO_IS_LIST_VIEW (view)) {
+            tree = NULL;
+            find_tree (GTK_WIDGET (view), &tree);
+            GtkTreeIter iter;
+            g_assert_true (named_iter (tree, names[0], &iter));
+            GtkTreePath *path = gtk_tree_model_get_path (gtk_tree_view_get_model (tree), &iter);
+            gtk_tree_view_set_cursor (tree, path, NULL, FALSE);
+            gtk_tree_path_free (path);
+            keys = GTK_WIDGET (tree);
+            down = GDK_KEY_Down;
+            up = GDK_KEY_Up;
+        } else {
+            NemoIconContainer *container = nemo_icon_view_get_icon_container (NEMO_ICON_VIEW (view));
+            keys = GTK_WIDGET (container);
+            nemo_icon_container_layout_now (container);
+            down = g_str_equal (views[i], FM_COMPACT_VIEW_ID) ? GDK_KEY_Down : GDK_KEY_Right;
+            up = g_str_equal (views[i], FM_COMPACT_VIEW_ID) ? GDK_KEY_Up : GDK_KEY_Left;
+        }
+        g_assert_true (send_selection_key (keys, down, GDK_SHIFT_MASK));
+        assert_marks (view, names[0], NULL);
+        g_assert_true (send_selection_key (keys, down, 0));
+        assert_marks (view, names[0], NULL);
+        g_assert_true (send_selection_key (keys, down, GDK_SHIFT_MASK));
+        assert_marks (view, names[0], names[2]);
+        g_assert_true (send_selection_key (keys, up, 0));
+        assert_marks (view, names[0], names[2]);
+        g_assert_true (send_selection_key (keys, GDK_KEY_Insert, 0));
+        assert_marks (view, names[0], NULL);
+        g_assert_true (send_selection_key (keys, GDK_KEY_Escape, 0));
+        assert_marks (view, NULL, NULL);
+        g_assert_true (send_selection_key (keys, GDK_KEY_Insert, 0));
+        assert_marks (view, names[3], NULL);
+        g_assert_true (send_selection_key (keys, GDK_KEY_Insert, 0));
+        assert_marks (view, names[3], names[4]);
+        g_assert_true (send_selection_key (keys, up, GDK_SHIFT_MASK));
+        assert_marks (view, names[3], NULL);
+        g_assert_true (send_selection_key (keys, up, 0));
+        assert_marks (view, names[3], NULL);
+        g_assert_true (send_selection_key (keys, up, GDK_SHIFT_MASK));
+        assert_marks (view, names[2], names[3]);
+        g_assert_true (send_selection_key (keys, GDK_KEY_End, 0));
+        assert_marks (view, names[2], names[3]);
+        nemo_view_update_menus (view);
+        guint before = trash_requests;
+        NEMO_VIEW_GET_CLASS (view)->trash (view);
+        g_assert_cmpuint (trash_requests, ==, before + 1);
+        g_assert_true (send_selection_key (keys, GDK_KEY_Escape, 0));
+        assert_marks (view, NULL, NULL);
+    }
+    list_fixture_clear (&fixture);
 }
 
 static GtkEntry *
@@ -765,6 +897,7 @@ main (int argc, char **argv)
         return 77;
     gtk_test_init (&argc, &argv, NULL);
     static const ListCase cases[] = {
+        { "/selection/commander-all-views", test_keyboard_marking },
         { "/list-type-jump/ranking-navigation-highlight", test_rank_and_navigation },
         { "/list-type-jump/custom-keys-exit", test_custom_keys_and_exit },
         { "/list-type-jump/shortcut-editor", test_shortcut_editor },

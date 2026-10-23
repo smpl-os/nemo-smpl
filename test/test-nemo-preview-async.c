@@ -4,6 +4,8 @@
 #include <config.h>
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
+#include <libnemo-private/nemo-file-operations.h>
+#include "../src/nemo-quick-preview.h"
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
 #endif
@@ -25,6 +27,32 @@ static gint fail_state;
 static gint fail_preview_thread;
 static gint fail_media_push;
 static guint heartbeats;
+static GFile *delete_target;
+static NemoDeleteCallback delete_callback;
+static gpointer delete_callback_data;
+static guint delete_calls;
+static gboolean real_preview_delete;
+
+int
+__wrap_nemo_inhibit_power_manager (const char *message)
+{
+	return -1;
+}
+
+static void
+test_preview_trash (GList *files, GtkWindow *parent, NemoDeleteCallback callback, gpointer data)
+{
+	g_assert_cmpuint (g_list_length (files), ==, 1);
+	g_assert_true (NEMO_IS_QUICK_PREVIEW (parent));
+	if (real_preview_delete) {
+		nemo_file_operations_trash_or_delete (files, parent, callback, data);
+		return;
+	}
+	delete_calls++;
+	g_set_object (&delete_target, files->data);
+	delete_callback = callback;
+	delete_callback_data = data;
+}
 
 static GThread *
 test_thread_try_new (const char *name, GThreadFunc function, gpointer data, GError **error)
@@ -135,7 +163,9 @@ test_raw_open (libraw_data_t *raw, const char *path)
 #define g_file_query_info test_query_info
 #define g_file_enumerate_children test_enumerate
 #define gst_element_query_position test_query_position
+#define nemo_file_operations_trash_or_delete test_preview_trash
 #include "../src/nemo-quick-preview.c"
+#undef nemo_file_operations_trash_or_delete
 #undef gst_element_query_position
 #undef g_file_enumerate_children
 #undef g_file_query_info
@@ -886,6 +916,128 @@ test_parent_entry (void)
 	g_object_unref (preview);
 }
 
+static void
+complete_preview_delete (gboolean cancelled, gboolean remove)
+{
+	g_assert_nonnull (delete_callback);
+	if (remove)
+		g_assert_true (g_file_delete (delete_target, NULL, NULL));
+	NemoDeleteCallback callback = delete_callback;
+	gpointer data = delete_callback_data;
+	delete_callback = NULL;
+	delete_callback_data = NULL;
+	callback (NULL, cancelled, data);
+	g_clear_object (&delete_target);
+}
+
+static void
+test_quick_delete (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-preview-delete-XXXXXX", NULL);
+	GFile *first = write_image (directory, "a.png", 0xff0000ff);
+	GFile *second = write_image (directory, "b.png", 0x00ff00ff);
+	GFile *third = write_image (directory, "c.png", 0x0000ffff);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, first, NULL);
+	WAIT_UNTIL (preview->mode == PREVIEW_IMAGE && preview->dir_files != NULL);
+	GdkEventKey key = { .keyval = GDK_KEY_Delete };
+	delete_calls = 0;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_true (g_file_equal (delete_target, first));
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_cmpuint (delete_calls, ==, 1);
+	navigate_to_offset (preview, 1);
+	g_assert_true (g_file_equal (preview->current_file, first));
+	complete_preview_delete (TRUE, FALSE);
+	g_assert_null (preview->delete_request);
+	g_assert_true (g_file_query_exists (first, NULL));
+	/* A skipped/failed operation must not remove a file from navigation. */
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	complete_preview_delete (FALSE, FALSE);
+	WAIT_UNTIL (preview->delete_request == NULL);
+	g_assert_true (g_file_equal (preview->current_file, first));
+	g_assert_cmpuint (preview->dir_files->len, ==, 3);
+	/* Search entry Delete edits text rather than deleting the preview file. */
+	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (preview->search_bar), TRUE);
+	gtk_widget_grab_focus (preview->search_entry);
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	g_assert_null (preview->delete_request);
+	gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (preview->search_bar), FALSE);
+	gtk_widget_grab_focus (preview->next_button);
+	key.state = GDK_SHIFT_MASK;
+	g_assert_false (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	key.state = 0;
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	complete_preview_delete (FALSE, TRUE);
+	WAIT_UNTIL (preview->delete_request == NULL && g_file_equal (preview->current_file, second));
+	g_assert_cmpuint (preview->dir_files->len, ==, 2);
+	navigate_to_offset (preview, 1);
+	g_assert_true (g_file_equal (preview->current_file, third));
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	complete_preview_delete (FALSE, TRUE);
+	WAIT_UNTIL (preview->delete_request == NULL && g_file_equal (preview->current_file, second));
+	g_assert_cmpuint (preview->dir_files->len, ==, 1);
+	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+	complete_preview_delete (FALSE, TRUE);
+	WAIT_UNTIL (!gtk_widget_get_visible (GTK_WIDGET (preview)));
+	g_assert_null (preview->current_file);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	g_object_unref (first);
+	g_object_unref (second);
+	g_object_unref (third);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (directory);
+}
+
+static void
+test_quick_delete_stale (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-preview-delete-stale-XXXXXX", NULL);
+	GFile *first = write_image (directory, "a.png", 0xff0000ff);
+	GFile *second = write_image (directory, "b.png", 0x00ff00ff);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, first, NULL);
+	WAIT_UNTIL (preview->dir_files != NULL);
+	preview_delete_current_file (preview);
+	nemo_quick_preview_dismiss (preview);
+	nemo_quick_preview_show_file (preview, second, NULL);
+	complete_preview_delete (FALSE, TRUE);
+	iterate_for (50);
+	g_assert_true (g_file_equal (preview->current_file, second));
+	preview_delete_current_file (preview);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	complete_preview_delete (TRUE, FALSE);
+	remove_fixture (second);
+	g_object_unref (first);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (directory);
+}
+
+static void
+test_quick_delete_real_trash (void)
+{
+	char *directory = g_dir_make_tmp ("nemo-preview-real-trash-XXXXXX", NULL);
+	GFile *file = write_image (directory, "cleanup.png", 0xff0000ff);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->dir_files != NULL);
+	g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_CONFIRM_TRASH, FALSE);
+	real_preview_delete = TRUE;
+	preview_delete_current_file (preview);
+	WAIT_UNTIL (!gtk_widget_get_visible (GTK_WIDGET (preview)));
+	real_preview_delete = FALSE;
+	g_assert_false (g_file_query_exists (file, NULL));
+	g_autofree char *trashed_path = g_build_filename (g_get_user_data_dir (), "Trash", "files", "cleanup.png", NULL);
+	g_assert_true (g_file_test (trashed_path, G_FILE_TEST_IS_REGULAR));
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	g_object_unref (file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	g_free (directory);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -913,6 +1065,9 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/image/rapid-selection-worker-bound", test_rapid_selection_worker_bound);
 	g_test_add_func ("/preview/image/worker-creation-failure", test_worker_creation_failure);
 	g_test_add_func ("/preview/quick/metadata-navigation-races", test_quick_navigation_races);
+	g_test_add_func ("/preview/quick/delete-navigation-cancel-failure", test_quick_delete);
+	g_test_add_func ("/preview/quick/delete-stale-destroy", test_quick_delete_stale);
+	g_test_add_func ("/preview/quick/delete-real-trash", test_quick_delete_real_trash);
 	g_test_add_func ("/preview/quick/navigation-only-parent", test_parent_entry);
 	g_test_add_func ("/preview/quick/optional-hidden-attribute", test_optional_hidden_attribute);
 	g_test_add_func ("/preview/quick/optional-file-information", test_optional_file_information);

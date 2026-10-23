@@ -131,6 +131,9 @@ struct NemoIconContainerDetails {
 	/* Current icon for keyboard navigation. */
 	NemoIcon *keyboard_focus;
 	NemoIcon *keyboard_rubberband_start;
+#ifdef NEMO_SMPL
+	gboolean keyboard_marking;
+#endif
 
 	/* Rubberbanding status. */
         NemoIconRubberbandInfo rubberband_info;

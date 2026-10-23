@@ -135,6 +135,7 @@ struct NemoListViewDetails {
 
     gboolean overlay_scrolling;
 #ifdef NEMO_SMPL
+    gboolean keyboard_marking;
     GtkWidget *type_jump_popover;
     GtkWidget *type_jump_entry;
     GtkWidget *type_jump_status;
@@ -1186,6 +1187,10 @@ button_press_callback (GtkWidget *widget, GdkEventButton *event, gpointer callba
 	gboolean blank_click;
 
 	view = NEMO_LIST_VIEW (callback_data);
+#ifdef NEMO_SMPL
+	if (event->button == GDK_BUTTON_PRIMARY)
+		view->details->keyboard_marking = FALSE;
+#endif
 	tree_view = GTK_TREE_VIEW (widget);
 	tree_view_class = GTK_WIDGET_GET_CLASS (tree_view);
 	selection = gtk_tree_view_get_selection (tree_view);
@@ -1797,6 +1802,7 @@ type_jump_begin (GtkTreeView *tree, NemoListView *view)
     if (view->details->type_jump_destroyed ||
         nemo_smpl_interactive_search_mode () == NEMO_INTERACTIVE_SEARCH_MODE_FILTER)
         return TRUE;
+    view->details->keyboard_marking = FALSE;
     if (view->details->type_jump_popover == NULL) {
         GtkWidget *popover = gtk_popover_new (GTK_WIDGET (tree));
         view->details->type_jump_popover = g_object_ref_sink (popover);
@@ -1864,6 +1870,107 @@ nemo_list_view_get_type_jump_active (NemoView *view)
 {
     return NEMO_LIST_VIEW (view)->details->type_jump_active;
 }
+
+static gboolean
+keyboard_marking_key (NemoListView *view, GdkEventKey *event)
+{
+    GtkTreeView *tree = view->details->tree_view;
+    GtkTreeSelection *selection = gtk_tree_view_get_selection (tree);
+    GdkModifierType modifiers = event->state & gtk_accelerator_get_default_mod_mask ();
+    gboolean toggle = event->keyval == GDK_KEY_Insert || event->keyval == GDK_KEY_KP_Insert;
+    GtkMovementStep step = GTK_MOVEMENT_DISPLAY_LINES;
+    int count;
+
+    if (view->details->editable_widget != NULL || view->details->type_jump_active ||
+        !gtk_widget_has_focus (GTK_WIDGET (tree)) ||
+        (modifiers != 0 && modifiers != GDK_SHIFT_MASK))
+        return FALSE;
+    if (event->keyval == GDK_KEY_Escape && modifiers == 0) {
+        if (nemo_view_get_filter_active (NEMO_VIEW (view)))
+            return nemo_view_activate_filter (NEMO_VIEW (view), event);
+        view->details->keyboard_marking = FALSE;
+        gtk_tree_selection_unselect_all (selection);
+        return TRUE;
+    }
+    switch (event->keyval) {
+    case GDK_KEY_Insert:
+    case GDK_KEY_KP_Insert:
+        if (modifiers != 0)
+            return FALSE;
+        count = 1;
+        break;
+    case GDK_KEY_Up:
+    case GDK_KEY_KP_Up:
+        count = -1;
+        break;
+    case GDK_KEY_Down:
+    case GDK_KEY_KP_Down:
+        count = 1;
+        break;
+    case GDK_KEY_Home:
+    case GDK_KEY_KP_Home:
+        step = GTK_MOVEMENT_BUFFER_ENDS;
+        count = -1;
+        break;
+    case GDK_KEY_End:
+    case GDK_KEY_KP_End:
+        step = GTK_MOVEMENT_BUFFER_ENDS;
+        count = 1;
+        break;
+    case GDK_KEY_Page_Up:
+    case GDK_KEY_KP_Page_Up:
+        step = GTK_MOVEMENT_PAGES;
+        count = -1;
+        break;
+    case GDK_KEY_Page_Down:
+    case GDK_KEY_KP_Page_Down:
+        step = GTK_MOVEMENT_PAGES;
+        count = 1;
+        break;
+    default:
+        return FALSE;
+    }
+    if (modifiers == GDK_SHIFT_MASK && step != GTK_MOVEMENT_DISPLAY_LINES)
+        return FALSE;
+    gboolean marking = toggle || modifiers == GDK_SHIFT_MASK;
+    if (!marking && !view->details->keyboard_marking)
+        return FALSE;
+
+    GtkTreePath *cursor = NULL;
+    gtk_tree_view_get_cursor (tree, &cursor, NULL);
+    g_signal_handlers_block_by_func (selection, list_selection_changed_callback, view);
+    /* A lone normal selection represents the cursor until marking starts. */
+    if (!view->details->keyboard_marking && cursor != NULL &&
+        gtk_tree_selection_count_selected_rows (selection) == 1 &&
+        gtk_tree_selection_path_is_selected (selection, cursor))
+        gtk_tree_selection_unselect_all (selection);
+    view->details->keyboard_marking = TRUE;
+    if (marking && cursor != NULL) {
+        GtkTreeIter iter;
+        NemoFile *file = NULL;
+        if (gtk_tree_model_get_iter (GTK_TREE_MODEL (view->details->model), &iter, cursor))
+            gtk_tree_model_get (GTK_TREE_MODEL (view->details->model), &iter,
+                                NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+        if (file != NULL && !nemo_file_is_parent_entry (file)) {
+            if (gtk_tree_selection_path_is_selected (selection, cursor))
+                gtk_tree_selection_unselect_path (selection, cursor);
+            else
+                gtk_tree_selection_select_path (selection, cursor);
+        }
+        nemo_file_unref (file);
+    }
+    GList *marks = gtk_tree_selection_get_selected_rows (selection, NULL);
+    gboolean moved = FALSE;
+    g_signal_emit_by_name (tree, "move-cursor", step, count, &moved);
+    gtk_tree_selection_unselect_all (selection);
+    for (GList *l = marks; l != NULL; l = l->next)
+        gtk_tree_selection_select_path (selection, l->data);
+    g_list_free_full (marks, (GDestroyNotify) gtk_tree_path_free);
+    g_clear_pointer (&cursor, gtk_tree_path_free);
+    g_signal_handlers_unblock_by_func (selection, list_selection_changed_callback, view);
+    list_selection_changed_callback (selection, view);
+    return TRUE;
+}
 #endif
 
 static gboolean
@@ -1879,6 +1986,11 @@ key_press_callback (GtkWidget *widget, GdkEventKey *event, gpointer callback_dat
 
 	view = NEMO_VIEW (callback_data);
 	handled = FALSE;
+
+#ifdef NEMO_SMPL
+	if (keyboard_marking_key (NEMO_LIST_VIEW (view), event))
+		return TRUE;
+#endif
 
     if (event->keyval == GDK_KEY_slash ||
         event->keyval == GDK_KEY_KP_Divide ||
@@ -3600,6 +3712,9 @@ nemo_list_view_begin_loading (NemoView *view)
 
 	list_view = NEMO_LIST_VIEW (view);
 
+#ifdef NEMO_SMPL
+	list_view->details->keyboard_marking = FALSE;
+#endif
 	set_sort_order_from_metadata_and_preferences (list_view);
 	set_zoom_level_from_metadata_and_preferences (list_view);
 	set_columns_settings_from_metadata_and_preferences (list_view);
