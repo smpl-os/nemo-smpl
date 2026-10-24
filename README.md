@@ -80,7 +80,10 @@ completing an unsafe operation. Copy verification is enabled by default across
 copy entry points. Local transfers use checked synchronization and atomic
 publication where supported; copied moves verify the destination before
 reclaiming source space. Same-filesystem moves retain a synchronized rename path
-and are not described as checksum-verified copies.
+without reading the moved file's contents for checksums, and are not described
+as checksum-verified copies. Synchronization can still take time on busy storage.
+Move progress identifies the current file, and open panes update after each
+completed native move rather than waiting for the whole batch.
 
 Unsupported destinations are refused rather than silently receiving weaker
 protection. This includes remote destinations and unqualified network/FUSE
@@ -107,6 +110,12 @@ Technical notes and recovery locations are under **Details**, expanded
 automatically for incomplete operations. **Enter**, **Escape**, or **Close**
 dismisses the transfer UI without cancelling active transfers. In a docked
 panel, these keys apply while a transfer control has focus.
+
+Missing-source failures include the exact source/destination URIs and separate
+folder-handle/pathname lookup results in **Details**. For additional native-move
+phase and timing diagnostics, launch Nemo with `G_MESSAGES_DEBUG=Nemo` from a
+terminal after existing Nemo processes have exited and transfers have finished.
+Diagnostics include filenames and paths; review them before sharing.
 
 To avoid successful-completion summaries, disable **Show completion results for
 successful copies and moves** in **Preferences → Behavior**, or check **Don't

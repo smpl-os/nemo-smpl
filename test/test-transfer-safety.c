@@ -40,7 +40,7 @@ typedef enum {
     RECOVERY_RESERVED, RECOVERY_GROUP_WRITABLE, RECOVERY_OTHER_WRITABLE,
     MARKER_INODE, MARKER_METADATA, MARKER_CONTENT,
     RECORD_INODE, RECORD_METADATA, RECORD_CONTENT, RECORD_NLINK, RECORD_UID,
-    RECOVERY_FOREIGN_PAYLOAD, RECOVERY_FOREIGN_CHILD
+    RECOVERY_FOREIGN_PAYLOAD, RECOVERY_FOREIGN_CHILD, SOURCE_MISSING
 } Fault;
 
 typedef enum { COPY, COPY_FILE, DUPLICATE, MOVE } Operation;
@@ -101,6 +101,14 @@ static const Scenario scenarios[] = {
     { "writer-close", WRITER_CLOSE, COPY },
     { "directory-close", DIRECTORY_CLOSE, COPY },
     { "native-file", FAULT_NONE, MOVE },
+    { "native-no-payload-reads", FAULT_NONE, MOVE },
+    { "native-unicode", FAULT_NONE, MOVE },
+    { "native-child-unicode", FAULT_NONE, MOVE },
+    { "native-source-not-found", SOURCE_MISSING, MOVE },
+    { "native-undo-modified-same-mtime", FAULT_NONE, MOVE },
+    { "native-redo-modified-same-mtime", FAULT_NONE, MOVE },
+    { "native-undo-modified-during-prepare", FAULT_NONE, MOVE },
+    { "native-redo-modified-during-prepare", FAULT_NONE, MOVE },
     { "native-undo-roundtrip", FAULT_NONE, MOVE },
     { "native-symlink", FAULT_NONE, MOVE, FALSE, FALSE, FALSE, TRUE },
     { "native-directory", FAULT_NONE, MOVE, FALSE, FALSE, TRUE },
@@ -209,7 +217,7 @@ static struct {
     gboolean queued, active, undoing, done, success, finished, timed_out;
     guint callbacks, finished_count, injections, source_flushes, tree_flushes;
     guint mutations, publications, exchanges, captures, deletes, writes, writer_flushes;
-    guint source_reads, destination_flushes, conflicts, sequence, published_at, synced_at;
+    guint source_reads, native_payload_reads, destination_flushes, conflicts, sequence, published_at, synced_at;
     guint source_queries;
     guint record_flushes;
     guint undo_captures, manager_events;
@@ -250,6 +258,25 @@ static gboolean
 named (const char *name)
 {
     return strcmp (scenario->name, name) == 0;
+}
+
+static void
+edit_preserving_mtime (const char *path)
+{
+    struct stat before, after;
+    g_assert_cmpint (lstat (path, &before), ==, 0);
+    g_usleep (2000);
+    int fd = open (path, O_WRONLY | O_CLOEXEC);
+    g_assert_cmpint (fd, >=, 0);
+    g_assert_cmpint (pwrite (fd, "#", 1, 0), ==, 1);
+    g_assert_cmpint (close (fd), ==, 0);
+    struct timespec times[] = { before.st_atim, before.st_mtim };
+    g_assert_cmpint (utimensat (AT_FDCWD, path, times, 0), ==, 0);
+    g_assert_cmpint (lstat (path, &after), ==, 0);
+    g_assert_cmpuint (before.st_ino, ==, after.st_ino);
+    g_assert_cmpint (before.st_size, ==, after.st_size);
+    g_assert_cmpint (before.st_mtim.tv_sec, ==, after.st_mtim.tv_sec);
+    g_assert_cmpint (before.st_mtim.tv_nsec, ==, after.st_mtim.tv_nsec);
 }
 
 static gboolean
@@ -804,6 +831,14 @@ int __real_fstatat64 (int, const char *, struct stat64 *, int);
 int
 __wrap_fstatat64 (int fd, const char *name, struct stat64 *st, int flags)
 {
+    if (f.active && scenario->fault == SOURCE_MISSING && !f.injections) {
+        g_autofree char *path = resolved (fd, name);
+        if (g_strcmp0 (path, f.source) == 0) {
+            f.injections++;
+            errno = ENOENT;
+            return -1;
+        }
+    }
     int result = __real_fstatat64 (fd, name, st, flags);
     if (result == 0 && f.active && scenario->fault == RECORD_UID) {
         g_autofree char *path = resolved (fd, name);
@@ -1166,6 +1201,11 @@ __wrap_read (int fd, void *buffer, size_t count)
     g_autofree char *path = f.active ? fd_path (fd) : NULL;
     if (g_strcmp0 (path, f.source) == 0)
         f.source_reads++;
+    struct stat identity;
+    if (f.active && fstat (fd, &identity) == 0 &&
+        S_ISREG (identity.st_mode) && identity.st_dev == f.source_identity.st_dev &&
+        identity.st_ino == f.source_identity.st_ino)
+        f.native_payload_reads++;
     return __real_read (fd, buffer, count);
 }
 
@@ -1202,6 +1242,12 @@ __wrap_fsync (int fd)
     }
     int result = __real_fsync (fd);
     if (f.active && result == 0) {
+        if (f.undoing && !f.injections && path &&
+            ((named ("native-undo-modified-during-prepare") && strstr (path, "/record-undo-")) ||
+             (named ("native-redo-modified-during-prepare") && strstr (path, "/record-redo-")))) {
+            edit_preserving_mtime (named ("native-redo-modified-during-prepare") ? f.source : f.dest);
+            f.injections++;
+        }
         if (source && regular)
             f.source_flushes++;
         if (tree)
@@ -1716,7 +1762,15 @@ run_operation (Operation operation, int verify_override)
         nemo_file_operations_duplicate (sources, NULL, NULL, copied, NULL);
         break;
     case MOVE:
-        nemo_file_operations_move (sources, NULL, destination, NULL, copied, NULL);
+        if (named ("native-unicode") || named ("native-child-unicode")) {
+            g_autofree char *source_uri = g_file_get_uri (source);
+            g_autofree char *destination_uri = g_file_get_uri (destination);
+            GList uris = { .data = source_uri };
+            nemo_file_operations_copy_move (&uris, NULL, destination_uri, GDK_ACTION_MOVE,
+                                             NULL, copied, NULL);
+        } else {
+            nemo_file_operations_move (sources, NULL, destination, NULL, copied, NULL);
+        }
         break;
     }
     enqueue_swap ();
@@ -1847,7 +1901,9 @@ setup_fixture (void)
         g_assert_cmpint (g_mkdir (f.source_dir, 0700), ==, 0);
     g_autofree char *ancestor = g_build_filename (f.root, "ancestor", NULL);
     g_assert_cmpint (g_mkdir (ancestor, 0700), ==, 0);
-    f.dest_dir = g_build_filename (ancestor, "destination", NULL);
+    gboolean unicode = named ("native-unicode") || named ("native-child-unicode");
+    f.dest_dir = g_build_filename (named ("native-child-unicode") ? f.source_dir : ancestor,
+                                  unicode ? "\320\237\320\276\320\266\320\270\321\200\320\260\321\202\320\265\320\273\321\214 \320\267\320\262\321\221\320\267\320\264" : "destination", NULL);
     if (named ("real-tmpfs-destination")) {
         g_free (f.dest_dir);
         f.dest_dir = g_build_filename (secondary_fs_root (),
@@ -1855,9 +1911,11 @@ setup_fixture (void)
         g_assert_nonnull (g_mkdtemp (f.dest_dir));
     } else
         g_assert_cmpint (g_mkdir (f.dest_dir, 0700), ==, 0);
-    f.source = g_build_filename (f.source_dir, "payload", NULL);
+    const char *basename = unicode ?
+        "(105-130) - \320\237\320\276\320\266\320\270\321\200\320\260\321\202\320\265\320\273\321\214 \320\267\320\262\321\221\320\267\320\264.mp4" : "payload";
+    f.source = g_build_filename (f.source_dir, basename, NULL);
     f.dest = g_build_filename (f.dest_dir,
-        scenario->directory && scenario->operation == COPY_FILE ? "custom-root" : "payload", NULL);
+        scenario->directory && scenario->operation == COPY_FILE ? "custom-root" : basename, NULL);
     f.saved = g_build_filename (scenario->crossfs ? f.source_dir : f.root, "saved", NULL);
     if (scenario->fault == SOURCE_PARENT_SWAP) {
         g_free (f.saved);
@@ -1893,6 +1951,12 @@ setup_fixture (void)
         g_assert_cmpint (symlink ("relative-link-target", f.source), ==, 0);
     } else
         write_contents (f.source, payload);
+    if (named ("native-no-payload-reads")) {
+        int fd = open (f.source, O_WRONLY | O_CLOEXEC);
+        g_assert_cmpint (fd, >=, 0);
+        g_assert_cmpint (ftruncate (fd, G_GINT64_CONSTANT (16) * 1024 * 1024 * 1024), ==, 0);
+        g_assert_cmpint (close (fd), ==, 0);
+    }
     if (scenario->replace && !scenario->directory)
         write_contents (f.dest, scenario->fault == MATCH_FSYNC ? payload : previous);
     if (scenario->fault == RECOVERY_RESERVED) {
@@ -2076,6 +2140,8 @@ test_transfer (void)
     if (low_fd_case ())
         lower_fd_limit (&original_limit);
     run_operation (scenario->operation, override);
+    if (named ("native-no-payload-reads"))
+        g_assert_cmpuint (f.native_payload_reads, ==, 0);
     if (low_fd_case ())
         g_assert_cmpint (setrlimit (RLIMIT_NOFILE, &original_limit), ==, 0);
     if (large_case ())
@@ -2103,6 +2169,20 @@ test_transfer (void)
         assert_failure ();
     if (scenario->fault != FAULT_NONE && !undo)
         g_assert_cmpuint (f.injections, >, 0);
+    if (scenario->fault == SOURCE_MISSING) {
+        assert_contents (f.source, payload);
+        g_assert_false (exists (f.dest));
+        g_assert_cmpuint (f.mutations, ==, 0);
+        g_autofree char *details = nemo_progress_info_get_completion_text (f.progress);
+        g_autoptr (GFile) source = g_file_new_for_path (f.source);
+        g_autoptr (GFile) dest = g_file_new_for_path (f.dest);
+        g_autofree char *source_uri = g_file_get_uri (source);
+        g_autofree char *dest_uri = g_file_get_uri (dest);
+        g_assert_nonnull (strstr (details, source_uri));
+        g_assert_nonnull (strstr (details, dest_uri));
+        g_assert_nonnull (strstr (details, "Source lookup through pathname: Found"));
+        g_assert_nonnull (strstr (f.dialog_text->str, "Could not inspect the move source"));
+    }
     if (checked_no_backup_move ()) {
         assert_completed_recovery_namespace (f.dest_dir);
         assert_completed_recovery_namespace (f.source_dir);
@@ -2728,6 +2808,39 @@ test_transfer (void)
         check_namespace_reuse ();
     if (named ("recovery-undo-check-no-mutation") || named ("native-undo-roundtrip"))
         check_undo_preflight_namespace ();
+    if (named ("native-undo-roundtrip"))
+        g_assert_cmpuint (f.native_payload_reads, ==, 0);
+    if (g_str_has_prefix (scenario->name, "native-undo-modified-") ||
+        g_str_has_prefix (scenario->name, "native-redo-modified-")) {
+        NemoFileUndoInfo *info = g_object_ref (nemo_file_undo_manager_get_action ());
+        gboolean redo = g_str_has_prefix (scenario->name, "native-redo-");
+        gboolean during_prepare = g_str_has_suffix (scenario->name, "-during-prepare");
+        if (redo) {
+            run_manager_undo (info);
+            g_assert_true (f.success);
+        }
+        const char *path = redo ? f.source : f.dest;
+        if (!during_prepare)
+            edit_preserving_mtime (path);
+        guint mutations = f.mutations;
+        guint captures = f.undo_captures;
+        run_manager_apply (info, !redo);
+        g_assert_false (f.success);
+        if (!during_prepare)
+            g_assert_cmpuint (f.mutations, ==, mutations);
+        g_assert_cmpuint (f.undo_captures, ==, captures);
+        if (during_prepare) {
+            g_assert_cmpuint (f.injections, ==, 1);
+        } else {
+            g_assert_true (nemo_file_undo_info_can_retry (info));
+            g_assert_true (nemo_file_undo_manager_get_action () == info);
+        }
+        g_assert_false (exists (redo ? f.dest : f.source));
+        g_autofree char *contents = NULL;
+        g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
+        g_assert_cmpint (contents[0], ==, '#');
+        g_object_unref (info);
+    }
     g_clear_pointer (&f.preflight_record, nemo_transfer_undo_unref);
     gboolean bounded_namespace = (large_case () && scenario->fault == FAULT_NONE) ||
                                  g_str_has_prefix (scenario->name, "namespace-") ||

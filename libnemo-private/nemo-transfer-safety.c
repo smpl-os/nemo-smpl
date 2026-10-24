@@ -2238,7 +2238,8 @@ capture_previous_destination (NemoTransferTransaction *transaction, TransferSnap
     transaction->separate_backup = TRUE;
     /* Both payloads and this intent record must be durable before opening the
      * namespace gap. A failure after capture must never trigger staging cleanup. */
-    gboolean ok = snapshot_at (recovery->fd, "payload", &staged, TRUE, TRUE, cancel, error);
+    gboolean ok = snapshot_at (recovery->fd, "payload", &staged,
+                               transaction->installed.checksum != NULL, TRUE, cancel, error);
     if (ok && !snapshot_matches (&transaction->installed, &staged))
         ok = changed (error);
     snapshot_clear (&staged);
@@ -2282,7 +2283,8 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
         g_cancellable_set_error_if_cancelled (cancel, error))
         goto out;
     if (!snapshot_at (transaction->recovery.fd, "payload", &transaction->installed,
-                      TRUE, S_ISLNK (transaction->stage_identity.st_mode), cancel, error))
+                      !transaction->native_source,
+                      S_ISLNK (transaction->stage_identity.st_mode), cancel, error))
         goto out;
     if (!same_inode (&transaction->stage_identity, &transaction->installed.stat)) {
         changed (error);
@@ -2353,7 +2355,8 @@ nemo_transfer_transaction_publish (NemoTransferTransaction *transaction, gboolea
         !recovery_identity_check (&transaction->recovery, error))
         goto out;
     snapshot_clear (&current);
-    if (!snapshot_at (parent->fd, transaction->destination_name, &current, TRUE, FALSE, cancel, error) ||
+    if (!snapshot_at (parent->fd, transaction->destination_name, &current,
+                      transaction->installed.checksum != NULL, FALSE, cancel, error) ||
         !snapshot_matches (&transaction->installed, &current)) {
         if (!*error)
             changed (error);
@@ -2914,6 +2917,11 @@ nemo_transfer_native_move (NemoTransferGuard *guard, GFile *source, GFile *desti
                            gboolean overwrite, gboolean *published, NemoTransferUndo **undo,
                            GCancellable *cancel, GError **error)
 {
+    g_autofree char *source_uri = g_file_get_uri (source);
+    g_autofree char *destination_uri = g_file_get_uri (destination);
+    gint64 started = g_get_monotonic_time ();
+    g_debug ("Native move begin: source=%s destination=%s overwrite=%d",
+             source_uri, destination_uri, overwrite);
     guard->copy_fallback_blocked = FALSE;
     if (!nemo_transfer_guard_check (guard, error))
         return FALSE;
@@ -2930,8 +2938,23 @@ nemo_transfer_native_move (NemoTransferGuard *guard, GFile *source, GFile *desti
     g_autofree char *source_name = g_file_get_basename (source);
     g_autofree char *destination_name = g_file_get_basename (destination);
     struct stat source_stat, destination_stat;
-    if (fstatat (source_parent->fd, source_name, &source_stat, AT_SYMLINK_NOFOLLOW) < 0)
+    if (fstatat (source_parent->fd, source_name, &source_stat, AT_SYMLINK_NOFOLLOW) < 0) {
+        int saved_errno = errno;
+        g_autofree char *source_path = g_file_get_path (source);
+        struct stat current;
+        int path_errno = lstat (source_path, &current) == 0 ? 0 : errno;
+        g_string_append_printf (guard->details,
+                                _("\nMove source URI: %s\nMove destination URI: %s\n"
+                                  "Pinned source folder: %s\n"
+                                  "Source lookup through folder handle: %s\n"
+                                  "Source lookup through pathname: %s"),
+                                source_uri, destination_uri, source_parent->path,
+                                g_strerror (saved_errno), path_errno ? g_strerror (path_errno) : _("Found"));
+        g_debug ("Native move source lookup failed: source=%s destination=%s parent=%s fd=%d errno=%d path-errno=%d",
+                 source_uri, destination_uri, source_parent->path, source_parent->fd, saved_errno, path_errno);
+        errno = saved_errno;
         return transfer_error (error, _("Could not inspect the move source"));
+    }
     if (fstatat (destination_parent->fd, destination_name, &destination_stat, AT_SYMLINK_NOFOLLOW) == 0) {
         if (!nemo_transfer_guard_expect (guard, destination, error))
             return FALSE;
@@ -2977,6 +3000,8 @@ nemo_transfer_native_move (NemoTransferGuard *guard, GFile *source, GFile *desti
         goto out;
     }
     captured = TRUE;
+    g_debug ("Native move captured: source=%s destination=%s elapsed-ms=%" G_GINT64_FORMAT,
+             source_uri, destination_uri, (g_get_monotonic_time () - started) / 1000);
     if (!nemo_transfer_transaction_stage_created (transaction, error) ||
         !snapshot_at (transaction->recovery.fd, "payload", &captured_snapshot, FALSE, FALSE, cancel, error))
         goto out;
@@ -2998,6 +3023,9 @@ nemo_transfer_native_move (NemoTransferGuard *guard, GFile *source, GFile *desti
         *undo = nemo_transfer_transaction_undo (transaction, TRUE);
     ok = TRUE;
 out:
+    g_debug ("Native move finished: source=%s destination=%s success=%d published=%d elapsed-ms=%" G_GINT64_FORMAT " error=%s",
+             source_uri, destination_uri, ok, *published,
+             (g_get_monotonic_time () - started) / 1000, error && *error ? (*error)->message : "none");
     if (transaction->published) {
         if (!ok) {
             g_autofree char *destination_path = g_file_get_parse_name (destination);
@@ -3070,8 +3098,12 @@ undo_capture (NemoTransferTransaction *transaction, int parent, const char *name
               GError **error)
 {
     TransferSnapshot current = { 0 };
-    gboolean ok = snapshot_at (parent, name, &current, TRUE, TRUE, cancel, error);
+    gboolean ok = snapshot_at (parent, name, &current, expected->checksum != NULL, TRUE, cancel, error);
     if (ok && !snapshot_matches (expected, &current))
+        ok = changed (error);
+    if (ok && transaction->native_source && expected == &transaction->installed &&
+        (current.stat.st_ctim.tv_sec != transaction->publication_identity.st_ctim.tv_sec ||
+         current.stat.st_ctim.tv_nsec != transaction->publication_identity.st_ctim.tv_nsec))
         ok = changed (error);
     snapshot_clear (&current);
     if (!ok)
@@ -3082,7 +3114,7 @@ undo_capture (NemoTransferTransaction *transaction, int parent, const char *name
                              _("An undo capture returned an uncertain error. Its entry was retained."));
         return FALSE;
     }
-    ok = snapshot_at (transaction->recovery.fd, slot, &current, TRUE, FALSE, cancel, error);
+    ok = snapshot_at (transaction->recovery.fd, slot, &current, expected->checksum != NULL, FALSE, cancel, error);
     if (ok && !snapshot_matches (expected, &current))
         ok = changed (error);
     snapshot_clear (&current);
@@ -3112,7 +3144,7 @@ check_snapshot (int fd, const char *name, const TransferSnapshot *expected,
                 GCancellable *cancel, GError **error)
 {
     TransferSnapshot current = { 0 };
-    gboolean ok = snapshot_at (fd, name, &current, TRUE, FALSE, cancel, error);
+    gboolean ok = snapshot_at (fd, name, &current, expected->checksum != NULL, FALSE, cancel, error);
     if (ok && !snapshot_matches (expected, &current))
         ok = changed (error);
     snapshot_clear (&current);
@@ -3173,6 +3205,19 @@ nemo_transfer_undo_check (NemoTransferUndo *undo, gboolean redo,
         report_recovery (transaction->guard, &transaction->recovery,
                          _("Undo stopped because the recovery folder changed."));
         return FALSE;
+    }
+    /* Native moves retain the same inode, not a copy/checksum baseline. Detect
+     * later edits even if a writer restores the file's size and mtime. */
+    if (transaction->native_source) {
+        struct stat current;
+        int parent = redo ? transaction->source_parent->fd : transaction->destination_parent->fd;
+        const char *name = redo ? transaction->source_name : transaction->destination_name;
+        if (fstatat (parent, name, &current, AT_SYMLINK_NOFOLLOW) < 0)
+            return transfer_error (error, _("Could not inspect the moved file before undo or redo"));
+        if (!same_contents_metadata (&transaction->installed.stat, &current) ||
+            current.st_ctim.tv_sec != transaction->publication_identity.st_ctim.tv_sec ||
+            current.st_ctim.tv_nsec != transaction->publication_identity.st_ctim.tv_nsec)
+            return changed (error);
     }
     gboolean ok;
     if (!redo) {
@@ -3268,6 +3313,17 @@ nemo_transfer_undo_apply (NemoTransferUndo *undo, gboolean redo,
          check_directory_close (destination->fd, error) &&
          check_directory_close (transaction->recovery.fd, error) &&
          (!undo->move || check_directory_close (transaction->source_parent->fd, error));
+    if (ok && transaction->native_source) {
+        struct stat current;
+        int parent = redo ? destination->fd : transaction->source_parent->fd;
+        const char *name = redo ? transaction->destination_name : transaction->source_name;
+        if (fstatat (parent, name, &current, AT_SYMLINK_NOFOLLOW) < 0)
+            ok = transfer_error (error, _("Could not inspect the moved file after undo or redo"));
+        else if (!same_contents_metadata (&transaction->installed.stat, &current))
+            ok = changed (error);
+        else
+            transaction->publication_identity = current;
+    }
     if (!recovery_finish (&transaction->recovery, ok ? error : NULL))
         ok = FALSE;
     if (ok && ((!redo && undo->move) || (redo && !transaction->backup)))
