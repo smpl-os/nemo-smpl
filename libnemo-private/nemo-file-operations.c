@@ -7265,18 +7265,22 @@ nemo_file_operations_copy (GList *files,
 }
 
 static void
-report_move_progress (CopyMoveJob *move_job, int total, int left)
+report_move_progress (CopyMoveJob *move_job, int total, int left, GFile *source)
 {
 	CommonJob *job;
 
 	job = (CommonJob *)move_job;
 
 	nemo_progress_info_take_status (job->progress,
-					    f (_("Preparing to Move to \"%B\""),
+					    f (source ? _("Moving to \"%B\"") : _("Preparing to Move to \"%B\""),
 					       move_job->destination));
 
     if (nemo_progress_info_get_is_paused (job->progress)) {
         nemo_progress_info_set_details (job->progress, _("Paused"));
+    } else if (source != NULL) {
+        nemo_progress_info_take_details (job->progress,
+                                         f (_("Moving \"%B\" (%'d of %'d)"),
+                                            source, total - left + 1, total));
     } else {
     	nemo_progress_info_take_details (job->progress,
     					     f (ngettext ("Preparing to move %'d file",
@@ -7284,8 +7288,17 @@ report_move_progress (CopyMoveJob *move_job, int total, int left)
     							  left), left));
     }
 
-	nemo_progress_info_pulse_progress (job->progress);
+	nemo_progress_info_set_progress (job->progress, total - left, total);
 }
+
+#ifdef NEMO_SMPL
+static gboolean
+consume_move_changes (gpointer unused)
+{
+	nemo_file_changes_consume_changes (TRUE);
+	return FALSE;
+}
+#endif
 
 typedef struct {
 	GFile *file;
@@ -7469,6 +7482,10 @@ move_file_prepare (CopyMoveJob *move_job,
         g_free (dest_uri);
 
 		nemo_file_changes_queue_file_moved (src, dest);
+#ifdef NEMO_SMPL
+		/* Publish each completed item to open views, not only at job end. */
+		g_io_scheduler_job_send_to_mainloop_async (job->io_job, consume_move_changes, NULL, NULL);
+#endif
 
         if (target_is_desktop && position) {
             nemo_file_changes_queue_schedule_position_set (dest, *position, job->monitor_num);
@@ -7688,13 +7705,14 @@ move_files_prepare (CopyMoveJob *job,
 
 	total = left = g_list_length (job->files);
 
-	report_move_progress (job, total, left);
+	report_move_progress (job, total, left, NULL);
 
 	i = 0;
 	for (l = job->files;
 	     l != NULL && !job_aborted (common);
 	     l = l->next) {
 		src = l->data;
+		report_move_progress (job, total, left, src);
 
 		if (i < job->n_icon_positions) {
 			point = &job->icon_positions[i];
@@ -7714,7 +7732,8 @@ move_files_prepare (CopyMoveJob *job,
 				   point,
 				   fallbacks,
 				   left);
-		report_move_progress (job, total, --left);
+		left--;
+		nemo_progress_info_set_progress (common->progress, total - left, total);
 		i++;
 	}
 

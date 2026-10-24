@@ -22,6 +22,7 @@ REQUIRED_TESTS = {
     "Native background alpha",
     CROSSFS_TEST,
     "Copy source selection",
+    "Move feedback",
     "test-progress-completion",
     "Completion real backends",
     "Completion pending backend exit",
