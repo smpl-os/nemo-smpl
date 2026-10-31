@@ -136,6 +136,7 @@ if gstreamer_enabled
   nemo_deps += gstreamer
   nemo_deps += gstreamer_video
   nemo_deps += gstreamer_app
+  nemo_deps += gstreamer_pbutils
 endif
 
 if gtk_layer_shell_enabled

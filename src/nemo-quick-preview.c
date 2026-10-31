@@ -109,6 +109,8 @@ struct _NemoQuickPreview {
 	NemoPreviewMediaFrames *media_frames;
 	gboolean     media_ready;
 	gboolean     video_playing;
+	gboolean     media_is_audio;
+	guint        media_load_timeout_id;
 #endif
 
 	/* Frame rendering (appsink → cairo) */
@@ -444,7 +446,7 @@ on_search_header_btn_clicked (GtkButton *button, gpointer data)
 }
 
 #ifdef HAVE_GSTREAMER
-static void     preview_show_media     (NemoQuickPreview *self, GFile *file);
+static void     preview_show_media     (NemoQuickPreview *self, GFile *file, gboolean is_audio);
 static void     media_stop             (NemoQuickPreview *self);
 static gboolean video_area_draw_cb     (GtkWidget *widget, cairo_t *cr, gpointer data);
 #ifndef NEMO_SMPL
@@ -1159,6 +1161,7 @@ nemo_quick_preview_finalize (GObject *object)
 	 * only clean up GStreamer and navigation state */
 #ifdef HAVE_GSTREAMER
 	media_stop (self);
+	g_mutex_clear (&self->frame_mutex);
 #endif
 	navigation_clear (self);
 
@@ -1570,7 +1573,7 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 #ifdef HAVE_GSTREAMER
 	else if (nemo_preview_mime_is_media (content_type)) {
 		gtk_search_bar_set_search_mode (GTK_SEARCH_BAR (self->search_bar), FALSE);
-		preview_show_media (self, file);
+		preview_show_media (self, file, nemo_preview_mime_is_audio (content_type));
 	}
 #endif
 	else if (nemo_preview_mime_is_text (content_type)) {
@@ -1776,16 +1779,64 @@ preview_show_image (NemoQuickPreview *self, GFile *file)
 
 #ifdef HAVE_GSTREAMER
 
+#ifdef NEMO_SMPL
+static void
+media_load_complete (NemoQuickPreview *self)
+{
+	if (self->media_ready && (self->media_is_audio || self->frame_surface != NULL) &&
+	    self->media_load_timeout_id != 0) {
+		g_source_remove (self->media_load_timeout_id);
+		self->media_load_timeout_id = 0;
+	}
+}
+
+static gboolean
+media_load_timed_out (gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
+
+	self->media_load_timeout_id = 0;
+	preview_set_status (self, _("Media preview timed out while loading.\n"
+				   "Try reopening the file or using an external player."));
+	media_stop (self);
+	return G_SOURCE_REMOVE;
+}
+#endif
+
 static gboolean
 media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 {
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
 
+#ifdef NEMO_SMPL
+	if (self->destroyed || self->pipeline == NULL)
+		return G_SOURCE_REMOVE;
+#endif
 	switch (GST_MESSAGE_TYPE (message)) {
 #ifdef NEMO_SMPL
-	case GST_MESSAGE_ASYNC_DONE:
-		self->media_ready = TRUE;
+	case GST_MESSAGE_ELEMENT: {
+		g_autofree char *error = nemo_preview_media_missing_plugin (message, self->media_is_audio);
+		if (error != NULL) {
+			preview_set_status (self, error);
+			media_stop (self);
+		}
 		break;
+	}
+	case GST_MESSAGE_ASYNC_DONE: {
+		gint video_streams;
+
+		if (GST_MESSAGE_SRC (message) != GST_OBJECT (self->pipeline))
+			break;
+		self->media_ready = TRUE;
+		g_object_get (self->pipeline, "n-video", &video_streams, NULL);
+		if (!self->media_is_audio && video_streams == 0) {
+			preview_set_status (self, _("Unable to decode the video stream.\n"
+						   "Check that the required GStreamer video decoder is installed."));
+			media_stop (self);
+		} else
+			media_load_complete (self);
+		break;
+	}
 #endif
 	case GST_MESSAGE_EOS:
 		/* Loop playback */
@@ -1826,19 +1877,38 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 static void
 process_video_sample (NemoQuickPreview *self, GstSample *sample)
 {
+#ifndef NEMO_SMPL
 	GstBuffer *buffer;
 	GstCaps *caps;
-	GstVideoInfo vinfo;
 	GstMapInfo map;
-	cairo_surface_t *surface;
-	int w, h, stride;
+	int stride;
 	const guint8 *src;
 	guint8 *dst;
 	int i;
+#endif
+	GstVideoInfo vinfo;
+	cairo_surface_t *surface;
+	int w, h;
 
 	if (sample == NULL)
 		return;
 
+#ifdef NEMO_SMPL
+	GError *error = NULL;
+	surface = nemo_preview_media_render_frame (sample, &vinfo, &error);
+	gst_sample_unref (sample);
+	if (surface == NULL) {
+		if (self->pipeline != NULL)
+			gst_element_post_message (self->pipeline,
+				gst_message_new_error (GST_OBJECT (self->pipeline), error, NULL));
+		g_error_free (error);
+		return;
+	}
+	w = cairo_image_surface_get_width (surface);
+	h = cairo_image_surface_get_height (surface);
+	if (GST_VIDEO_INFO_FPS_N (&vinfo) > 0 && GST_VIDEO_INFO_FPS_D (&vinfo) > 0)
+		self->video_fps = (double) GST_VIDEO_INFO_FPS_N (&vinfo) / GST_VIDEO_INFO_FPS_D (&vinfo);
+#else
 	buffer = gst_sample_get_buffer (sample);
 	caps = gst_sample_get_caps (sample);
 	if (buffer == NULL || caps == NULL) {
@@ -1853,10 +1923,6 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 
 	w = GST_VIDEO_INFO_WIDTH (&vinfo);
 	h = GST_VIDEO_INFO_HEIGHT (&vinfo);
-#ifdef NEMO_SMPL
-	if (GST_VIDEO_INFO_FPS_N (&vinfo) > 0 && GST_VIDEO_INFO_FPS_D (&vinfo) > 0)
-		self->video_fps = (double) GST_VIDEO_INFO_FPS_N (&vinfo) / GST_VIDEO_INFO_FPS_D (&vinfo);
-#endif
 
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READ)) {
 		gst_sample_unref (sample);
@@ -1878,6 +1944,7 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 	cairo_surface_mark_dirty (surface);
 	gst_buffer_unmap (buffer, &map);
 	gst_sample_unref (sample);
+#endif
 
 	g_mutex_lock (&self->frame_mutex);
 	if (self->frame_surface != NULL)
@@ -1888,6 +1955,7 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 
 #ifdef NEMO_SMPL
 	g_mutex_unlock (&self->frame_mutex);
+	media_load_complete (self);
 	gtk_widget_queue_draw (self->video_area);
 #else
 	/* Marshal the redraw to the main thread. GTK/GDK is NOT thread-safe
@@ -2123,30 +2191,48 @@ video_area_draw_cb (GtkWidget *widget,
 }
 
 static void
-preview_show_media (NemoQuickPreview *self, GFile *file)
+preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 {
 	char *uri;
 	GstBus *bus;
 	GstElement *appsink;
+#ifndef NEMO_SMPL
 	GstCaps *caps;
+#endif
 
 	media_stop (self);
 
 	g_autoptr (GError) init_error = NULL;
 	if (!nemo_preview_media_init (&init_error)) {
+#ifdef NEMO_SMPL
+		preview_set_status (self, init_error->message);
+#else
 		g_warning ("Quick preview: GStreamer init failed: %s", init_error->message);
 		preview_show_paged (self, file, NEMO_VIEWER_MODE_HEX);
+#endif
 		return;
 	}
 
 	self->pipeline = gst_element_factory_make ("playbin", "quick-preview-player");
 	if (self->pipeline == NULL) {
+#ifdef NEMO_SMPL
+		preview_set_status (self, _("The GStreamer playbin plugin is unavailable."));
+#else
 		g_warning ("Quick preview: could not create playbin element");
 		preview_show_paged (self, file, NEMO_VIEWER_MODE_HEX);
+#endif
 		return;
 	}
 
 	/* Use appsink as video sink — we extract frames and render with Cairo */
+#ifdef NEMO_SMPL
+	appsink = nemo_preview_media_create_sink (&init_error);
+	if (appsink == NULL) {
+		preview_set_status (self, init_error->message);
+		media_stop (self);
+		return;
+	}
+#else
 	appsink = gst_element_factory_make ("appsink", "qp-vsink");
 	if (appsink == NULL) {
 		g_warning ("Quick preview: could not create appsink element");
@@ -2165,12 +2251,16 @@ preview_show_media (NemoQuickPreview *self, GFile *file)
 	              "drop", TRUE,
 	              NULL);
 	gst_caps_unref (caps);
+#endif
 
 #ifdef NEMO_SMPL
 	self->media_frames = nemo_preview_media_connect_sink (
 		appsink, G_OBJECT (self), consume_video_sample);
 	self->media_ready = FALSE;
 	self->video_playing = FALSE;
+	self->media_is_audio = is_audio;
+	self->media_load_timeout_id = g_timeout_add_seconds (
+		NEMO_PREVIEW_MEDIA_LOAD_SECONDS, media_load_timed_out, self);
 #else
 	g_signal_connect (appsink, "new-sample",
 	                  G_CALLBACK (new_sample_cb), self);
@@ -2256,6 +2346,10 @@ static void
 media_stop (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
+	if (self->media_load_timeout_id != 0) {
+		g_source_remove (self->media_load_timeout_id);
+		self->media_load_timeout_id = 0;
+	}
 	nemo_preview_media_frames_stop (self->media_frames);
 	self->media_frames = NULL;
 	self->media_ready = FALSE;

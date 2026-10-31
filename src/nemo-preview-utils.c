@@ -125,6 +125,111 @@ nemo_preview_run_task (GTask *task, GTaskThreadFunc worker)
 
 #if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
 #include <gst/app/gstappsink.h>
+#include <gst/pbutils/missing-plugins.h>
+
+GstElement *
+nemo_preview_media_create_sink (GError **error)
+{
+	GstElement *sink = gst_element_factory_make ("appsink", NULL);
+	GstCaps *caps;
+
+	if (sink == NULL) {
+		g_set_error_literal (error, GST_CORE_ERROR, GST_CORE_ERROR_MISSING_PLUGIN,
+				     _("The GStreamer appsink plugin is unavailable."));
+		return NULL;
+	}
+
+	/* Bound converted frames before they reach the UI, not decoder reference
+	 * pictures. Square pixels preserve the displayed aspect ratio in Cairo. */
+	caps = gst_caps_from_string ("video/x-raw, format=BGRx, "
+				    "width=(int)[1,1920], height=(int)[1,1080], "
+				    "pixel-aspect-ratio=(fraction)1/1");
+	g_object_set (sink, "caps", caps, "max-buffers", 1, "drop", TRUE,
+		      "enable-last-sample", FALSE, NULL);
+	gst_caps_unref (caps);
+	return sink;
+}
+
+gchar *
+nemo_preview_media_missing_plugin (GstMessage *message, gboolean is_audio)
+{
+	const GstStructure *structure;
+	const GValue *detail;
+	const char *type;
+	g_autofree char *description = NULL;
+
+	if (!gst_is_missing_plugin_message (message))
+		return NULL;
+	structure = gst_message_get_structure (message);
+	type = gst_structure_get_string (structure, "type");
+	/* Missing audio must not prevent an otherwise usable video preview, nor
+	 * should optional subtitle decoders prevent either kind of preview. */
+	if (g_strcmp0 (type, "decoder") == 0) {
+		const GstCaps *caps;
+		const char *name;
+
+		detail = gst_structure_get_value (structure, "detail");
+		if (detail == NULL || !GST_VALUE_HOLDS_CAPS (detail))
+			return NULL;
+		caps = gst_value_get_caps (detail);
+		if (gst_caps_is_empty (caps) || gst_caps_is_any (caps))
+			return NULL;
+		name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
+		if (is_audio ? !g_str_has_prefix (name, "audio/") :
+		    !(g_str_has_prefix (name, "video/") || g_str_has_prefix (name, "image/")))
+			return NULL;
+	}
+	description = gst_missing_plugin_message_get_description (message);
+	return g_strdup_printf (_("Unable to preview this file.\n"
+				  "A required GStreamer plugin is unavailable: %s"),
+				description);
+}
+
+cairo_surface_t *
+nemo_preview_media_render_frame (GstSample *sample, GstVideoInfo *info, GError **error)
+{
+	GstCaps *caps = gst_sample_get_caps (sample);
+	GstBuffer *buffer = gst_sample_get_buffer (sample);
+	GstVideoFrame frame;
+	cairo_surface_t *surface;
+	guint8 *destination;
+	const guint8 *source;
+	int width, height, stride;
+
+	if (caps == NULL || buffer == NULL || !gst_video_info_from_caps (info, caps) ||
+	    GST_VIDEO_INFO_FORMAT (info) != GST_VIDEO_FORMAT_BGRx ||
+	    GST_VIDEO_INFO_WIDTH (info) > 1920 || GST_VIDEO_INFO_HEIGHT (info) > 1080) {
+		g_set_error_literal (error, GST_STREAM_ERROR, GST_STREAM_ERROR_FORMAT,
+				     _("The decoded video frame has an unsupported format or size."));
+		return NULL;
+	}
+	if (!gst_video_frame_map (&frame, info, buffer, GST_MAP_READ)) {
+		g_set_error_literal (error, GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_READ,
+				     _("Unable to read a decoded video frame."));
+		return NULL;
+	}
+
+	width = GST_VIDEO_FRAME_WIDTH (&frame);
+	height = GST_VIDEO_FRAME_HEIGHT (&frame);
+	surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, width, height);
+	if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS) {
+		g_set_error (error, GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_FAILED,
+			     _("Unable to allocate a video preview frame: %s"),
+			     cairo_status_to_string (cairo_surface_status (surface)));
+		cairo_surface_destroy (surface);
+		gst_video_frame_unmap (&frame);
+		return NULL;
+	}
+	destination = cairo_image_surface_get_data (surface);
+	stride = cairo_image_surface_get_stride (surface);
+	source = GST_VIDEO_FRAME_PLANE_DATA (&frame, 0);
+	for (int row = 0; row < height; row++)
+		memcpy (destination + row * stride,
+			source + row * GST_VIDEO_FRAME_PLANE_STRIDE (&frame, 0), width * 4);
+	cairo_surface_mark_dirty (surface);
+	gst_video_frame_unmap (&frame);
+	return surface;
+}
 
 typedef struct {
 	GMutex lock;
