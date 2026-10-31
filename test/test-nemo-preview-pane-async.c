@@ -3,7 +3,13 @@
  * worker and generation internals as public widget API. */
 #include <glib/gstdio.h>
 #include <unistd.h>
+#include <config.h>
+#ifdef HAVE_GSTREAMER
+#include "preview-media-fixture.h"
+#define gst_element_factory_make preview_media_factory_make
+#endif
 #include "../src/nemo-preview-pane.c"
+#undef gst_element_factory_make
 #ifdef HAVE_DOCUMENT_PREVIEW
 #include "document-preview-fixture.h"
 #endif
@@ -387,6 +393,128 @@ test_rich_document_pane (void)
 static GThread *test_main_thread;
 
 static void
+wait_for_media (NemoPreviewPane *pane)
+{
+	gint64 deadline = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+	while (pane->pipeline != NULL &&
+	       (!pane->video_ready || pane->frame_surface == NULL) &&
+	       g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+}
+
+static void
+test_long_webm (void)
+{
+	g_autofree char *path = preview_media_fixture (3840, 2160);
+	GFile *location = g_file_new_for_path (path);
+	NemoFile *file = nemo_file_get (location);
+
+	for (int cycle = 0; cycle < 8; cycle++) {
+		NemoPreviewPane *pane = new_test_pane ();
+		load_media_preview (pane, file, FALSE);
+		wait_for_media (pane);
+		g_assert_nonnull (pane->pipeline);
+		g_assert_true (pane->video_ready);
+		g_assert_nonnull (pane->frame_surface);
+		g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+		g_assert_cmpint (pane->video_width, ==, 1920);
+		g_assert_cmpint (pane->video_height, ==, 1080);
+		gint64 duration = -1;
+		g_assert_true (gst_element_query_duration (pane->pipeline, GST_FORMAT_TIME, &duration));
+		g_assert_cmpint (duration, >=, 5400 * GST_SECOND);
+		gpointer weak_pipeline = pane->pipeline;
+		g_object_add_weak_pointer (G_OBJECT (pane->pipeline), &weak_pipeline);
+		gtk_widget_destroy (GTK_WIDGET (pane));
+		g_assert_null (pane->frame_surface);
+		g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+		g_object_unref (pane);
+		gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+		while (weak_pipeline != NULL && g_get_monotonic_time () < deadline) {
+			g_main_context_iteration (NULL, FALSE);
+			g_usleep (1000);
+		}
+		g_assert_null (weak_pipeline);
+	}
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
+test_missing_video (void)
+{
+	g_autofree char *path = preview_media_fixture (128, 72);
+	GFile *location = g_file_new_for_path (path);
+	NemoFile *file = nemo_file_get (location);
+	GPtrArray *ranks = preview_disable_video_decoders ();
+	NemoPreviewPane *pane = new_test_pane ();
+	load_media_preview (pane, file, FALSE);
+	wait_for_media (pane);
+	g_assert_null (pane->pipeline);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "info");
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (pane->info_error_label)), "VP8"));
+	g_assert_true (gtk_widget_get_visible (pane->info_error_label));
+	g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+	g_ptr_array_unref (ranks);
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
+test_loading_timeout (void)
+{
+	NemoPreviewPane *pane = new_test_pane ();
+	pane->pipeline = gst_pipeline_new (NULL);
+	pane->media_load_timeout_id = g_timeout_add (1, media_load_timed_out, pane);
+	gint64 deadline = g_get_monotonic_time () + G_TIME_SPAN_SECOND;
+	while (pane->pipeline != NULL && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_null (pane->pipeline);
+	g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "info");
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (pane->info_error_label)), "timed out"));
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+}
+
+static void
+test_audio_only (void)
+{
+	g_autofree char *path = preview_media_fixture (0, 0);
+	GFile *location = g_file_new_for_path (path);
+	NemoFile *file = nemo_file_get (location);
+	NemoPreviewPane *pane = new_test_pane ();
+	load_media_preview (pane, file, TRUE);
+	gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while ((!pane->video_ready || pane->media_load_timeout_id != 0) &&
+	       pane->pipeline != NULL && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	g_assert_true (pane->video_ready);
+	g_assert_nonnull (pane->pipeline);
+	g_assert_null (pane->frame_surface);
+	g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+	load_media_preview (pane, file, FALSE);
+	wait_for_media (pane);
+	g_assert_null (pane->pipeline);
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (pane->info_error_label)), "video stream"));
+	g_assert_cmpuint (pane->media_load_timeout_id, ==, 0);
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_object_unref (location);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
 test_video_sample_ready_cb (GObject *widget, GstSample *sample)
 {
 	g_assert_true (g_thread_self () == test_main_thread);
@@ -511,6 +639,10 @@ main (int argc, char **argv)
 #endif
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview-pane/media-frame-lifetime", test_media_frame_lifetime);
+	g_test_add_func ("/preview-pane/media-long-4k-webm", test_long_webm);
+	g_test_add_func ("/preview-pane/media-missing-video-decoder", test_missing_video);
+	g_test_add_func ("/preview-pane/media-loading-timeout", test_loading_timeout);
+	g_test_add_func ("/preview-pane/media-audio-only", test_audio_only);
 #endif
 	result = g_test_run ();
 	g_assert_cmpint (g_chdir (cwd), ==, 0);

@@ -22,6 +22,10 @@
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
 #endif
+#if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+#include <cairo.h>
+#include <gst/video/video.h>
+#endif
 
 G_BEGIN_DECLS
 
@@ -45,6 +49,14 @@ void nemo_preview_run_task (GTask *task, GTaskThreadFunc worker);
 #endif
 
 #if defined (NEMO_SMPL) && defined (HAVE_GSTREAMER)
+#define NEMO_PREVIEW_MEDIA_LOAD_SECONDS 30
+
+GstElement *nemo_preview_media_create_sink (GError **error);
+gchar *nemo_preview_media_missing_plugin (GstMessage *message, gboolean is_audio);
+cairo_surface_t *nemo_preview_media_render_frame (GstSample *sample,
+						 GstVideoInfo *info,
+						 GError **error);
+
 /* State changes are serialized per pipeline. FALSE means the bounded
  * preview queue is full; the caller should show a retryable error. */
 gboolean nemo_preview_media_set_state_async (GstElement *pipeline, GstState state);

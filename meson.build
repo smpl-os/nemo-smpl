@@ -163,6 +163,7 @@ if gstreamer_enabled
   gstreamer = dependency('gstreamer-1.0',              version: '>=1.0')
   gstreamer_video = dependency('gstreamer-video-1.0',  version: '>=1.0')
   gstreamer_app   = dependency('gstreamer-app-1.0',    version: '>=1.0')
+  gstreamer_pbutils = dependency('gstreamer-pbutils-1.0', version: '>=1.0')
 endif
 conf.set('HAVE_GSTREAMER', gstreamer_enabled)
 

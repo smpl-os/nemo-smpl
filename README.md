@@ -181,6 +181,19 @@ The divider between file panes—and the right preview pane's resize handle—is
 a theme-colored **1-pixel line** that highlights on hover. Its invisible drag
 target stays wider so it is still easy to resize.
 
+### Audio and video previews
+
+F3 and the preview pane use the installed GStreamer decoders, including for
+WebM. Missing video decoders are reported explicitly even when the audio stream
+can play. Loading that does not complete within 30 seconds reports a retryable
+error instead of leaving a black preview indefinitely.
+
+Video preview frames are limited to 1920×1080 with their aspect ratio preserved;
+the original file is unchanged. Converted-frame buffering is bounded and preview
+resources are released when switching or closing files. Decoders still need
+their own reference-frame memory, so high-resolution video can use substantial
+memory even in a small preview.
+
 ## Browsing Archives and ISO Images
 
 Press **Enter** or double-click a ZIP, 7z, TAR/compressed TAR, RAR or ISO image to

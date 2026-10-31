@@ -8,6 +8,7 @@
 #include "../src/nemo-quick-preview.h"
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
+#include "preview-media-fixture.h"
 #endif
 #ifdef HAVE_LIBRAW
 #include <libraw/libraw.h>
@@ -164,7 +165,9 @@ test_raw_open (libraw_data_t *raw, const char *path)
 #define g_file_enumerate_children test_enumerate
 #define gst_element_query_position test_query_position
 #define nemo_file_operations_trash_or_delete test_preview_trash
+#define gst_element_factory_make preview_media_factory_make
 #include "../src/nemo-quick-preview.c"
+#undef gst_element_factory_make
 #undef nemo_file_operations_trash_or_delete
 #undef gst_element_query_position
 #undef g_file_enumerate_children
@@ -761,7 +764,7 @@ test_quick_close_while_media_loading (void)
 	g_object_add_weak_pointer (G_OBJECT (preview), &weak);
 	reset_delay ();
 	g_atomic_int_set (&delay_state, TRUE);
-	preview_show_media (preview, file);
+	preview_show_media (preview, file, FALSE);
 	WAIT_UNTIL (g_atomic_int_get (&delayed_calls) == 1);
 	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_Right };
 	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
@@ -769,10 +772,10 @@ test_quick_close_while_media_loading (void)
 	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
 	seek_position_update_cb (preview);
 	seek_release_cb (preview->seek_scale, NULL, preview);
-	preview_show_media (preview, file);
+	preview_show_media (preview, file, FALSE);
 	WAIT_UNTIL (g_atomic_int_get (&delayed_calls) == 2);
 	for (guint i = 0; i < 20; i++)
-		preview_show_media (preview, file);
+		preview_show_media (preview, file, FALSE);
 	g_assert_cmpint (g_atomic_int_get (&media_pipeline_count), <=, 4);
 	nemo_quick_preview_dismiss (preview);
 	gtk_widget_destroy (GTK_WIDGET (preview));
@@ -795,7 +798,7 @@ test_media_start_error (void)
 	GFile *file = g_file_new_for_uri ("test-preview:///video.avi");
 	g_object_ref_sink (preview);
 	g_atomic_int_set (&fail_state, TRUE);
-	preview_show_media (preview, file);
+	preview_show_media (preview, file, FALSE);
 	WAIT_UNTIL (g_strcmp0 (gtk_stack_get_visible_child_name (GTK_STACK (preview->stack)), "status") == 0);
 	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->status_label)),
 			==, "Unable to start media preview.");
@@ -854,6 +857,232 @@ test_media_frame_lifetime (void)
 	gst_object_unref (pipeline);
 	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
 	iterate_for (100);
+}
+
+static void
+test_media_long_webm (void)
+{
+	g_autofree char *path = preview_media_fixture (3840, 2160);
+	GFile *file = g_file_new_for_path (path);
+
+	for (int cycle = 0; cycle < 8; cycle++) {
+		NemoQuickPreview *preview = g_object_ref_sink (
+			g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+		preview_show_media (preview, file, FALSE);
+		WAIT_UNTIL (preview->media_ready && preview->frame_surface != NULL);
+		g_assert_nonnull (preview->pipeline);
+		g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
+		g_assert_cmpint (preview->video_width, ==, 1920);
+		g_assert_cmpint (preview->video_height, ==, 1080);
+		guint32 pixel;
+		memcpy (&pixel, cairo_image_surface_get_data (preview->frame_surface), sizeof pixel);
+		g_assert_cmphex (pixel & 0x00ff0000, >, 0x00800000);
+		gint64 duration = -1;
+		g_assert_true (gst_element_query_duration (preview->pipeline, GST_FORMAT_TIME, &duration));
+		g_assert_cmpint (duration, >=, 5400 * GST_SECOND);
+		preview->media_ready = FALSE;
+		g_assert_true (gst_element_seek_simple (preview->pipeline, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, 3600 * GST_SECOND));
+		WAIT_UNTIL (preview->media_ready);
+		gint64 position = -1;
+		g_assert_true (gst_element_query_position (preview->pipeline, GST_FORMAT_TIME, &position));
+		g_assert_cmpint (position, >=, 3600 * GST_SECOND);
+		play_pause_clicked_cb (GTK_BUTTON (preview->play_btn), preview);
+		iterate_for (30);
+		play_pause_clicked_cb (GTK_BUTTON (preview->play_btn), preview);
+		gpointer weak_pipeline = preview->pipeline;
+		GstElement *sink;
+		g_object_add_weak_pointer (G_OBJECT (preview->pipeline), &weak_pipeline);
+		g_object_get (preview->pipeline, "video-sink", &sink, NULL);
+		gpointer weak_sink = sink;
+		g_object_add_weak_pointer (G_OBJECT (sink), &weak_sink);
+		gst_object_unref (sink);
+		gtk_widget_destroy (GTK_WIDGET (preview));
+		g_object_unref (preview);
+		WAIT_UNTIL (weak_pipeline == NULL && weak_sink == NULL);
+		g_assert_cmpint (g_atomic_int_get (&media_pipeline_count), ==, 0);
+	}
+	g_object_unref (file);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
+test_media_missing_video (void)
+{
+	g_autofree char *path = preview_media_fixture (128, 72);
+	GFile *file = g_file_new_for_path (path);
+	GPtrArray *ranks = preview_disable_video_decoders ();
+	NemoQuickPreview *preview = g_object_ref_sink (
+		g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	preview_show_media (preview, file, FALSE);
+	WAIT_UNTIL (preview->pipeline == NULL);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (preview->stack)), ==, "status");
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (preview->status_label)), "VP8"));
+	g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	g_ptr_array_unref (ranks);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	g_object_unref (file);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
+test_media_loading_timeout (void)
+{
+	NemoQuickPreview *preview = g_object_ref_sink (
+		g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	GFile *file = g_file_new_for_uri ("test-preview:///video.webm");
+	reset_delay ();
+	g_atomic_int_set (&delay_state, TRUE);
+	preview_show_media (preview, file, FALSE);
+	WAIT_UNTIL (g_atomic_int_get (&delayed_calls) == 1);
+	g_assert_cmpuint (preview->media_load_timeout_id, >, 0);
+	g_source_remove (preview->media_load_timeout_id);
+	g_assert_false (media_load_timed_out (preview));
+	g_assert_null (preview->pipeline);
+	g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (preview->status_label)), "timed out"));
+	assert_responsive ();
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	release_backend ();
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	g_atomic_int_set (&delay_state, FALSE);
+	g_object_unref (file);
+}
+
+static void
+test_media_audio_only (void)
+{
+	g_autofree char *path = preview_media_fixture (0, 0);
+	GFile *file = g_file_new_for_path (path);
+	NemoQuickPreview *preview = g_object_ref_sink (
+		g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	preview_show_media (preview, file, TRUE);
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_nonnull (preview->pipeline);
+	g_assert_null (preview->frame_surface);
+	g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
+	media_stop (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	preview_show_media (preview, file, FALSE);
+	WAIT_UNTIL (preview->pipeline == NULL);
+	g_assert_nonnull (strstr (gtk_label_get_text (GTK_LABEL (preview->status_label)), "video stream"));
+	g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	g_object_unref (file);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
+test_media_frame_metadata (void)
+{
+	GstCaps *caps = gst_caps_from_string (
+		"video/x-raw,format=BGRx,width=2,height=2,framerate=25/1");
+	GstBuffer *buffer = gst_buffer_new_allocate (NULL, 40, NULL);
+	gsize offsets[GST_VIDEO_MAX_PLANES] = { 8 };
+	gint strides[GST_VIDEO_MAX_PLANES] = { 16 };
+	gst_buffer_memset (buffer, 0, 0, 40);
+	gst_buffer_memset (buffer, 8, 0x44, 8);
+	gst_buffer_memset (buffer, 24, 0x88, 8);
+	g_assert_nonnull (gst_buffer_add_video_meta_full (
+		buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_BGRx, 2, 2, 1, offsets, strides));
+	GstSample *sample = gst_sample_new (buffer, caps, NULL, NULL);
+	GstVideoInfo info;
+	GError *error = NULL;
+	cairo_surface_t *surface = nemo_preview_media_render_frame (sample, &info, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (surface);
+	const guint8 *pixels = cairo_image_surface_get_data (surface);
+	int stride = cairo_image_surface_get_stride (surface);
+	for (int column = 0; column < 8; column++) {
+		g_assert_cmphex (pixels[column], ==, 0x44);
+		g_assert_cmphex (pixels[stride + column], ==, 0x88);
+	}
+	cairo_surface_destroy (surface);
+	gst_sample_unref (sample);
+	gst_buffer_unref (buffer);
+	buffer = gst_buffer_new_allocate (NULL, 1, NULL);
+	sample = gst_sample_new (buffer, caps, NULL, NULL);
+	g_assert_null (nemo_preview_media_render_frame (sample, &info, &error));
+	g_assert_error (error, GST_RESOURCE_ERROR, GST_RESOURCE_ERROR_READ);
+	g_clear_error (&error);
+	gst_sample_unref (sample);
+	gst_buffer_unref (buffer);
+	gst_caps_unref (caps);
+}
+
+static void
+test_media_aspect_ratio (void)
+{
+	const struct {
+		int width, height, par_n, par_d, output_width, output_height;
+	} cases[] = {
+		{ 2160, 3840, 1, 1, 608, 1080 },
+		{ 3840, 1600, 1, 1, 1920, 800 },
+		{ 720, 576, 16, 15, 768, 576 },
+		{ 128, 72, 1, 1, 128, 72 },
+	};
+	for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
+		g_autofree char *description = g_strdup_printf (
+			"videotestsrc num-buffers=1 pattern=red ! "
+			"video/x-raw,width=%d,height=%d,pixel-aspect-ratio=%d/%d ! "
+			"videoconvert ! videoscale",
+			cases[i].width, cases[i].height, cases[i].par_n, cases[i].par_d);
+		GError *error = NULL;
+		GstElement *source = gst_parse_bin_from_description (description, TRUE, &error);
+		g_assert_no_error (error);
+		GstElement *sink = nemo_preview_media_create_sink (&error);
+		g_assert_no_error (error);
+		GstElement *pipeline = gst_pipeline_new (NULL);
+		gst_bin_add_many (GST_BIN (pipeline), source, sink, NULL);
+		g_assert_true (gst_element_link (source, sink));
+		g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PAUSED),
+				 !=, GST_STATE_CHANGE_FAILURE);
+		g_assert_cmpint (gst_element_get_state (pipeline, NULL, NULL, 5 * GST_SECOND),
+				 ==, GST_STATE_CHANGE_SUCCESS);
+		GstSample *sample = gst_app_sink_pull_preroll (GST_APP_SINK (sink));
+		g_assert_nonnull (sample);
+		GstVideoInfo info;
+		cairo_surface_t *surface = nemo_preview_media_render_frame (sample, &info, &error);
+		g_assert_no_error (error);
+		g_assert_nonnull (surface);
+		g_assert_cmpint (cairo_image_surface_get_width (surface), ==, cases[i].output_width);
+		g_assert_cmpint (cairo_image_surface_get_height (surface), ==, cases[i].output_height);
+		g_assert_cmpint (GST_VIDEO_INFO_PAR_N (&info), ==, 1);
+		g_assert_cmpint (GST_VIDEO_INFO_PAR_D (&info), ==, 1);
+		gboolean retain_sample;
+		guint max_buffers;
+		g_object_get (sink, "enable-last-sample", &retain_sample, "max-buffers", &max_buffers, NULL);
+		g_assert_false (retain_sample);
+		g_assert_cmpuint (max_buffers, ==, 1);
+		cairo_surface_destroy (surface);
+		gst_sample_unref (sample);
+		gst_element_set_state (pipeline, GST_STATE_NULL);
+		gst_object_unref (pipeline);
+	}
+}
+
+static void
+test_media_optional_decoders (void)
+{
+	GstElement *source = gst_pipeline_new (NULL);
+	const char *types[] = { "audio/x-opus", "video/x-vp8", "text/x-raw" };
+
+	for (guint i = 0; i < G_N_ELEMENTS (types); i++) {
+		GstCaps *caps = gst_caps_from_string (types[i]);
+		GstMessage *message = gst_missing_decoder_message_new (source, caps);
+		g_autofree char *video_error = nemo_preview_media_missing_plugin (message, FALSE);
+		g_autofree char *audio_error = nemo_preview_media_missing_plugin (message, TRUE);
+		g_assert_cmpint (video_error != NULL, ==, i == 1);
+		g_assert_cmpint (audio_error != NULL, ==, i == 0);
+		gst_message_unref (message);
+		gst_caps_unref (caps);
+	}
+	gst_object_unref (source);
 }
 #endif
 
@@ -1083,6 +1312,13 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/media/start-error", test_media_start_error);
 	g_test_add_func ("/preview/media/push-failure", test_media_push_failure);
 	g_test_add_func ("/preview/media/frame-lifetime", test_media_frame_lifetime);
+	g_test_add_func ("/preview/media/long-4k-webm", test_media_long_webm);
+	g_test_add_func ("/preview/media/missing-video-decoder", test_media_missing_video);
+	g_test_add_func ("/preview/media/loading-timeout", test_media_loading_timeout);
+	g_test_add_func ("/preview/media/audio-only", test_media_audio_only);
+	g_test_add_func ("/preview/media/frame-metadata", test_media_frame_metadata);
+	g_test_add_func ("/preview/media/scaled-aspect-ratio", test_media_aspect_ratio);
+	g_test_add_func ("/preview/media/optional-decoders", test_media_optional_decoders);
 #endif
 	int result = g_test_run ();
 	g_source_remove (tick);
