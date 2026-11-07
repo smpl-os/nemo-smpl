@@ -1372,7 +1372,13 @@ void
 nemo_window_pane_grab_focus (NemoWindowPane *pane)
 {
 	if (NEMO_IS_WINDOW_PANE (pane) && pane->active_slot) {
-		nemo_view_grab_focus (pane->active_slot->content_view);
+		if (pane->active_slot->content_view != NULL) {
+			nemo_view_grab_focus (pane->active_slot->content_view);
+		} else {
+			GtkWidget *child = gtk_bin_get_child (GTK_BIN (pane->active_slot->view_overlay));
+			if (child != NULL)
+				gtk_widget_child_focus (child, GTK_DIR_TAB_FORWARD);
+		}
 	}
 }
 

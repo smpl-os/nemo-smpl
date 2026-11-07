@@ -673,81 +673,6 @@ nemo_window_slot_open_location_full (NemoWindowSlot *slot,
 		}
 	}
 
-    /* ── Check for overview:// EARLY, before any other location logic ────── */
-    {
-        char *scheme = g_file_get_uri_scheme (location);
-        if (g_strcmp0 (scheme, "overview") == 0) {
-            g_free (scheme);
-
-            /* Remove the current directory view, if any */
-            if (target_slot->content_view != NULL) {
-                GtkWidget *old_widget = GTK_WIDGET (target_slot->content_view);
-                gtk_widget_destroy (old_widget);
-                g_object_unref (target_slot->content_view);
-                target_slot->content_view = NULL;
-            }
-
-            /* Remove any previous overview widget */
-            {
-                GList *children = gtk_container_get_children (GTK_CONTAINER (target_slot->view_overlay));
-                GList *c;
-                for (c = children; c != NULL; c = c->next) {
-                    if (NEMO_IS_OVERVIEW (c->data))
-                        gtk_widget_destroy (GTK_WIDGET (c->data));
-                }
-                g_list_free (children);
-            }
-
-            /* Create and show the overview widget */
-            {
-                GtkWidget *overview = nemo_overview_new ();
-                gtk_container_add (GTK_CONTAINER (target_slot->view_overlay), overview);
-                gtk_widget_show_all (overview);
-            }
-
-            /* Properly mirror update_for_new_location() so that slot->location is
-             * updated to overview:// and the previous location lands on the back-list.
-             * Without this, slot->location would stay pointing at the previous dir,
-             * causing (a) the "same location" early-return to fire when the user
-             * clicks the same sidebar item again, and (b) set_displayed_location()
-             * on the next navigation to rotate the wrong bookmark into the back-list,
-             * ending up with overview:// in back_list and triggering the
-             * "cannot handle overview locations" error on back-button press. */
-            set_displayed_location (target_slot, location);
-            handle_go_elsewhere (target_slot, location);
-            nemo_window_slot_emit_location_change (target_slot, target_slot->location, location);
-            g_clear_object (&target_slot->location);
-            target_slot->location = g_object_ref (location);
-
-            /* Emit the window-level "loading_uri" signal so the sidebar
-             * can update its selection to the Overview row. */
-            if (target_slot == nemo_window_get_active_slot (target_window)) {
-                nemo_window_emit_location_change (target_window, location);
-            }
-
-            g_free (target_slot->title);
-            target_slot->title = g_strdup (_("Overview"));
-
-            nemo_window_slot_update_title (target_slot);
-            nemo_window_slot_update_icon (target_slot);
-
-            if (target_slot == nemo_window_get_active_slot (target_window)) {
-                nemo_window_pane_sync_up_actions (target_slot->pane);
-                nemo_window_pane_sync_location_widgets (target_slot->pane);
-				set_view_actions_sensitivity (target_window, FALSE);
-            }
-
-            if (old_location != NULL)
-                g_object_unref (old_location);
-
-            if (callback != NULL)
-                callback (target_window, NULL, user_data);
-
-            return;
-        }
-        g_free (scheme);
-    }
-
     if (target_window == window && target_slot == slot &&
         old_location && g_file_equal (old_location, location) &&
         !is_desktop) {
@@ -1014,6 +939,8 @@ begin_location_change (NemoWindowSlot        *slot,
                 slot->open_callback_user_data = NULL;
             }
             end_location_change (slot);
+            /* Overview has no NemoView to report readiness on its behalf. */
+            nemo_window_slot_visible (slot);
 
             if (parent_selection != NULL)
                 g_list_free_full (parent_selection, g_object_unref);

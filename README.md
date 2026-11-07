@@ -298,6 +298,8 @@ still opens that requested folder; turning this option off stops saving and
 restoring the window. Saved folders that no longer exist (for example, on an
 unplugged USB drive) reopen at Home without an error dialog; other tabs and the
 pane layout are preserved. Remote folders require their connection to be available.
+Disk Usage Overview tabs also restore normally, including when Overview is the
+active tab or the only tab in a pane; they do not leave the startup window hidden.
 
 Right-click any directory in the breadcrumb bar to **Add to Favorites** or
 **Add Bookmark** without navigating there. These act on the clicked directory,

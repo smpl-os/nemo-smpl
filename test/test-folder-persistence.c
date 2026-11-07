@@ -105,6 +105,67 @@ test_last_tab_close (void)
 }
 
 static void
+test_restore_overview (void)
+{
+    Fixture fixture = fixture_new ();
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP, TRUE);
+    nemo_window_close (fixture.window);
+    g_autofree char *origin_uri = g_file_get_uri (fixture.origin);
+    const char *left_uris[] = { origin_uri, "overview:///", NULL };
+    const char *right_uris[] = { "overview:///", NULL };
+    g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_LEFT, left_uris);
+    g_settings_set_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_RIGHT, right_uris);
+    g_settings_set_boolean (nemo_window_state, NEMO_WINDOW_STATE_SAVED_SPLIT_VIEW, TRUE);
+    g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_TAB_LEFT, 1);
+    g_settings_set_int (nemo_window_state, NEMO_WINDOW_STATE_SAVED_ACTIVE_PANE, 1);
+    reopen_fixture (&fixture, FALSE);
+    GList *panes = nemo_window_get_panes (fixture.window);
+    NemoWindowPane *left = panes->data;
+    NemoWindowPane *right = panes->next->data;
+    WAIT_FOR (slot_at (pane_tab (left, 0), fixture.origin));
+    WAIT_FOR (gtk_widget_get_mapped (GTK_WIDGET (fixture.window)));
+    g_assert_cmpint (gtk_notebook_get_n_pages (GTK_NOTEBOOK (left->notebook)), ==, 2);
+    g_assert_cmpint (gtk_notebook_get_n_pages (GTK_NOTEBOOK (right->notebook)), ==, 1);
+    g_assert_true (pane_tab (left, 1)->visible);
+    g_assert_true (pane_tab (right, 0)->visible);
+    g_assert_true (g_file_has_uri_scheme (pane_tab (left, 1)->location, "overview"));
+    g_assert_true (g_file_has_uri_scheme (pane_tab (right, 0)->location, "overview"));
+    g_assert_null (pane_tab (right, 0)->pending_location);
+    g_assert_true (nemo_window_get_active_pane (fixture.window) == right);
+    nemo_window_close (fixture.window);
+    g_auto(GStrv) saved = g_settings_get_strv (nemo_window_state, NEMO_WINDOW_STATE_SAVED_TABS_LEFT);
+    g_assert_cmpstr (saved[0], ==, origin_uri);
+    g_assert_cmpstr (saved[1], ==, "overview:///");
+    reopen_fixture (&fixture, FALSE);
+    WAIT_FOR (gtk_widget_get_mapped (GTK_WIDGET (fixture.window)));
+    nemo_window_slot_open_location (fixture.slot, fixture.origin, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    fixture_clear (&fixture);
+}
+
+static void
+test_overview_history (void)
+{
+    Fixture fixture = fixture_new ();
+    g_autoptr(GFile) overview = g_file_new_for_uri ("overview:///");
+    nemo_window_slot_open_location (fixture.slot, overview, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    g_assert_true (g_file_equal (fixture.slot->location, overview));
+    g_assert_null (fixture.slot->pending_location);
+    g_assert_null (fixture.slot->content_view);
+    nemo_window_slot_open_location (fixture.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    nemo_window_back_or_forward (fixture.window, TRUE, 0, 0);
+    g_assert_true (g_file_equal (fixture.slot->location, overview));
+    nemo_window_back_or_forward (fixture.window, TRUE, 0, 0);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    nemo_window_back_or_forward (fixture.window, FALSE, 0, 0);
+    g_assert_true (g_file_equal (fixture.slot->location, overview));
+    nemo_window_back_or_forward (fixture.window, FALSE, 0, 0);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    fixture_clear (&fixture);
+}
+
+static void
 assert_no_error_dialog (void)
 {
     GList *windows = gtk_window_list_toplevels ();
@@ -396,7 +457,7 @@ run_case (gconstpointer data)
 }
 
 static int
-wait_for_window_title (const char *expected)
+wait_for_window_title (const char *expected, guint expected_count)
 {
     gtk_init (NULL, NULL);
     GdkDisplay *display = gdk_display_get_default ();
@@ -407,31 +468,34 @@ wait_for_window_title (const char *expected)
         g_string_set_size (observed, 0);
         Window root, parent, *windows = NULL;
         unsigned int count = 0;
-        gboolean found = FALSE;
+        guint found = 0;
         g_assert_true (XQueryTree (xdisplay, DefaultRootWindow (xdisplay),
                                   &root, &parent, &windows, &count));
         /* Other processes may destroy a window between QueryTree and FetchName. */
         gdk_x11_display_error_trap_push (display);
         for (guint i = 0; i < count; i++) {
             char *title = NULL;
+            XWindowAttributes attributes;
             if (XFetchName (xdisplay, windows[i], &title) && title != NULL) {
-                found = g_str_equal (title, expected);
+                if (g_str_equal (title, expected) &&
+                    XGetWindowAttributes (xdisplay, windows[i], &attributes) &&
+                    attributes.map_state == IsViewable)
+                    found++;
                 g_string_append_printf (observed, "'%s' ", title);
             }
             if (title != NULL)
                 XFree (title);
-            if (found)
-                break;
         }
         gdk_x11_display_error_trap_pop_ignored (display);
         XFree (windows);
-        if (found) {
+        if (found == expected_count) {
             g_string_free (observed, TRUE);
             return 0;
         }
         g_usleep (20000);
     }
-    g_printerr ("Expected window title '%s'; observed: %s\n", expected, observed->str);
+    g_printerr ("Expected %u mapped windows titled '%s'; observed: %s\n",
+                expected_count, expected, observed->str);
     g_string_free (observed, TRUE);
     return 1;
 }
@@ -441,11 +505,16 @@ main (int argc, char **argv)
 {
     if (g_strcmp0 (g_getenv ("NEMO_TEST_ISOLATED"), "1") != 0)
         return 77;
-    if (argc == 3 && g_str_equal (argv[1], "--wait-for-title"))
-        return wait_for_window_title (argv[2]);
+    if ((argc == 3 || argc == 4) && g_str_equal (argv[1], "--wait-for-title")) {
+        guint count = argc == 4 ? g_ascii_strtoull (argv[3], NULL, 10) : 1;
+        g_assert_cmpuint (count, >, 0);
+        return wait_for_window_title (argv[2], count);
+    }
     gtk_test_init (&argc, &argv, NULL);
     static const FolderCase cases[] = {
         { "/folders/restore-panes-and-tabs", test_restore_panes_and_tabs },
+        { "/folders/restore-overview", test_restore_overview },
+        { "/folders/overview-history", test_overview_history },
         { "/folders/last-tab-close", test_last_tab_close },
         { "/folders/restore-missing-folder", test_restore_missing_folder },
         { "/folders/restore-missing-pane-tabs", test_restore_missing_pane_tabs },

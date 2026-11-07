@@ -987,13 +987,20 @@ void
 nemo_window_view_visible (NemoWindow *window,
 			      NemoView *view)
 {
-	NemoWindowSlot *slot;
+	g_return_if_fail (NEMO_IS_WINDOW (window));
+
+	nemo_window_slot_visible (nemo_window_get_slot_for_view (window, view));
+}
+
+void
+nemo_window_slot_visible (NemoWindowSlot *slot)
+{
+	NemoWindow *window;
 	NemoWindowPane *pane;
 	GList *l, *walk;
 
-	g_return_if_fail (NEMO_IS_WINDOW (window));
-
-	slot = nemo_window_get_slot_for_view (window, view);
+	g_return_if_fail (NEMO_IS_WINDOW_SLOT (slot));
+	window = nemo_window_slot_get_window (slot);
 
 	if (slot->visible) {
 		return;
@@ -1001,10 +1008,6 @@ nemo_window_view_visible (NemoWindow *window,
 
 	slot->visible = TRUE;
 	pane = slot->pane;
-
-	if (gtk_widget_get_visible (GTK_WIDGET (pane))) {
-		return;
-	}
 
 	/* Look for other non-visible slots */
 	for (l = pane->slots; l != NULL; l = l->next) {
@@ -1028,6 +1031,10 @@ nemo_window_view_visible (NemoWindow *window,
 
 		for (l = pane->slots; l != NULL; l = l->next) {
 			slot = l->data;
+
+			if (!slot->visible) {
+				return;
+			}
 
 			nemo_window_slot_update_title (slot);
 			nemo_window_slot_update_icon (slot);
