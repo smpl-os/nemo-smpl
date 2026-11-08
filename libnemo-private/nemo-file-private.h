@@ -165,6 +165,8 @@ struct NemoFileDetails
 	eel_boolean_bit directory_count_is_up_to_date : 1;
 
 	eel_boolean_bit deep_counts_status      : 2; /* NemoRequestStatus */
+	eel_boolean_bit show_calculated_size    : 1;
+	eel_boolean_bit calculated_size_pending : 1;
 	/* no deep_counts_are_up_to_date field; since we expose
            intermediate values for this attribute, we do actually
            forget it rather than invalidating. */

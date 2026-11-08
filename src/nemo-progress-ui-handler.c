@@ -235,6 +235,11 @@ static gboolean
 progress_window_key_press (GtkWidget *widget, GdkEventKey *event,
                            NemoProgressUIHandler *self)
 {
+    if (gdk_keyval_to_lower (event->keyval) == GDK_KEY_c &&
+        (event->state & gtk_accelerator_get_default_mod_mask ()) == GDK_MOD1_MASK) {
+        progress_window_close_clicked (NULL, self);
+        return TRUE;
+    }
     if ((event->state & gtk_accelerator_get_default_mod_mask ()) == 0 &&
         (event->keyval == GDK_KEY_Escape || event->keyval == GDK_KEY_Return ||
          event->keyval == GDK_KEY_KP_Enter || event->keyval == GDK_KEY_ISO_Enter)) {
@@ -614,6 +619,7 @@ progress_ui_handler_ensure_window (NemoProgressUIHandler *self)
     g_signal_connect (priv->dock_button, "clicked", G_CALLBACK (dock_button_clicked), self);
     gtk_box_pack_start (GTK_BOX (buttons), priv->dock_button, FALSE, FALSE, 0);
     w = gtk_button_new_with_mnemonic (_("_Close"));
+    gtk_widget_set_tooltip_text (w, _("Close file operations (Alt+C) without cancelling transfers"));
     priv->close_button = w;
     gtk_box_pack_end (GTK_BOX (buttons), w, FALSE, FALSE, 0);
     gtk_widget_set_can_default (w, TRUE);

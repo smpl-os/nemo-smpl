@@ -1310,6 +1310,12 @@ nemo_window_key_press_event (GtkWidget *widget,
 
 #ifdef NEMO_SMPL
 	focus_widget = gtk_window_get_focus (GTK_WINDOW (window));
+	if (window->details->transfer_area != NULL &&
+	    gtk_widget_get_mapped (window->details->transfer_area) &&
+	    gdk_keyval_to_lower (event->keyval) == GDK_KEY_c &&
+	    (event->state & gtk_accelerator_get_default_mod_mask ()) == GDK_MOD1_MASK &&
+	    gtk_widget_event (window->details->transfer_area, (GdkEvent *) event))
+		return TRUE;
 	if (window->details->preview_pane_visible && focus_widget != NULL &&
 	    gtk_widget_is_ancestor (focus_widget, GTK_WIDGET (window->details->preview_pane)) &&
 	    nemo_preview_pane_handle_key_event (NEMO_PREVIEW_PANE (window->details->preview_pane), event))
@@ -1378,6 +1384,24 @@ nemo_window_key_press_event (GtkWidget *widget,
 	}
 
 #ifdef NEMO_SMPL
+	if (nemo_keybinding_settings != NULL && view != NULL && focus_widget != NULL &&
+	    !GTK_IS_EDITABLE (focus_widget) &&
+	    gtk_widget_is_ancestor (focus_widget, GTK_WIDGET (view)) &&
+	    !nemo_view_get_type_jump_active (view) &&
+	    !nemo_view_get_filter_active (view) &&
+	    !NEMO_IS_DESKTOP_WINDOW (window)) {
+		g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings,
+							      "calculate-directory-sizes");
+		guint key;
+		GdkModifierType mods;
+		gtk_accelerator_parse (accel, &key, &mods);
+		if (key != 0 &&
+		    gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (key) &&
+		    (event->state & gtk_accelerator_get_default_mod_mask ()) == mods &&
+		    nemo_view_calculate_directory_sizes (view))
+			return TRUE;
+	}
+
 	if (nemo_keybinding_settings != NULL &&
 	    gtk_widget_get_mapped (window->details->preview_pane)) {
 		const char *scroll_keys[] = { "preview-scroll-up", "preview-scroll-down" };

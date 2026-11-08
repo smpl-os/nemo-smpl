@@ -165,6 +165,14 @@ if smpl_features_enabled
     is_parallel: false,
   )
   ui_regressions = [
+    executable('test-directory-sizes',
+      'test-directory-sizes.c',
+      objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache'],
+    ),
     completion_test,
     executable('test-file-colors',
       'test-file-colors.c',

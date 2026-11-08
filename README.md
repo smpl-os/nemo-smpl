@@ -109,7 +109,9 @@ Nemo window restores their panel.
 Technical notes and recovery locations are under **Details**, expanded
 automatically for incomplete operations. **Enter**, **Escape**, or **Close**
 dismisses the transfer UI without cancelling active transfers. In a docked
-panel, these keys apply while a transfer control has focus.
+panel, these keys apply while a transfer control has focus. **Alt+C** also closes
+the visible docked panel from anywhere in its hosting Nemo window, without
+cancelling transfers.
 
 Missing-source failures include the exact source/destination URIs and separate
 folder-handle/pathname lookup results in **Details**. For additional native-move
@@ -339,7 +341,15 @@ returns to regular mouse selection.
 
 The cursor and the marks are separate: the file the cursor moves onto is not
 automatically added to the marked files. **Ctrl+Up/Down** retain their folder
-navigation shortcuts. Space retains its existing preview/filter behavior.
+navigation shortcuts. **Space** calculates recursive sizes for all selected
+folders and displays each total in the **Size** column. This runs in the
+background, includes hidden contents, and uses the same counting rules as
+Properties; unreadable contents are marked **incomplete**. Calculated folders
+sort by their byte totals rather than item counts. Press Space again to
+recalculate; totals are temporary, not saved as folder metadata. Configure
+**Calculate Folder Sizes** under **Keyboard Shortcuts → File Operations**.
+For a selection containing no folders, Space retains its preview behavior;
+typing, filtering, and text editing keep their existing Space handling.
 Desktop icons retain their existing selection behavior.
 
 | Shortcut | Action |
@@ -355,6 +365,8 @@ Desktop icons retain their existing selection behavior.
 | **Alt+F5** | Copy selected files and folders into a new 7z archive |
 | **Alt+Shift+F5** | Pack into a new verified 7z archive, then remove originals |
 | **F6** | Move dialog |
+| **Space** | Calculate sizes of selected folders |
+| **Alt+C** | Close the visible docked file-transfer panel |
 | **Ctrl+Left / Ctrl+Right** | Previous / next visited folder |
 | **Ctrl+Up** | Parent folder |
 | **Ctrl+Down** | Open the selected folder in the current pane (does not launch files) |
@@ -385,7 +397,16 @@ Desktop icons retain their existing selection behavior.
 Image **Fit** preserves the aspect ratio and fills the available preview area,
 including small images and camera RAW files. Wheel zoom turns Fit off; check it
 again to restore automatic fitting. The filename remains visible at the bottom.
-The information panel shows available file/camera metadata; GPS maps use cached
+The information panel shows available file/camera metadata, original image/video
+dimensions and aspect ratio. Audio/video details include duration, codecs,
+reported stream bit rates, video frame rate, audio sample rate and channels,
+when available. The overall average bit rate includes the container and all
+streams; it is calculated from file size and duration. Video dimensions refer
+to the original file, not the scaled preview, and aspect ratio includes pixel
+aspect ratio. For multiple tracks, stream details describe the first video and
+audio tracks. Missing decoders or failed inspection are reported in the panel.
+GPS coordinates and maps remain available for geotagged JPEG and supported RAW
+photos. GPS maps use cached
 OpenStreetMap tiles and need a network connection for uncached locations.
 
 Backspace still edits text in search/location entries, and Escape still cancels

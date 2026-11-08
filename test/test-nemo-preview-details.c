@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include "../src/nemo-preview-details.c"
 #include <libnemo-private/nemo-file-private.h>
+#ifdef HAVE_GSTREAMER
+#include "preview-media-fixture.h"
+#endif
 
 typedef struct {
 	GAsyncReadyCallback callback;
@@ -363,6 +366,136 @@ test_generation_guard (void)
 	destroy_details (self);
 }
 
+#ifdef HAVE_GSTREAMER
+static void
+test_media_metadata (gconstpointer data)
+{
+	guint audio_only = GPOINTER_TO_UINT (data);
+	NemoPreviewDetails *self = new_details ();
+	GError *error = NULL;
+	Completion completion = { 0 };
+	char *path;
+	GTask *task;
+
+	g_assert_true (nemo_preview_media_init (&error));
+	g_assert_no_error (error);
+	path = preview_media_fixture (audio_only ? 0 : 320, audio_only ? 0 : 180);
+	task = new_task (self, path, &completion);
+	details_run_task (task, metadata_worker);
+	wait_done (&completion);
+	DetailsResult *metadata = completion.metadata;
+	g_assert_nonnull (metadata);
+	g_assert_null (metadata->warning);
+	g_assert_nonnull (metadata->values[DETAIL_DURATION]);
+	g_assert_nonnull (metadata->values[DETAIL_AUDIO_CODEC]);
+	g_assert_cmpstr (metadata->values[DETAIL_SAMPLE_RATE], ==, "48000 Hz");
+	g_assert_cmpstr (metadata->values[DETAIL_CHANNELS], ==, "1");
+	g_assert_nonnull (metadata->values[DETAIL_OVERALL_BITRATE]);
+	g_assert_false (metadata->has_gps);
+	if (audio_only) {
+		g_assert_null (metadata->values[DETAIL_DIMENSIONS]);
+		g_assert_null (metadata->values[DETAIL_ASPECT]);
+		g_assert_null (metadata->values[DETAIL_VIDEO_CODEC]);
+	} else {
+		g_assert_cmpstr (metadata->values[DETAIL_DIMENSIONS], ==, "320 × 180");
+		g_assert_cmpstr (metadata->values[DETAIL_ASPECT], ==, "16:9 (1.778:1)");
+		g_assert_nonnull (metadata->values[DETAIL_VIDEO_CODEC]);
+		g_assert_nonnull (metadata->values[DETAIL_FRAMERATE]);
+	}
+	details_result_free (metadata);
+	g_object_unref (task);
+	g_assert_cmpint (g_remove (path), ==, 0);
+	g_free (path);
+	destroy_details (self);
+}
+
+static void
+test_pixel_aspect (void)
+{
+	DetailsResult *metadata = g_new0 (DetailsResult, 1);
+	set_dimensions (metadata, 720, 576, 64, 45);
+	g_assert_cmpstr (metadata->values[DETAIL_DIMENSIONS], ==, "720 × 576");
+	g_assert_cmpstr (metadata->values[DETAIL_ASPECT], ==, "16:9 (1.778:1)");
+	details_result_free (metadata);
+}
+
+static void
+test_media_format (gconstpointer data)
+{
+	const char *extension = data;
+	gboolean video = g_str_equal (extension, "mp4");
+	const char *encoder = video ? "x264enc" :
+		g_str_equal (extension, "mp3") ? "lamemp3enc" : "vorbisenc";
+	GError *error = NULL;
+	g_assert_true (nemo_preview_media_init (&error));
+	g_assert_no_error (error);
+	GstElementFactory *factory = gst_element_factory_find (encoder);
+	if (factory == NULL) {
+		g_test_skip ("Fixture encoder is not installed.");
+		return;
+	}
+	gst_object_unref (factory);
+	char *description = video ? g_strdup (
+		"videotestsrc num-buffers=50 ! video/x-raw,width=320,height=180,"
+		"framerate=25/1,pixel-aspect-ratio=1/1 ! videoconvert ! "
+		"x264enc bitrate=256 ! h264parse ! mp4mux ! filesink name=output") :
+		g_strdup_printf ("audiotestsrc num-buffers=100 ! "
+		"audio/x-raw,rate=44100,channels=2 ! audioconvert ! %s ! filesink name=output",
+		g_str_equal (extension, "mp3") ?
+		"lamemp3enc target=bitrate bitrate=128 cbr=true" : "vorbisenc ! oggmux");
+	GstElement *pipeline = gst_parse_launch (description, &error);
+	g_assert_no_error (error);
+	g_free (description);
+	g_autofree char *cwd = g_get_current_dir ();
+	g_autofree char *path = g_strdup_printf ("%s/format.%s", cwd, extension);
+	GstElement *output = gst_bin_get_by_name (GST_BIN (pipeline), "output");
+	g_object_set (output, "location", path, NULL);
+	gst_object_unref (output);
+	GstBus *bus = gst_element_get_bus (pipeline);
+	g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING),
+			 !=, GST_STATE_CHANGE_FAILURE);
+	GstMessage *message = gst_bus_timed_pop_filtered (bus, 10 * GST_SECOND,
+							 GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
+	g_assert_nonnull (message);
+	if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_ERROR) {
+		gst_message_parse_error (message, &error, NULL);
+		g_error ("Media fixture failed: %s", error->message);
+	}
+	gst_message_unref (message);
+	gst_element_set_state (pipeline, GST_STATE_NULL);
+	gst_object_unref (bus);
+	gst_object_unref (pipeline);
+	NemoPreviewDetails *self = new_details ();
+	Completion completion = { 0 };
+	GTask *task = new_task (self, path, &completion);
+	details_run_task (task, metadata_worker);
+	wait_done (&completion);
+	DetailsResult *metadata = completion.metadata;
+	g_assert_nonnull (metadata);
+	g_assert_null (metadata->warning);
+	g_assert_nonnull (metadata->values[DETAIL_DURATION]);
+	g_assert_nonnull (metadata->values[DETAIL_OVERALL_BITRATE]);
+	if (video) {
+		g_assert_cmpstr (metadata->values[DETAIL_DIMENSIONS], ==, "320 × 180");
+		g_assert_cmpstr (metadata->values[DETAIL_FRAMERATE], ==, "25.000 fps");
+		g_assert_cmpstr (metadata->values[DETAIL_ASPECT], ==, "16:9 (1.778:1)");
+		g_assert_nonnull (metadata->values[DETAIL_VIDEO_CODEC]);
+		g_assert_nonnull (metadata->values[DETAIL_VIDEO_BITRATE]);
+	} else {
+		g_assert_nonnull (metadata->values[DETAIL_AUDIO_CODEC]);
+		g_assert_cmpstr (metadata->values[DETAIL_SAMPLE_RATE], ==, "44100 Hz");
+		g_assert_cmpstr (metadata->values[DETAIL_CHANNELS], ==, "2");
+		g_assert_nonnull (metadata->values[DETAIL_AUDIO_BITRATE]);
+		if (g_str_equal (extension, "mp3"))
+			g_assert_cmpstr (metadata->values[DETAIL_AUDIO_BITRATE], ==, "128.0 kbit/s");
+	}
+	details_result_free (metadata);
+	g_object_unref (task);
+	g_assert_cmpint (g_remove (path), ==, 0);
+	destroy_details (self);
+}
+#endif
+
 static void
 test_destroy_pending (void)
 {
@@ -614,12 +747,19 @@ write_jpeg_fixture (const char *path)
 {
 	ExifData *exif = new_exif_fixture ();
 	guchar header[6] = { 0xff, 0xd8, 0xff, 0xe1, 0, 0 };
-	const guchar end[2] = { 0xff, 0xd9 };
+	GdkPixbuf *pixbuf = gdk_pixbuf_new (GDK_COLORSPACE_RGB, FALSE, 8, 320, 180);
+	char *image_bytes = NULL;
+	gsize image_length = 0;
 	guchar *bytes = NULL;
 	guint length = 0;
 	GByteArray *jpeg = g_byte_array_new ();
 	GError *error = NULL;
 
+	gdk_pixbuf_fill (pixbuf, 0x428342ff);
+	g_assert_true (gdk_pixbuf_save_to_buffer (pixbuf, &image_bytes, &image_length,
+						 "jpeg", &error, NULL));
+	g_assert_no_error (error);
+	g_object_unref (pixbuf);
 	exif_data_save_data (exif, &bytes, &length);
 	g_assert_cmpuint (length, >, 0);
 	g_assert_cmpuint (length, <, 65534);
@@ -627,10 +767,11 @@ write_jpeg_fixture (const char *path)
 	header[5] = (length + 2) & 0xff;
 	g_byte_array_append (jpeg, header, sizeof header);
 	g_byte_array_append (jpeg, bytes, length);
-	g_byte_array_append (jpeg, end, sizeof end);
+	g_byte_array_append (jpeg, (guchar *) image_bytes + 2, image_length - 2);
 	g_assert_true (g_file_set_contents (path, (const char *) jpeg->data, jpeg->len, &error));
 	g_assert_no_error (error);
 	g_free (bytes);
+	g_free (image_bytes);
 	exif_data_unref (exif);
 	g_byte_array_unref (jpeg);
 }
@@ -672,6 +813,8 @@ test_exif_worker (void)
 	g_assert_cmpfloat (completion.metadata->longitude, ==, -70.25);
 	g_assert_cmpstr (completion.metadata->values[DETAIL_CAMERA], ==, "Synthetic camera");
 	g_assert_cmpstr (completion.metadata->values[DETAIL_LENS], ==, "Fixture lens");
+	g_assert_cmpstr (completion.metadata->values[DETAIL_DIMENSIONS], ==, "320 × 180");
+	g_assert_cmpstr (completion.metadata->values[DETAIL_ASPECT], ==, "16:9 (1.778:1)");
 	g_assert_null (completion.metadata->warning);
 	details_result_free (completion.metadata);
 	g_assert_cmpint (g_remove ("fixture.jpg"), ==, 0);
@@ -711,6 +854,9 @@ test_switch_from_gps (void)
 	}
 	g_assert_true (gtk_widget_get_visible (self->map_box));
 	g_assert_true (gtk_widget_get_visible (self->values[DETAIL_GPS]));
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (self->values[DETAIL_DIMENSIONS])),
+			 ==, "320 × 180");
+	g_assert_true (gtk_widget_get_visible (self->values[DETAIL_ASPECT]));
 	nemo_preview_details_set_file (self, plain);
 	g_assert_false (gtk_widget_get_visible (self->values[DETAIL_GPS]));
 	g_assert_false (gtk_widget_get_visible (self->map_box));
@@ -1059,6 +1205,14 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview-details/image-without-metadata", test_image_without_metadata);
 	g_test_add_func ("/preview-details/stale-metadata-map", test_stale_metadata_and_map);
 	g_test_add_func ("/preview-details/generation", test_generation_guard);
+#ifdef HAVE_GSTREAMER
+	g_test_add_data_func ("/preview-details/media-video", GUINT_TO_POINTER (0), test_media_metadata);
+	g_test_add_data_func ("/preview-details/media-audio", GUINT_TO_POINTER (1), test_media_metadata);
+	g_test_add_func ("/preview-details/pixel-aspect", test_pixel_aspect);
+	g_test_add_data_func ("/preview-details/format-mp3", "mp3", test_media_format);
+	g_test_add_data_func ("/preview-details/format-mp4", "mp4", test_media_format);
+	g_test_add_data_func ("/preview-details/format-ogg", "ogg", test_media_format);
+#endif
 	g_test_add_func ("/preview-details/destroy-pending", test_destroy_pending);
 	g_test_add_func ("/preview-details/hide-reload", test_hide_reload);
 	g_test_add_func ("/preview-details/map-cache", test_map_cache);

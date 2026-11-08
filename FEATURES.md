@@ -44,6 +44,7 @@ Double Commander-style instant file viewer:
 - **RAW previews**: camera RAW files are decoded with LibRaw rather than accepting an embedded TIFF thumbnail
 - **Filename footer**: the current filename stays visible at the bottom, including fullscreen
 - **File information (I)**: toggle file and available camera metadata, with an OpenStreetMap location map when GPS coordinates exist (uncached tiles require network access)
+- **Media information**: original image/video dimensions and aspect ratio; audio/video duration, codecs, stream bit rates, average overall bit rate, frame rate, sample rate and channels when available. Shared with the preview pane; GPS remains available for geotagged JPEG and supported RAW photos.
 - Escape to dismiss; singleton window reused across invocations
 - Split view moved to Ctrl+F3
 - File-pane and right-preview dividers use a theme-aware 1-pixel line with a wider invisible resize target

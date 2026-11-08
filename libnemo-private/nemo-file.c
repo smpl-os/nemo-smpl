@@ -3148,6 +3148,23 @@ compare_by_size (NemoFile *file_1, NemoFile *file_2)
 	}
 
 	if (is_directory_1) {
+		if (file_1->details->show_calculated_size || file_2->details->show_calculated_size) {
+			goffset size_1, size_2;
+			NemoRequestStatus status_1, status_2;
+
+			/* Keep byte totals separate from the uncalculated item counts. */
+			if (file_1->details->show_calculated_size != file_2->details->show_calculated_size)
+				return file_1->details->show_calculated_size ? -1 : 1;
+			status_1 = nemo_file_get_deep_counts (file_1, NULL, NULL, NULL, NULL, &size_1, TRUE);
+			status_2 = nemo_file_get_deep_counts (file_2, NULL, NULL, NULL, NULL, &size_2, TRUE);
+			if (status_1 != NEMO_REQUEST_DONE || status_2 != NEMO_REQUEST_DONE) {
+				if (status_1 == status_2)
+					return 0;
+				return status_1 == NEMO_REQUEST_DONE ? -1 :
+				       status_2 == NEMO_REQUEST_DONE ? 1 : 0;
+			}
+			return size_1 < size_2 ? -1 : size_1 > size_2 ? 1 : 0;
+		}
 		return compare_directories_by_count (file_1, file_2);
 	} else {
 		return compare_files_by_size (file_1, file_2);
@@ -5923,7 +5940,8 @@ nemo_file_get_deep_counts (NemoFile *file,
 
 	g_return_val_if_fail (NEMO_IS_FILE (file), NEMO_REQUEST_DONE);
 
-	if (!force && !nemo_file_should_show_directory_item_count (file)) {
+	if (!force && !file->details->show_calculated_size &&
+	    !nemo_file_should_show_directory_item_count (file)) {
 		/* Set field so an existing value isn't treated as up-to-date
 		 * when preference changes later.
 		 */
@@ -5946,6 +5964,47 @@ nemo_file_recompute_deep_counts (NemoFile *file)
 			nemo_directory_async_state_changed (file->details->directory);
 		}
 	}
+}
+
+static void
+calculated_size_ready (NemoFile *file, gpointer data)
+{
+	file->details->calculated_size_pending = FALSE;
+	nemo_file_changed (file);
+	nemo_file_unref (file);
+}
+
+void
+nemo_file_calculate_directory_size (NemoFile *file)
+{
+	g_return_if_fail (NEMO_IS_FILE (file));
+	if (!nemo_file_is_directory (file) || nemo_file_is_parent_entry (file) ||
+	    file->details->calculated_size_pending)
+		return;
+	file->details->show_calculated_size = TRUE;
+	file->details->calculated_size_pending = TRUE;
+	nemo_file_recompute_deep_counts (file);
+	nemo_file_changed (file);
+	nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_DEEP_COUNTS,
+				   calculated_size_ready, nemo_file_ref (file));
+}
+
+static char *
+calculated_size_as_string (NemoFile *file)
+{
+	goffset size;
+	guint unreadable;
+	char *formatted, *text;
+
+	if (nemo_file_get_deep_counts (file, NULL, NULL, &unreadable, NULL, &size, TRUE) !=
+	    NEMO_REQUEST_DONE)
+		return g_strdup (_("Calculating…"));
+	formatted = g_format_size_full (size, nemo_global_preferences_get_size_prefix_preference ());
+	if (unreadable == 0)
+		return formatted;
+	text = g_strdup_printf (_("%s (incomplete)"), formatted);
+	g_free (formatted);
+	return text;
 }
 
 
@@ -6975,6 +7034,8 @@ nemo_file_get_size_as_string (NemoFile *file)
 	g_assert (NEMO_IS_FILE (file));
 
 	if (nemo_file_is_directory (file)) {
+		if (file->details->show_calculated_size)
+			return calculated_size_as_string (file);
 		if (!nemo_file_get_directory_item_count (file, &item_count, &count_unreadable)) {
 			return NULL;
 		}
@@ -7014,6 +7075,8 @@ nemo_file_get_size_as_string_with_real_size (NemoFile *file)
 	g_assert (NEMO_IS_FILE (file));
 
 	if (nemo_file_is_directory (file)) {
+		if (file->details->show_calculated_size)
+			return calculated_size_as_string (file);
 		if (!nemo_file_get_directory_item_count (file, &item_count, &count_unreadable)) {
 			return NULL;
 		}
@@ -9366,6 +9429,8 @@ static void
 invalidate_deep_counts (NemoFile *file)
 {
 	file->details->deep_counts_status = NEMO_REQUEST_NOT_STARTED;
+	if (!file->details->calculated_size_pending)
+		file->details->show_calculated_size = FALSE;
 }
 
 static void

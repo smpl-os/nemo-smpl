@@ -473,6 +473,30 @@ test_image_error_and_raw_worker (void)
 	g_free (directory);
 }
 
+typedef struct {
+	const char *text;
+	gboolean found;
+} VisibleText;
+
+static void
+find_visible_text (GtkWidget *widget, gpointer data)
+{
+	VisibleText *match = data;
+	if (GTK_IS_LABEL (widget) && gtk_widget_get_visible (widget) &&
+	    g_str_equal (gtk_label_get_text (GTK_LABEL (widget)), match->text))
+		match->found = TRUE;
+	else if (!match->found && GTK_IS_CONTAINER (widget))
+		gtk_container_forall (GTK_CONTAINER (widget), find_visible_text, data);
+}
+
+static gboolean
+details_have_text (NemoQuickPreview *preview, const char *text)
+{
+	VisibleText match = { text, FALSE };
+	find_visible_text (GTK_WIDGET (preview->details), &match);
+	return match.found;
+}
+
 static void
 test_quick_image_information (void)
 {
@@ -493,6 +517,8 @@ test_quick_image_information (void)
 	g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
 	g_assert_true (gtk_widget_get_visible (preview->details_scroll));
 	g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (preview->info_button)));
+	WAIT_UNTIL (details_have_text (preview, "4 × 4"));
+	g_assert_true (details_have_text (preview, "1:1 (1.000:1)"));
 	assert_responsive ();
 	double fit = MIN ((gtk_widget_get_allocated_width (preview->image_viewer->scroll) - 20.0) / 4,
 			  (gtk_widget_get_allocated_height (preview->image_viewer->scroll) - 20.0) / 4);
@@ -868,12 +894,18 @@ test_media_long_webm (void)
 	for (int cycle = 0; cycle < 8; cycle++) {
 		NemoQuickPreview *preview = g_object_ref_sink (
 			g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
-		preview_show_media (preview, file, FALSE);
+		nemo_quick_preview_show_file (preview, file, NULL);
 		WAIT_UNTIL (preview->media_ready && preview->frame_surface != NULL);
 		g_assert_nonnull (preview->pipeline);
 		g_assert_cmpuint (preview->media_load_timeout_id, ==, 0);
 		g_assert_cmpint (preview->video_width, ==, 1920);
 		g_assert_cmpint (preview->video_height, ==, 1080);
+		if (cycle == 0) {
+			GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_i };
+			g_assert_true (on_key_press (GTK_WIDGET (preview), &key, NULL));
+			WAIT_UNTIL (details_have_text (preview, "3840 × 2160"));
+			g_assert_true (details_have_text (preview, "16:9 (1.778:1)"));
+		}
 		guint32 pixel;
 		memcpy (&pixel, cairo_image_surface_get_data (preview->frame_surface), sizeof pixel);
 		g_assert_cmphex (pixel & 0x00ff0000, >, 0x00800000);

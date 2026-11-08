@@ -396,6 +396,7 @@ void                nemo_view_set_filter_text                  (NemoView  *view,
                                                                     const char    *text);
 void                nemo_view_clear_filter                     (NemoView  *view);
 gboolean            nemo_view_get_filter_active                (NemoView  *view);
+gboolean            nemo_view_calculate_directory_sizes        (NemoView  *view);
 const char         *nemo_view_get_filter_text                  (NemoView  *view);
 gint                nemo_view_get_filter_match                 (NemoView  *view,
                                                                     NemoFile  *file);

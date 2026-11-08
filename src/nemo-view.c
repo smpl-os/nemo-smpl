@@ -7293,6 +7293,25 @@ action_archive_move_callback (GtkAction *action, gpointer data)
 }
 #endif
 
+gboolean
+nemo_view_calculate_directory_sizes (NemoView *view)
+{
+	GList *selection;
+	gboolean calculated = FALSE;
+
+	g_return_val_if_fail (NEMO_IS_VIEW (view), FALSE);
+	selection = nemo_view_get_selection (view);
+	for (GList *item = selection; item != NULL; item = item->next) {
+		NemoFile *file = item->data;
+		if (nemo_file_is_directory (file) && !nemo_file_is_parent_entry (file)) {
+			nemo_file_calculate_directory_size (file);
+			calculated = TRUE;
+		}
+	}
+	nemo_file_list_free (selection);
+	return calculated;
+}
+
 static void
 action_copy_to_next_pane_callback (GtkAction *action, gpointer callback_data)
 {

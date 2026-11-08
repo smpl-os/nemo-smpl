@@ -29,6 +29,7 @@ REQUIRED_TESTS = {
     "Delete confirmation focus",
     "test-image-viewer",
     "test-nemo-preview-details",
+    "test-directory-sizes",
     "Nemo window startup",
     "Installed package version",
     "test-about-version",

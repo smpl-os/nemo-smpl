@@ -11,6 +11,9 @@
 #include <glib/gi18n.h>
 #include <math.h>
 #include <string.h>
+#ifdef HAVE_GSTREAMER
+#include <gst/pbutils/pbutils.h>
+#endif
 
 #ifdef HAVE_EXIF
 #include <libexif/exif-data.h>
@@ -33,7 +36,10 @@ typedef enum {
 	DETAIL_NAME, DETAIL_SIZE, DETAIL_TYPE, DETAIL_MODIFIED,
 	DETAIL_PERMISSIONS, DETAIL_LOCATION, DETAIL_CAMERA, DETAIL_LENS,
 	DETAIL_TAKEN, DETAIL_DIMENSIONS, DETAIL_APERTURE, DETAIL_SHUTTER,
-	DETAIL_ISO, DETAIL_FOCAL, DETAIL_GPS, N_DETAILS
+	DETAIL_ISO, DETAIL_FOCAL, DETAIL_GPS, DETAIL_ASPECT, DETAIL_DURATION,
+	DETAIL_VIDEO_CODEC, DETAIL_VIDEO_BITRATE, DETAIL_FRAMERATE,
+	DETAIL_AUDIO_CODEC, DETAIL_AUDIO_BITRATE, DETAIL_SAMPLE_RATE,
+	DETAIL_CHANNELS, DETAIL_OVERALL_BITRATE, N_DETAILS
 } DetailField;
 
 typedef struct {
@@ -180,6 +186,187 @@ show_error (GtkWidget *label, const char *message, const GError *error)
 	g_free (text);
 }
 
+static void
+set_dimensions (DetailsResult *result, guint width, guint height,
+		guint par_n, guint par_d)
+{
+	guint64 n, d, a, b;
+
+	if (width == 0 || height == 0)
+		return;
+	g_free (result->values[DETAIL_DIMENSIONS]);
+	g_free (result->values[DETAIL_ASPECT]);
+	result->values[DETAIL_DIMENSIONS] = g_strdup_printf ("%u × %u", width, height);
+	result->values[DETAIL_ASPECT] = NULL;
+	if (par_n == 0 || par_d == 0)
+		return;
+	n = (guint64) width * par_n;
+	d = (guint64) height * par_d;
+	a = n;
+	b = d;
+	while (b != 0) {
+		guint64 remainder = a % b;
+		a = b;
+		b = remainder;
+	}
+	result->values[DETAIL_ASPECT] = g_strdup_printf (
+		"%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT " (%.3f:1)", n / a, d / a,
+		(double) n / d);
+}
+
+typedef struct {
+	guint width, height;
+} ImageDimensions;
+
+static void
+image_size_prepared (GdkPixbufLoader *loader, gint width, gint height,
+		     ImageDimensions *dimensions)
+{
+	dimensions->width = width;
+	dimensions->height = height;
+	/* Read the original header, without allocating a full-resolution image. */
+	gdk_pixbuf_loader_set_size (loader, 1, 1);
+}
+
+static gboolean
+load_image_dimensions (GFile *file, DetailsResult *result,
+		       GCancellable *cancel, GError **error)
+{
+	GFileInputStream *stream = g_file_read (file, cancel, error);
+	GdkPixbufLoader *loader;
+	ImageDimensions dimensions = { 0 };
+	guchar buffer[4096];
+	gsize total = 0;
+	gssize count;
+
+	if (stream == NULL)
+		return FALSE;
+	loader = gdk_pixbuf_loader_new ();
+	g_signal_connect (loader, "size-prepared", G_CALLBACK (image_size_prepared), &dimensions);
+	while (dimensions.width == 0 && total < METADATA_READ_LIMIT &&
+	       (count = g_input_stream_read (G_INPUT_STREAM (stream), buffer,
+					    MIN (sizeof buffer, METADATA_READ_LIMIT - total),
+					    cancel, error)) > 0) {
+		total += count;
+		if (!gdk_pixbuf_loader_write (loader, buffer, count, error))
+			break;
+	}
+	/* Header-only inspection deliberately stops before the end of the image. */
+	gdk_pixbuf_loader_close (loader, NULL);
+	g_object_unref (loader);
+	g_object_unref (stream);
+	if (*error != NULL)
+		return FALSE;
+	if (dimensions.width == 0 || dimensions.height == 0) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+				     _("Unable to read image dimensions."));
+		return FALSE;
+	}
+	set_dimensions (result, dimensions.width, dimensions.height, 1, 1);
+	return TRUE;
+}
+
+#ifdef HAVE_GSTREAMER
+static void
+set_stream_codec (DetailsResult *result, DetailField field, GstDiscovererStreamInfo *stream)
+{
+	GstCaps *caps = gst_discoverer_stream_info_get_caps (stream);
+	if (caps != NULL) {
+		result->values[field] = gst_pb_utils_get_codec_description (caps);
+		gst_caps_unref (caps);
+	}
+}
+
+static void
+set_bitrate (DetailsResult *result, DetailField field, guint bitrate)
+{
+	if (bitrate > 0)
+		result->values[field] = g_strdup_printf (_("%.1f kbit/s"), bitrate / 1000.0);
+}
+
+static gboolean
+load_media (GFile *file, goffset file_size, DetailsResult *result,
+	    GCancellable *cancel, GError **error)
+{
+	GstDiscoverer *discoverer;
+	GstDiscovererInfo *info;
+	GList *videos, *audios;
+	GstClockTime duration;
+	char *uri;
+	gboolean success = FALSE;
+
+	if (g_cancellable_set_error_if_cancelled (cancel, error) ||
+	    !nemo_preview_media_init (error))
+		return FALSE;
+	discoverer = gst_discoverer_new (5 * GST_SECOND, error);
+	if (discoverer == NULL)
+		return FALSE;
+	uri = g_file_get_uri (file);
+	info = gst_discoverer_discover_uri (discoverer, uri, error);
+	g_free (uri);
+	if (info == NULL)
+		goto out;
+	if (g_cancellable_is_cancelled (cancel)) {
+		g_clear_error (error);
+		g_cancellable_set_error_if_cancelled (cancel, error);
+		goto out;
+	}
+	/* Missing decoders can still leave useful stream metadata. */
+	if (gst_discoverer_info_get_result (info) != GST_DISCOVERER_OK && *error == NULL)
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+				     _("Media metadata is incomplete; a decoder may be missing or inspection timed out."));
+	duration = gst_discoverer_info_get_duration (info);
+	if (GST_CLOCK_TIME_IS_VALID (duration)) {
+		guint64 seconds = duration / GST_SECOND;
+		result->values[DETAIL_DURATION] = g_strdup_printf (
+			"%" G_GUINT64_FORMAT ":%02u:%02u", seconds / 3600,
+			(guint) (seconds / 60 % 60), (guint) (seconds % 60));
+		if (duration > 0 && file_size > 0)
+			result->values[DETAIL_OVERALL_BITRATE] = g_strdup_printf (
+				_("%.1f kbit/s"), (double) file_size * 8 * GST_SECOND / duration / 1000);
+	}
+	videos = gst_discoverer_info_get_video_streams (info);
+	for (GList *item = videos; item != NULL; item = item->next) {
+		GstDiscovererVideoInfo *video = item->data;
+		guint fps_n, fps_d;
+		if (gst_discoverer_video_info_is_image (video))
+			continue;
+		set_dimensions (result, gst_discoverer_video_info_get_width (video),
+				gst_discoverer_video_info_get_height (video),
+				gst_discoverer_video_info_get_par_num (video),
+				gst_discoverer_video_info_get_par_denom (video));
+		set_stream_codec (result, DETAIL_VIDEO_CODEC, GST_DISCOVERER_STREAM_INFO (video));
+		set_bitrate (result, DETAIL_VIDEO_BITRATE, gst_discoverer_video_info_get_bitrate (video));
+		fps_n = gst_discoverer_video_info_get_framerate_num (video);
+		fps_d = gst_discoverer_video_info_get_framerate_denom (video);
+		if (fps_n > 0 && fps_d > 0)
+			result->values[DETAIL_FRAMERATE] = g_strdup_printf (
+				_("%.3f fps"), (double) fps_n / fps_d);
+		break;
+	}
+	gst_discoverer_stream_info_list_free (videos);
+	audios = gst_discoverer_info_get_audio_streams (info);
+	if (audios != NULL) {
+		GstDiscovererAudioInfo *audio = audios->data;
+		guint rate = gst_discoverer_audio_info_get_sample_rate (audio);
+		guint channels = gst_discoverer_audio_info_get_channels (audio);
+		set_stream_codec (result, DETAIL_AUDIO_CODEC, GST_DISCOVERER_STREAM_INFO (audio));
+		set_bitrate (result, DETAIL_AUDIO_BITRATE, gst_discoverer_audio_info_get_bitrate (audio));
+		if (rate > 0)
+			result->values[DETAIL_SAMPLE_RATE] = g_strdup_printf (_("%u Hz"), rate);
+		if (channels > 0)
+			result->values[DETAIL_CHANNELS] = g_strdup_printf ("%u", channels);
+	}
+	gst_discoverer_stream_info_list_free (audios);
+	success = *error == NULL;
+out:
+	if (info != NULL)
+		gst_discoverer_info_unref (info);
+	g_object_unref (discoverer);
+	return success;
+}
+#endif
+
 #if defined (HAVE_EXIF) || defined (HAVE_LIBRAW)
 static gboolean
 coordinate_valid (const double values[3], double limit)
@@ -292,7 +479,8 @@ extract_exif (DetailsResult *result, ExifData *exif)
 	if (width != NULL && height != NULL &&
 	    g_ascii_strtoull (width, NULL, 10) > 0 &&
 	    g_ascii_strtoull (height, NULL, 10) > 0)
-		result->values[DETAIL_DIMENSIONS] = g_strdup_printf ("%s × %s", width, height);
+		set_dimensions (result, g_ascii_strtoull (width, NULL, 10),
+				g_ascii_strtoull (height, NULL, 10), 1, 1);
 	g_free (width);
 	g_free (height);
 	if (read_gps_coordinate (exif_content_get_entry (gps, 2), order, lat) &&
@@ -391,8 +579,7 @@ extract_raw (DetailsResult *result, libraw_data_t *raw)
 						       sizeof raw->lens.makernotes.Lens);
 	}
 	if (raw->sizes.width > 0 && raw->sizes.height > 0)
-		result->values[DETAIL_DIMENSIONS] =
-			g_strdup_printf ("%u × %u", raw->sizes.width, raw->sizes.height);
+		set_dimensions (result, raw->sizes.width, raw->sizes.height, 1, 1);
 	if (other->timestamp > 0) {
 		GDateTime *date = g_date_time_new_from_unix_local (other->timestamp);
 		if (date != NULL) {
@@ -485,9 +672,7 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 	GFileInfo *info;
 	GFile *parent;
 	const char *mime;
-#if defined (HAVE_EXIF) || defined (HAVE_LIBRAW)
 	gboolean raw;
-#endif
 
 	info = g_file_query_info (data->location,
 		G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME ","
@@ -547,7 +732,6 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 		result->values[DETAIL_LOCATION] = g_file_get_parse_name (parent);
 		g_object_unref (parent);
 	}
-#if defined (HAVE_EXIF) || defined (HAVE_LIBRAW)
 	raw = nemo_preview_mime_is_raw_image (mime) || nemo_preview_file_is_raw (data->location);
 	if (g_file_info_get_file_type (info) == G_FILE_TYPE_REGULAR) {
 #ifdef HAVE_LIBRAW
@@ -558,8 +742,15 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 		if (!raw && nemo_preview_mime_is_image (mime))
 			load_exif (data->location, result, cancel, &error);
 #endif
-	}
+		if (!raw && nemo_preview_mime_is_image (mime) && error == NULL)
+			load_image_dimensions (data->location, result, cancel, &error);
+#ifdef HAVE_GSTREAMER
+		if (error == NULL && mime != NULL && (g_str_has_prefix (mime, "audio/") ||
+				    g_str_has_prefix (mime, "video/") ||
+				    g_content_type_is_a (mime, "application/ogg")))
+			load_media (data->location, g_file_info_get_size (info), result, cancel, &error);
 #endif
+	}
 	g_object_unref (info);
 	if (error != NULL) {
 		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
@@ -567,7 +758,7 @@ metadata_worker (GTask *task, gpointer source, gpointer task_data, GCancellable 
 			g_task_return_error (task, error);
 			return;
 		}
-		result->warning = g_strdup_printf ("%s\n%s", _("Unable to read image metadata."),
+		result->warning = g_strdup_printf ("%s\n%s", _("Unable to read media metadata."),
 						   error->message);
 		g_clear_error (&error);
 	}
@@ -988,7 +1179,10 @@ nemo_preview_details_init (NemoPreviewDetails *self)
 	const char *titles[N_DETAILS] = {
 		_("Name:"), _("Size:"), _("Type:"), _("Modified:"), _("Permissions:"),
 		_("Location:"), _("Camera:"), _("Lens:"), _("Date taken:"), _("Dimensions:"),
-		_("Aperture:"), _("Shutter:"), _("ISO:"), _("Focal length:"), _("GPS:")
+		_("Aperture:"), _("Shutter:"), _("ISO:"), _("Focal length:"), _("GPS:"),
+		_("Aspect ratio:"), _("Duration:"), _("Video codec:"), _("Video bit rate:"),
+		_("Frame rate:"), _("Audio codec:"), _("Audio bit rate:"), _("Sample rate:"),
+		_("Channels:"), _("Overall bit rate (average):")
 	};
 	GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
 	GtkWidget *grid = gtk_grid_new ();

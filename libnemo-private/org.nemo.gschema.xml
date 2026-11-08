@@ -1350,6 +1350,10 @@
       <default>'&lt;Alt&gt;F5'</default>
       <summary>Copy selected files and folders into a new archive</summary>
     </key>
+    <key name="calculate-directory-sizes" type="s">
+      <default>'space'</default>
+      <summary>Calculate recursive sizes of selected folders in the Size column</summary>
+    </key>
     <key name="archive-move" type="s">
       <default>'&lt;Alt&gt;&lt;Shift&gt;F5'</default>
       <summary>Move selected files and folders into a new verified archive</summary>

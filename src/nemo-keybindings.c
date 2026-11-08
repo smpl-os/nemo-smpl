@@ -119,7 +119,8 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "bookmark-picker",       "<Actions>/ShellActions/Bookmark Picker",    N_("Bookmark/Disk Picker"),       N_("Bookmarks"), "<Alt>F1",                 NULL, NULL },
 	{ "bookmark-picker-other", "<Actions>/ShellActions/Bookmark Picker Other Pane", N_("Bookmark/Disk Picker (Other Pane)"), N_("Bookmarks"), "<Alt>F2",     NULL, NULL },
 
-	/* File Operations — accel-map entries */
+	/* File Operations — contextual and accel-map entries */
+	{ "calculate-directory-sizes", NULL, N_("Calculate Folder Sizes"), N_("File Operations"), "space", NULL, NULL },
 	{ "open",                  "<Actions>/DirViewActions/Open",             N_("Open"),                       N_("File Operations"), "<Control>o",        NULL, NULL },
 	{ "open-default",          NULL,                                        N_("Open with Default App"),       N_("File Operations"), "F4",                NULL, NULL },
 	{ "open-alternate",        "<Actions>/DirViewActions/OpenAlternate",    N_("Open in New Window"),         N_("File Operations"), "<Control><Shift>o", NULL, NULL },
@@ -308,7 +309,7 @@ static void
 reserve_new_shortcut_defaults (void)
 {
 	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode",
-	                       "preview-scroll-up", "preview-scroll-down" };
+	                       "preview-scroll-up", "preview-scroll-down", "calculate-directory-sizes" };
 	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
 		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
 		if (user_value != NULL) {
@@ -511,10 +512,12 @@ on_accel_edited (GtkCellRendererAccel *renderer,
 	gtk_tree_model_get (child_model, &child_iter,
 	                    COL_SETTINGS_KEY, &settings_key, -1);
 
-	/* OTHER mode permits contextual arrows; retain GTK validation for all
-	 * other keys and application-wide accelerators. */
+	/* OTHER mode permits contextual arrows and folder-size Space; retain
+	 * GTK validation for application-wide accelerators. */
 	if (!gtk_accelerator_valid (accel_key, accel_mods) &&
-	    !(is_type_jump_binding (settings_key) && is_arrow_key (accel_key))) {
+	    !(is_type_jump_binding (settings_key) && is_arrow_key (accel_key)) &&
+	    !(g_str_equal (settings_key, "calculate-directory-sizes") &&
+	      accel_key == GDK_KEY_space && accel_mods == 0)) {
 		g_free (settings_key);
 		return;
 	}
