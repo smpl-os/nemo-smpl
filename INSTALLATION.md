@@ -75,6 +75,7 @@ sudo apt-get install -y \
   libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libgsf-1-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap \
   libarchive-dev libarchive-tools libsqlite3-dev libisofs-dev xorriso \
   gobject-introspection libgirepository1.0-dev \
