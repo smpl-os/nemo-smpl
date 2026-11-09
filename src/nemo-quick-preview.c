@@ -1171,8 +1171,9 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	gtk_revealer_set_reveal_child (GTK_REVEALER (self->transport_revealer), TRUE);
 	gtk_widget_set_valign (self->transport_revealer, GTK_ALIGN_END);
 	GtkWidget *transport_events = gtk_event_box_new ();
-	gtk_style_context_add_class (gtk_widget_get_style_context (transport_events), "background");
+	gtk_event_box_set_visible_window (GTK_EVENT_BOX (transport_events), FALSE);
 	GtkWidget *transport = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_style_context_add_class (gtk_widget_get_style_context (transport), GTK_STYLE_CLASS_TOOLBAR);
 	gtk_container_add (GTK_CONTAINER (transport_events), transport);
 	gtk_container_add (GTK_CONTAINER (self->transport_revealer), transport_events);
 	gtk_box_pack_end (GTK_BOX (self->media_box), self->transport_revealer, FALSE, FALSE, 0);

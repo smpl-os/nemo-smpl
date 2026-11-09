@@ -1211,6 +1211,76 @@ test_media_fullscreen_controls (void)
 }
 
 static void
+assert_transport_theme (NemoQuickPreview *preview, guint32 background, const char *foreground)
+{
+	GtkWidget *events = gtk_bin_get_child (GTK_BIN (preview->transport_revealer));
+	GtkWidget *transport = gtk_bin_get_child (GTK_BIN (events));
+	g_assert_false (gtk_event_box_get_visible_window (GTK_EVENT_BOX (events)));
+	iterate_for (100);
+	gtk_container_check_resize (GTK_CONTAINER (preview));
+	gint width = gtk_widget_get_allocated_width (transport);
+	gint height = gtk_widget_get_allocated_height (transport);
+	g_assert_cmpint (width, >, 10);
+	g_assert_cmpint (height, >, 10);
+	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
+	cairo_t *cr = cairo_create (surface);
+	gtk_widget_draw (transport, cr);
+	cairo_destroy (cr);
+	cairo_surface_flush (surface);
+	guint32 pixel;
+	memcpy (&pixel, cairo_image_surface_get_data (surface) +
+		(height - 2) * cairo_image_surface_get_stride (surface) + 2 * 4, sizeof pixel);
+	g_assert_cmphex (pixel, ==, background);
+	cairo_surface_destroy (surface);
+	GdkRGBA actual, expected;
+	g_assert_true (gdk_rgba_parse (&expected, foreground));
+	gtk_style_context_get_color (gtk_widget_get_style_context (preview->time_label),
+		GTK_STATE_FLAG_NORMAL, &actual);
+	g_assert_true (gdk_rgba_equal (&actual, &expected));
+}
+
+static void
+test_media_transport_theme (void)
+{
+	g_autoptr (GtkCssProvider) provider = gtk_css_provider_new ();
+	g_autoptr (GError) error = NULL;
+	g_assert_true (gtk_css_provider_load_from_data (provider,
+		".nemo-quick-preview .background { background-color: white; color: black; }"
+		".nemo-quick-preview box.toolbar { background-color: #2d353b;"
+		"background-image: none; color: #d3c6aa; transition: none; }", -1, &error));
+	g_assert_no_error (error);
+	gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+		GTK_STYLE_PROVIDER (provider), GTK_STYLE_PROVIDER_PRIORITY_USER);
+	g_autofree char *path = preview_media_fixture (128, 72);
+	GFile *file = g_file_new_for_path (path);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready);
+	assert_transport_theme (preview, 0xff2d353b, "#d3c6aa");
+	GdkEventWindowState state = { .type = GDK_WINDOW_STATE,
+		.changed_mask = GDK_WINDOW_STATE_FULLSCREEN, .new_window_state = GDK_WINDOW_STATE_FULLSCREEN };
+	gboolean handled;
+	g_signal_emit_by_name (preview, "window-state-event", &state, &handled);
+	gtk_revealer_set_reveal_child (GTK_REVEALER (preview->transport_revealer), TRUE);
+	assert_transport_theme (preview, 0xff2d353b, "#d3c6aa");
+	g_assert_true (gtk_css_provider_load_from_data (provider,
+		".nemo-quick-preview .background { background-color: white; color: black; }"
+		".nemo-quick-preview box.toolbar { background-color: #eee8d5;"
+		"background-image: none; color: #073642; transition: none; }", -1, &error));
+	g_assert_no_error (error);
+	gtk_style_context_reset_widgets (gdk_screen_get_default ());
+	assert_transport_theme (preview, 0xffeee8d5, "#073642");
+	state.new_window_state = 0;
+	g_signal_emit_by_name (preview, "window-state-event", &state, &handled);
+	assert_transport_theme (preview, 0xffeee8d5, "#073642");
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	gtk_style_context_remove_provider_for_screen (gdk_screen_get_default (), GTK_STYLE_PROVIDER (provider));
+	remove_fixture (file);
+}
+
+static void
 test_media_frame_metadata (void)
 {
 	GstCaps *caps = gst_caps_from_string (
@@ -1553,6 +1623,7 @@ main (int argc, char **argv)
 	g_test_add_data_func ("/preview/media/resume-video", GINT_TO_POINTER (FALSE), test_media_resume);
 	g_test_add_data_func ("/preview/media/resume-audio", GINT_TO_POINTER (TRUE), test_media_resume);
 	g_test_add_func ("/preview/media/fullscreen-hover-controls", test_media_fullscreen_controls);
+	g_test_add_func ("/preview/media/transport-theme", test_media_transport_theme);
 	g_test_add_func ("/preview/media/fractional-frame-number", test_media_fractional_frame_number);
 	g_test_add_func ("/preview/media/frame-metadata", test_media_frame_metadata);
 	g_test_add_func ("/preview/media/scaled-aspect-ratio", test_media_aspect_ratio);

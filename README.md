@@ -207,6 +207,8 @@ for variable-frame-rate video it is an estimate. Audio shows elapsed time withou
 a frame number. In fullscreen, the seek bar and transport controls overlay the
 video only while the pointer is near the bottom edge or over the controls.
 Moving away hides them; leaving fullscreen restores the normal transport panel.
+The transport panel uses the theme's toolbar background and text colors in both
+windowed and fullscreen modes, including live theme changes.
 
 ## Browsing Archives and ISO Images
 
