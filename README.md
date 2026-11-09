@@ -346,7 +346,10 @@ folders and displays each total in the **Size** column. This runs in the
 background, includes hidden contents, and uses the same counting rules as
 Properties; unreadable contents are marked **incomplete**. Calculated folders
 sort by their byte totals rather than item counts. Press Space again to
-recalculate; totals are temporary, not saved as folder metadata. Configure
+recalculate; totals are temporary, not saved as folder metadata. Navigating away
+or closing the view cancels its unfinished size requests. Hard-link detection
+uses indexed filesystem/inode identities so large trees do not require repeated
+linear searches on the UI thread. Configure
 **Calculate Folder Sizes** under **Keyboard Shortcuts → File Operations**.
 For a selection containing no folders, Space retains its preview behavior;
 typing, filtering, and text editing keep their existing Space handling.

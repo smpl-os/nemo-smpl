@@ -54,6 +54,152 @@ assert_column (NemoView *view, NemoFile *file, const char *expected)
 }
 
 static void
+test_navigation_cancel (gconstpointer data)
+{
+    if (!g_test_subprocess ()) {
+        g_test_trap_subprocess (NULL, 30000000, 0);
+        g_test_trap_assert_passed ();
+        return;
+    }
+    g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    application = nemo_main_application_get_singleton ();
+    GError *error = NULL;
+    g_assert_true (g_application_register (G_APPLICATION (application), NULL, &error));
+    g_assert_no_error (error);
+    g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, data);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    Fixture fixture = fixture_new ();
+    g_autoptr (GFile) second_location = g_file_get_child (fixture.origin, "second");
+    g_assert_true (g_file_make_directory (second_location, NULL, &error));
+    g_assert_no_error (error);
+    NemoFile *folder = nemo_file_get (fixture.containing);
+    NemoFile *second = nemo_file_get (second_location);
+    WAIT_FOR (nemo_file_is_directory (folder) && nemo_file_is_directory (second));
+    GList second_selection = { .data = second };
+    GList selection = { .data = folder, .next = &second_selection };
+    NemoView *view = fixture.slot->content_view;
+    WAIT_FOR ((nemo_view_set_selection (view, &selection),
+               nemo_view_get_selection_count (view) == 2));
+    nemo_view_grab_focus (view);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    g_assert_true (folder->details->calculated_size_pending);
+    g_assert_true (second->details->calculated_size_pending);
+    /* Leave before the initial filesystem-info callback has completed. */
+    nemo_window_slot_open_location (fixture.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    g_assert_false (folder->details->calculated_size_pending);
+    g_assert_false (folder->details->show_calculated_size);
+    g_assert_false (second->details->calculated_size_pending);
+    g_assert_false (second->details->show_calculated_size);
+    nemo_window_slot_open_location (fixture.slot, fixture.origin, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    view = fixture.slot->content_view;
+    nemo_view_set_selection (view, &selection);
+    g_assert_cmpuint (nemo_view_get_selection_count (view), ==, 2);
+    nemo_view_grab_focus (view);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    WAIT_FOR (!folder->details->calculated_size_pending && !second->details->calculated_size_pending);
+    goffset size;
+    g_assert_cmpint (nemo_file_get_deep_counts (folder, NULL, NULL, NULL, NULL, &size, TRUE),
+                     ==, NEMO_REQUEST_DONE);
+    g_assert_cmpint (size, ==, strlen ("temporary search fixture"));
+    nemo_file_unref (folder);
+    nemo_file_unref (second);
+    g_assert_true (g_file_delete (second_location, NULL, NULL));
+    fixture_clear (&fixture);
+    g_object_unref (application);
+}
+
+typedef struct {
+    guint ticks;
+    gint64 last_tick;
+    gint64 longest_gap;
+} Heartbeat;
+
+static gboolean
+scan_heartbeat (gpointer data)
+{
+    Heartbeat *heartbeat = data;
+    gint64 now = g_get_monotonic_time ();
+    heartbeat->longest_gap = MAX (heartbeat->longest_gap, now - heartbeat->last_tick);
+    heartbeat->last_tick = now;
+    heartbeat->ticks++;
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+test_large_scan (void)
+{
+    if (!g_test_subprocess ()) {
+        g_test_trap_subprocess (NULL, 90000000, 0);
+        g_test_trap_assert_passed ();
+        return;
+    }
+    g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    application = nemo_main_application_get_singleton ();
+    GError *error = NULL;
+    g_assert_true (g_application_register (G_APPLICATION (application), NULL, &error));
+    g_assert_no_error (error);
+    g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, "list-view");
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    Fixture fixture = fixture_new ();
+    g_autofree char *folder_path = g_file_get_path (fixture.containing);
+    const guint entries = 200000;
+    for (guint i = 0; i < entries; i++) {
+        g_autofree char *path = g_strdup_printf ("%s/file-%u", folder_path, i);
+        g_assert_true (g_file_set_contents (path, "x", 1, NULL));
+    }
+    g_autofree char *hardlink = g_build_filename (folder_path, "hardlink", NULL);
+    g_autofree char *first = g_build_filename (folder_path, "file-0", NULL);
+    g_assert_cmpint (link (first, hardlink), ==, 0);
+    NemoFile *folder = nemo_file_get (fixture.containing);
+    WAIT_FOR (nemo_file_is_directory (folder));
+    NemoView *view = fixture.slot->content_view;
+    GList selection = { .data = folder };
+    nemo_view_set_selection (view, &selection);
+    nemo_view_grab_focus (view);
+    Heartbeat heartbeat = { .last_tick = g_get_monotonic_time () };
+    guint timer = g_timeout_add (5, scan_heartbeat, &heartbeat);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    WAIT_FOR (folder->details->deep_file_count > 0);
+    g_assert_true (folder->details->calculated_size_pending);
+    /* Cancel an active enumeration, then reopen the original directory. */
+    g_autoptr (GFile) parent = g_file_get_parent (fixture.origin);
+    nemo_window_slot_open_location (fixture.slot, parent, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, parent));
+    g_assert_false (folder->details->calculated_size_pending);
+    nemo_window_slot_open_location (fixture.slot, fixture.origin, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    view = fixture.slot->content_view;
+    nemo_view_set_selection (view, &selection);
+    g_assert_cmpuint (nemo_view_get_selection_count (view), ==, 1);
+    nemo_view_grab_focus (view);
+    heartbeat = (Heartbeat) { .last_tick = g_get_monotonic_time () };
+    send_key (fixture.window, GDK_KEY_space, 0);
+    gint64 deadline = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+    while (folder->details->calculated_size_pending && g_get_monotonic_time () < deadline)
+        iterate ();
+    g_assert_false (folder->details->calculated_size_pending);
+    g_source_remove (timer);
+    g_test_message ("200000-file scan: %u UI heartbeats, largest gap %.1f ms",
+                    heartbeat.ticks, heartbeat.longest_gap / 1000.0);
+    g_assert_cmpuint (heartbeat.ticks, >, 5);
+    g_assert_cmpint (heartbeat.longest_gap, <, 250 * G_TIME_SPAN_MILLISECOND);
+    goffset size;
+    g_assert_cmpint (nemo_file_get_deep_counts (folder, NULL, NULL, NULL, NULL, &size, TRUE),
+                     ==, NEMO_REQUEST_DONE);
+    g_assert_cmpint (size, ==, entries + strlen ("temporary search fixture"));
+    for (guint i = 0; i < entries; i++) {
+        g_autofree char *path = g_strdup_printf ("%s/file-%u", folder_path, i);
+        g_assert_cmpint (g_remove (path), ==, 0);
+    }
+    g_assert_cmpint (g_remove (hardlink), ==, 0);
+    nemo_file_unref (folder);
+    fixture_clear (&fixture);
+    g_object_unref (application);
+}
+
+static void
 test_sizes (gconstpointer data)
 {
     if (!g_test_subprocess ()) {
@@ -213,5 +359,9 @@ main (int argc, char **argv)
     g_test_add_data_func ("/directory-sizes/list", "list-view", test_sizes);
     g_test_add_data_func ("/directory-sizes/icon", "icon-view", test_sizes);
     g_test_add_data_func ("/directory-sizes/compact", "compact-view", test_sizes);
+    g_test_add_data_func ("/directory-sizes/cancel-list", "list-view", test_navigation_cancel);
+    g_test_add_data_func ("/directory-sizes/cancel-icon", "icon-view", test_navigation_cancel);
+    g_test_add_data_func ("/directory-sizes/cancel-compact", "compact-view", test_navigation_cancel);
+    g_test_add_func ("/directory-sizes/large-tree-responsive", test_large_scan);
     return g_test_run ();
 }

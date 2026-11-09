@@ -5984,9 +5984,23 @@ nemo_file_calculate_directory_size (NemoFile *file)
 	file->details->show_calculated_size = TRUE;
 	file->details->calculated_size_pending = TRUE;
 	nemo_file_recompute_deep_counts (file);
-	nemo_file_changed (file);
 	nemo_file_call_when_ready (file, NEMO_FILE_ATTRIBUTE_DEEP_COUNTS,
 				   calculated_size_ready, nemo_file_ref (file));
+	nemo_file_changed (file);
+}
+
+void
+nemo_file_cancel_directory_size (NemoFile *file)
+{
+	g_return_if_fail (NEMO_IS_FILE (file));
+	if (!file->details->calculated_size_pending)
+		return;
+	nemo_file_cancel_call_when_ready (file, calculated_size_ready, file);
+	file->details->calculated_size_pending = FALSE;
+	file->details->show_calculated_size = FALSE;
+	nemo_file_changed (file);
+	/* Release the reference held by the cancelled completion callback. */
+	nemo_file_unref (file);
 }
 
 static char *

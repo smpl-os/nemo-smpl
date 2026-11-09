@@ -227,6 +227,7 @@ struct NemoViewDetails
 	NemoFile *directory_as_file;
 	NemoFile *parent_entry;
 	GList *operation_selection_cache;
+	GList *directory_size_requests;
 	NemoFile *location_popup_directory_as_file;
 	NemoBookmarkList *bookmarks;
 	GdkEventButton *location_popup_event;
@@ -7304,7 +7305,12 @@ nemo_view_calculate_directory_sizes (NemoView *view)
 	for (GList *item = selection; item != NULL; item = item->next) {
 		NemoFile *file = item->data;
 		if (nemo_file_is_directory (file) && !nemo_file_is_parent_entry (file)) {
-			nemo_file_calculate_directory_size (file);
+			if (!file->details->calculated_size_pending) {
+				if (g_list_find (view->details->directory_size_requests, file) == NULL)
+					view->details->directory_size_requests = g_list_prepend (
+						view->details->directory_size_requests, nemo_file_ref (file));
+				nemo_file_calculate_directory_size (file);
+			}
 			calculated = TRUE;
 		}
 	}
@@ -11611,6 +11617,12 @@ void
 nemo_view_stop_loading (NemoView *view)
 {
 	g_return_if_fail (NEMO_IS_VIEW (view));
+
+	GList *size_requests = view->details->directory_size_requests;
+	view->details->directory_size_requests = NULL;
+	for (GList *item = size_requests; item != NULL; item = item->next)
+		nemo_file_cancel_directory_size (item->data);
+	nemo_file_list_free (size_requests);
 
     if (view->details->window) {
         GtkUIManager *ui_manager;

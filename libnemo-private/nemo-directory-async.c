@@ -126,7 +126,7 @@ struct DeepCountState {
 	GFileEnumerator *enumerator;
 	GFile *deep_count_location;
 	GList *deep_count_subdirectories;
-	GArray *seen_deep_count_inodes;
+	GHashTable *seen_deep_count_inodes;
 	char *fs_id;
 };
 
@@ -2534,33 +2534,17 @@ static inline gboolean
 seen_inode (DeepCountState *state,
 	    GFileInfo *info)
 {
-	guint64 inode, inode2;
-	guint i;
-
-	inode = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_UNIX_INODE);
-
-	if (inode != 0) {
-		for (i = 0; i < state->seen_deep_count_inodes->len; i++) {
-			inode2 = g_array_index (state->seen_deep_count_inodes, guint64, i);
-			if (inode == inode2) {
-				return TRUE;
-			}
-		}
-	}
-
-	return FALSE;
-}
-
-static inline void
-mark_inode_as_seen (DeepCountState *state,
-		    GFileInfo *info)
-{
 	guint64 inode;
+	const char *filesystem;
+	char *key;
 
 	inode = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_UNIX_INODE);
-	if (inode != 0) {
-		g_array_append_val (state->seen_deep_count_inodes, inode);
-	}
+	filesystem = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
+	if (inode == 0 || filesystem == NULL)
+		return FALSE;
+	/* Inodes are unique only within their filesystem, including mount entries. */
+	key = g_strdup_printf ("%s:%" G_GUINT64_FORMAT, filesystem, inode);
+	return !g_hash_table_add (state->seen_deep_count_inodes, key);
 }
 
 static void
@@ -2573,9 +2557,6 @@ deep_count_one (DeepCountState *state,
 	const char *id;
     gboolean hidden;
 	is_seen_inode = seen_inode (state, info);
-	if (!is_seen_inode) {
-		mark_inode_as_seen (state, info);
-	}
 
 	file = state->directory->details->deep_count_file;
 
@@ -2626,7 +2607,7 @@ deep_count_state_free (DeepCountState *state)
 		g_object_unref (state->deep_count_location);
 	}
 	g_list_free_full (state->deep_count_subdirectories, g_object_unref);
-	g_array_free (state->seen_deep_count_inodes, TRUE);
+	g_hash_table_destroy (state->seen_deep_count_inodes);
 	g_free (state->fs_id);
 	g_free (state);
 }
@@ -2818,6 +2799,11 @@ deep_count_got_info (GObject *source_object,
 	info = g_file_query_info_finish (file,
 					 res,
 					 NULL);
+	if (state->directory == NULL) {
+		g_clear_object (&info);
+		deep_count_state_free (state);
+		return;
+	}
 	if (info) {
 		id = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
 		state->fs_id = g_strdup (id);
@@ -2869,7 +2855,7 @@ deep_count_start (NemoDirectory *directory,
 	state = g_new0 (DeepCountState, 1);
 	state->directory = directory;
 	state->cancellable = g_cancellable_new ();
-	state->seen_deep_count_inodes = g_array_new (FALSE, TRUE, sizeof (guint64));
+	state->seen_deep_count_inodes = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
 
 	directory->details->deep_count_in_progress = state;
 	
@@ -2879,7 +2865,7 @@ deep_count_start (NemoDirectory *directory,
 				 G_FILE_ATTRIBUTE_ID_FILESYSTEM,
 				 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
 				 G_PRIORITY_DEFAULT,
-				 NULL,
+				 state->cancellable,
 				 deep_count_got_info,
 				 state);
 	g_object_unref (location);

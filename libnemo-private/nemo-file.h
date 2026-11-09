@@ -249,6 +249,7 @@ gboolean                nemo_file_get_directory_item_count          (NemoFile   
 									 gboolean                       *count_unreadable);
 void                    nemo_file_recompute_deep_counts             (NemoFile                   *file);
 void                    nemo_file_calculate_directory_size          (NemoFile                   *file);
+void                    nemo_file_cancel_directory_size             (NemoFile                   *file);
 NemoRequestStatus   nemo_file_get_deep_counts                   (NemoFile                   *file,
 									 guint                          *directory_count,
 									 guint                          *file_count,
