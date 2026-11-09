@@ -18,22 +18,15 @@ preview_media_factory_make (const char *factory, const char *name)
 }
 
 static char *
-preview_media_fixture (int width, int height)
+preview_media_encode_fixture (const char *description, const char *suffix)
 {
 	GError *error = NULL;
 	char *path = NULL;
-	int fd = g_file_open_tmp ("nemo-preview-XXXXXX.webm", &path, &error);
+	g_autofree char *template = g_strdup_printf ("nemo-preview-XXXXXX.%s", suffix);
+	int fd = g_file_open_tmp (template, &path, &error);
 	g_assert_no_error (error);
 	g_assert_cmpint (fd, >=, 0);
 	g_assert_cmpint (close (fd), ==, 0);
-	g_autofree char *description = width == 0 ? g_strdup (
-		"audiotestsrc num-buffers=3 ! audioconvert ! opusenc ! "
-		"webmmux ! filesink name=output") : g_strdup_printf (
-		"videotestsrc num-buffers=3 pattern=red ! "
-		"video/x-raw,width=%d,height=%d,framerate=1/1800 ! "
-		"vp8enc deadline=1 threads=2 keyframe-max-dist=1 ! queue ! mux. "
-		"audiotestsrc num-buffers=3 ! audioconvert ! opusenc ! queue ! mux. "
-		"webmmux name=mux ! filesink name=output", width, height);
 	GstElement *pipeline = gst_parse_launch (description, &error);
 	g_assert_no_error (error);
 	g_assert_nonnull (pipeline);
@@ -56,6 +49,20 @@ preview_media_fixture (int width, int height)
 	gst_object_unref (bus);
 	gst_object_unref (pipeline);
 	return path;
+}
+
+static char *
+preview_media_fixture (int width, int height)
+{
+	g_autofree char *description = width == 0 ? g_strdup (
+		"audiotestsrc num-buffers=3 ! audioconvert ! opusenc ! "
+		"webmmux ! filesink name=output") : g_strdup_printf (
+		"videotestsrc num-buffers=3 pattern=red ! "
+		"video/x-raw,width=%d,height=%d,framerate=1/1800 ! "
+		"vp8enc deadline=1 threads=2 keyframe-max-dist=1 ! queue ! mux. "
+		"audiotestsrc num-buffers=3 ! audioconvert ! opusenc ! queue ! mux. "
+		"webmmux name=mux ! filesink name=output", width, height);
+	return preview_media_encode_fixture (description, "webm");
 }
 
 typedef struct {

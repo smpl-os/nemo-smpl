@@ -419,8 +419,8 @@
     </key>
     <key name="remember-document-position" type="b">
       <default>true</default>
-      <summary>Remember the reading position in document previews</summary>
-      <description>If set to true, Nemo remembers the page and scroll position of documents opened in Quick Preview or the preview pane, and returns to it the next time the same document is previewed. Positions are discarded when the document changes on disk.</description>
+      <summary>Remember reading and playback positions in previews</summary>
+      <description>If set to true, Nemo remembers document pages and scroll positions in Quick Preview and the preview pane, and audio/video playback positions in Quick Preview. Reopening the same file returns to its saved position. Positions are discarded when the file changes on disk.</description>
     </key>
     <key name="ignore-view-metadata" type="b">
       <default>false</default>

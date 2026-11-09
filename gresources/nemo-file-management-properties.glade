@@ -2649,7 +2649,7 @@ along with .  If not, see <http://www.gnu.org/licenses/>.
                                         </child>
                                         <child>
                                           <object class="GtkCheckButton" id="remember_document_position_checkbutton">
-                                            <property name="label" translatable="yes">Remember the reading position in document previews</property>
+                                            <property name="label" translatable="yes">Remember reading and playback positions in previews</property>
                                             <property name="tooltip-text" translatable="yes">Return to the page and scroll position you last read when the same document is previewed again. Positions are forgotten when the document changes on disk.</property>
                                             <property name="visible">True</property>
                                             <property name="can-focus">True</property>

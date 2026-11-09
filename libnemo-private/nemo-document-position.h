@@ -1,5 +1,5 @@
 /*
- * Persistent reading positions for document previews.
+ * Persistent reading and playback positions for previews.
  * Copyright (C) 2026 smplOS contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -18,6 +18,9 @@ gboolean nemo_document_position_lookup (GFile *file, guint *page, gdouble *offse
 void nemo_document_position_store (GFile *file, guint page, gdouble offset, guint page_count);
 void nemo_document_position_forget (GFile *file);
 void nemo_document_position_flush (void);
+/* Media uses nanoseconds and separate groups in the existing position store. */
+gboolean nemo_media_position_lookup (GFile *file, gint64 *position);
+void nemo_media_position_store (GFile *file, gint64 position);
 
 G_END_DECLS
 #endif

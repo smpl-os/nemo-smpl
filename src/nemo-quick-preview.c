@@ -30,6 +30,7 @@
 #include "nemo-image-viewer.h"
 #ifdef NEMO_SMPL
 #include "nemo-preview-details.h"
+#include <libnemo-private/nemo-document-position.h>
 #include <libnemo-private/nemo-file-operations.h>
 #endif
 #include "nemo-preview-utils.h"
@@ -94,6 +95,9 @@ struct _NemoQuickPreview {
 	/* Media page */
 	GtkWidget   *media_box;
 #ifdef HAVE_GSTREAMER
+	GtkWidget   *media_overlay;
+	GtkWidget   *transport_revealer;
+	gboolean     fullscreen;
 	GtkWidget   *video_area;
 	GstElement  *pipeline;
 	guint        bus_watch_id;
@@ -105,12 +109,16 @@ struct _NemoQuickPreview {
 	gboolean     seek_lock;
 	gboolean     video_muted;
 	double       video_fps;
+	guint        video_fps_n;
+	guint        video_fps_d;
 #ifdef NEMO_SMPL
 	NemoPreviewMediaFrames *media_frames;
 	gboolean     media_ready;
 	gboolean     video_playing;
 	gboolean     media_is_audio;
 	guint        media_load_timeout_id;
+	GFile       *media_file;
+	gint64       media_resume_position;
 #endif
 
 	/* Frame rendering (appsink → cairo) */
@@ -458,6 +466,86 @@ static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
 static gboolean seek_press_cb          (GtkWidget *widget, GdkEventButton *event, gpointer data);
 static gboolean seek_release_cb        (GtkWidget *widget, GdkEventButton *event, gpointer data);
+
+static void
+media_controls_layout (NemoQuickPreview *self)
+{
+	gboolean overlay = self->fullscreen && self->mode == PREVIEW_MEDIA;
+	GtkWidget *parent = overlay ? self->media_overlay : self->media_box;
+
+	if (gtk_widget_get_parent (self->transport_revealer) != parent) {
+		g_object_ref (self->transport_revealer);
+		gtk_container_remove (GTK_CONTAINER (gtk_widget_get_parent (self->transport_revealer)),
+				      self->transport_revealer);
+		if (overlay)
+			gtk_overlay_add_overlay (GTK_OVERLAY (parent), self->transport_revealer);
+		else
+			gtk_box_pack_end (GTK_BOX (parent), self->transport_revealer, FALSE, FALSE, 0);
+		g_object_unref (self->transport_revealer);
+	}
+	gtk_revealer_set_reveal_child (GTK_REVEALER (self->transport_revealer), !overlay);
+#ifdef NEMO_SMPL
+	gtk_widget_set_visible (self->filename_label, !overlay);
+#endif
+}
+
+static gboolean
+preview_window_state (GtkWidget *widget, GdkEventWindowState *event, gpointer data)
+{
+	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (widget);
+#ifdef NEMO_SMPL
+	if (self->destroyed)
+		return FALSE;
+#endif
+	self->fullscreen = (event->new_window_state & GDK_WINDOW_STATE_FULLSCREEN) != 0;
+	media_controls_layout (self);
+	return FALSE;
+}
+
+static void
+media_controls_hover (NemoQuickPreview *self, double root_x, double root_y)
+{
+#ifdef NEMO_SMPL
+	if (self->destroyed)
+		return;
+#endif
+	if (!self->fullscreen || self->mode != PREVIEW_MEDIA)
+		return;
+	gint origin_x, origin_y, x, y, controls_height;
+	gdk_window_get_origin (gtk_widget_get_window (GTK_WIDGET (self)), &origin_x, &origin_y);
+	if (!gtk_widget_translate_coordinates (self->media_overlay, GTK_WIDGET (self), 0, 0, &x, &y))
+		return;
+	gtk_widget_get_preferred_height (gtk_bin_get_child (GTK_BIN (self->transport_revealer)),
+					NULL, &controls_height);
+	gboolean revealed = gtk_revealer_get_reveal_child (GTK_REVEALER (self->transport_revealer));
+	double local_x = root_x - origin_x - x;
+	double local_y = root_y - origin_y - y;
+	gint width = gtk_widget_get_allocated_width (self->media_overlay);
+	gint height = gtk_widget_get_allocated_height (self->media_overlay);
+	gboolean bottom = local_x >= 0 && local_x < width && local_y < height &&
+		local_y >= height - (revealed ? MAX (24, controls_height) : 24);
+	if (self->seek_lock)
+		return;
+	GtkWidget *focus = gtk_window_get_focus (GTK_WINDOW (self));
+	if (!bottom && focus != NULL && gtk_widget_is_ancestor (focus, self->transport_revealer))
+		gtk_widget_grab_focus (self->video_area);
+	gtk_revealer_set_reveal_child (GTK_REVEALER (self->transport_revealer), bottom);
+}
+
+static gboolean
+media_motion (GtkWidget *widget, GdkEventMotion *event, gpointer data)
+{
+	media_controls_hover (NEMO_QUICK_PREVIEW (data), event->x_root, event->y_root);
+	return FALSE;
+}
+
+static gboolean
+media_crossing (GtkWidget *widget, GdkEventCrossing *event, gpointer data)
+{
+	if (event->detail != GDK_NOTIFY_INFERIOR)
+		media_controls_hover (NEMO_QUICK_PREVIEW (data), event->x_root, event->y_root);
+	return FALSE;
+}
 #endif
 
 static void     navigation_clear       (NemoQuickPreview *self);
@@ -1066,13 +1154,37 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	self->media_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
 #ifdef HAVE_GSTREAMER
 	self->video_area = gtk_drawing_area_new ();
+	gtk_widget_set_can_focus (self->video_area, TRUE);
 	gtk_widget_set_app_paintable (self->video_area, TRUE);
 	gtk_widget_set_hexpand (self->video_area, TRUE);
 	gtk_widget_set_vexpand (self->video_area, TRUE);
 	g_signal_connect (self->video_area, "draw",
 	                  G_CALLBACK (video_area_draw_cb), self);
-	gtk_box_pack_start (GTK_BOX (self->media_box), self->video_area, TRUE, TRUE, 0);
+	self->media_overlay = gtk_overlay_new ();
+	gtk_container_add (GTK_CONTAINER (self->media_overlay), self->video_area);
+	gtk_box_pack_start (GTK_BOX (self->media_box), self->media_overlay, TRUE, TRUE, 0);
 	gtk_widget_show (self->video_area);
+
+	self->transport_revealer = gtk_revealer_new ();
+	gtk_revealer_set_transition_type (GTK_REVEALER (self->transport_revealer),
+					 GTK_REVEALER_TRANSITION_TYPE_NONE);
+	gtk_revealer_set_reveal_child (GTK_REVEALER (self->transport_revealer), TRUE);
+	gtk_widget_set_valign (self->transport_revealer, GTK_ALIGN_END);
+	GtkWidget *transport_events = gtk_event_box_new ();
+	gtk_style_context_add_class (gtk_widget_get_style_context (transport_events), "background");
+	GtkWidget *transport = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_container_add (GTK_CONTAINER (transport_events), transport);
+	gtk_container_add (GTK_CONTAINER (self->transport_revealer), transport_events);
+	gtk_box_pack_end (GTK_BOX (self->media_box), self->transport_revealer, FALSE, FALSE, 0);
+	GtkWidget *event_widgets[] = { GTK_WIDGET (self), self->video_area, transport_events };
+	for (guint i = 0; i < G_N_ELEMENTS (event_widgets); i++) {
+		gtk_widget_add_events (event_widgets[i], GDK_POINTER_MOTION_MASK |
+				      GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
+		g_signal_connect (event_widgets[i], "motion-notify-event", G_CALLBACK (media_motion), self);
+		g_signal_connect (event_widgets[i], "enter-notify-event", G_CALLBACK (media_crossing), self);
+		g_signal_connect (event_widgets[i], "leave-notify-event", G_CALLBACK (media_crossing), self);
+	}
+	g_signal_connect (self, "window-state-event", G_CALLBACK (preview_window_state), NULL);
 
 	/* Seek bar */
 	self->seek_scale = gtk_scale_new_with_range (
@@ -1084,7 +1196,7 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	                  G_CALLBACK (seek_press_cb), self);
 	g_signal_connect (self->seek_scale, "button-release-event",
 	                  G_CALLBACK (seek_release_cb), self);
-	gtk_box_pack_start (GTK_BOX (self->media_box), self->seek_scale, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (transport), self->seek_scale, FALSE, FALSE, 0);
 	gtk_widget_show (self->seek_scale);
 
 	/* Transport controls (play/pause + mute) */
@@ -1127,7 +1239,7 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 		gtk_box_pack_start (GTK_BOX (vctrl), self->time_label, FALSE, FALSE, 0);
 		gtk_widget_show (self->time_label);
 
-		gtk_box_pack_end (GTK_BOX (self->media_box), vctrl, FALSE, FALSE, 0);
+		gtk_box_pack_end (GTK_BOX (transport), vctrl, FALSE, FALSE, 0);
 		gtk_widget_show (vctrl);
 	}
 #else
@@ -1257,6 +1369,12 @@ preview_clear (NemoQuickPreview *self)
 	nemo_dir_analyzer_clear (self->dir_analyzer);
 
 	self->mode = PREVIEW_NONE;
+#ifdef HAVE_GSTREAMER
+#ifdef NEMO_SMPL
+	if (!self->destroyed)
+#endif
+		media_controls_layout (self);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1827,14 +1945,28 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 
 		if (GST_MESSAGE_SRC (message) != GST_OBJECT (self->pipeline))
 			break;
-		self->media_ready = TRUE;
 		g_object_get (self->pipeline, "n-video", &video_streams, NULL);
 		if (!self->media_is_audio && video_streams == 0) {
 			preview_set_status (self, _("Unable to decode the video stream.\n"
 						   "Check that the required GStreamer video decoder is installed."));
 			media_stop (self);
-		} else
+		} else if (!self->media_ready && self->media_resume_position > 0) {
+			gint64 duration;
+			gint64 position = self->media_resume_position;
+			self->media_resume_position = 0;
+			if (gst_element_query_duration (self->pipeline, GST_FORMAT_TIME, &duration) &&
+			    duration > 0 && position >= duration) {
+				self->media_ready = TRUE;
+				media_load_complete (self);
+			} else if (!gst_element_seek_simple (self->pipeline, GST_FORMAT_TIME,
+					GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, position)) {
+				preview_set_status (self, _("Unable to resume the saved playback position."));
+				media_stop (self);
+			}
+		} else {
+			self->media_ready = TRUE;
 			media_load_complete (self);
+		}
 		break;
 	}
 #endif
@@ -1906,8 +2038,11 @@ process_video_sample (NemoQuickPreview *self, GstSample *sample)
 	}
 	w = cairo_image_surface_get_width (surface);
 	h = cairo_image_surface_get_height (surface);
-	if (GST_VIDEO_INFO_FPS_N (&vinfo) > 0 && GST_VIDEO_INFO_FPS_D (&vinfo) > 0)
+	if (GST_VIDEO_INFO_FPS_N (&vinfo) > 0 && GST_VIDEO_INFO_FPS_D (&vinfo) > 0) {
+		self->video_fps_n = GST_VIDEO_INFO_FPS_N (&vinfo);
+		self->video_fps_d = GST_VIDEO_INFO_FPS_D (&vinfo);
 		self->video_fps = (double) GST_VIDEO_INFO_FPS_N (&vinfo) / GST_VIDEO_INFO_FPS_D (&vinfo);
+	}
 #else
 	buffer = gst_sample_get_buffer (sample);
 	caps = gst_sample_get_caps (sample);
@@ -2106,9 +2241,22 @@ seek_position_update_cb (gpointer data)
 		gint s  = total_secs % 60;
 		gint64 remainder_ns = pos - (gint64)total_secs * GST_SECOND;
 		gint ff = (gint)(remainder_ns * fps / GST_SECOND);
-		gchar buf[32];
+		gchar buf[96];
 
+#ifdef NEMO_SMPL
+		if (self->media_is_audio)
+			g_snprintf (buf, sizeof (buf), "%02d:%02d:%02d", h, m, s);
+		else if (self->video_fps_n > 0 && self->video_fps_d > 0) {
+			guint64 denominator = GST_SECOND * self->video_fps_d;
+			guint64 frame = gst_util_uint64_scale (MAX (pos, 0), self->video_fps_n, denominator);
+			ff = gst_util_uint64_scale (remainder_ns, self->video_fps_n, denominator);
+			g_autofree char *frame_text = g_strdup_printf (_("Frame %" G_GUINT64_FORMAT), frame);
+			g_snprintf (buf, sizeof (buf), "%02d:%02d:%02d:%02d  %s", h, m, s, ff, frame_text);
+		} else
+			g_snprintf (buf, sizeof (buf), "%02d:%02d:%02d", h, m, s);
+#else
 		g_snprintf (buf, sizeof (buf), "%02d:%02d:%02d:%02d", h, m, s, ff);
+#endif
 		gtk_label_set_text (GTK_LABEL (self->time_label), buf);
 	}
 
@@ -2259,6 +2407,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	self->media_ready = FALSE;
 	self->video_playing = FALSE;
 	self->media_is_audio = is_audio;
+	self->media_file = g_object_ref (file);
+	nemo_media_position_lookup (file, &self->media_resume_position);
 	self->media_load_timeout_id = g_timeout_add_seconds (
 		NEMO_PREVIEW_MEDIA_LOAD_SECONDS, media_load_timed_out, self);
 #else
@@ -2281,6 +2431,7 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	self->mode = PREVIEW_MEDIA;
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "media");
 	gtk_widget_show_all (GTK_WIDGET (self));
+	media_controls_layout (self);
 
 	/* Bus watch for EOS / errors */
 	bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
@@ -2300,6 +2451,7 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 
 	gtk_range_set_range (GTK_RANGE (self->seek_scale), 0.0, 1.0);
 	gtk_range_set_value (GTK_RANGE (self->seek_scale), 0.0);
+	gtk_label_set_text (GTK_LABEL (self->time_label), "00:00:00");
 	self->seek_lock = FALSE;
 
 	if (self->seek_update_id != 0) {
@@ -2308,7 +2460,13 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	self->seek_update_id = g_timeout_add (40, seek_position_update_cb, self);
 
 	/* Detect framerate from the first video stream */
-	self->video_fps = 25.0;  /* default fallback */
+#ifdef NEMO_SMPL
+	self->video_fps = 0.0;
+#else
+	self->video_fps = 25.0;
+#endif
+	self->video_fps_n = 0;
+	self->video_fps_d = 0;
 #ifndef NEMO_SMPL
 	{
 		GstPad *pad = NULL;
@@ -2346,6 +2504,17 @@ static void
 media_stop (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
+	if (self->pipeline != NULL && self->media_ready && self->media_file != NULL) {
+		gint64 position;
+		if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &position)) {
+			nemo_media_position_store (self->media_file, position);
+			nemo_document_position_flush ();
+		} else
+			g_warning ("Unable to read the closing media preview's playback position; "
+				   "the previous saved position is retained.");
+	}
+	g_clear_object (&self->media_file);
+	self->media_resume_position = 0;
 	if (self->media_load_timeout_id != 0) {
 		g_source_remove (self->media_load_timeout_id);
 		self->media_load_timeout_id = 0;

@@ -177,7 +177,7 @@ another file is previewed, its page and scroll position are saved, and the
 next preview of that document reopens there—in both F3 and the preview pane.
 Positions are stored per file in `~/.config/nemo/document-positions` and are
 discarded automatically when the document changes on disk. Turn this off with
-**Preferences → Preview → Remember the reading position in document previews**.
+**Preferences → Preview → Remember reading and playback positions in previews**.
 
 The divider between file panes—and the right preview pane's resize handle—is
 a theme-colored **1-pixel line** that highlights on hover. Its invisible drag
@@ -195,6 +195,18 @@ the original file is unchanged. Converted-frame buffering is bounded and preview
 resources are released when switching or closing files. Decoders still need
 their own reference-frame memory, so high-resolution video can use substantial
 memory even in a small preview.
+
+F3 remembers an audio/video file's playback position when you close it or switch
+files. Reopening it seeks to that position and stays paused, ready to continue.
+The saved position survives restarting Nemo and is ignored if the file changes
+on disk. The reading/playback-position preference above also controls this.
+
+Video transport shows the absolute, zero-based **Frame** number to the right of
+the timecode. It is calculated from playback time and the video's frame rate;
+for variable-frame-rate video it is an estimate. Audio shows elapsed time without
+a frame number. In fullscreen, the seek bar and transport controls overlay the
+video only while the pointer is near the bottom edge or over the controls.
+Moving away hides them; leaving fullscreen restores the normal transport panel.
 
 ## Browsing Archives and ISO Images
 

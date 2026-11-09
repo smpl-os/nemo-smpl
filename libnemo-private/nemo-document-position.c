@@ -1,5 +1,5 @@
 /*
- * Persistent reading positions for document previews.
+ * Persistent reading and playback positions for previews.
  * Copyright (C) 2026 smplOS contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -174,6 +174,85 @@ position_prune (GKeyFile *keyfile)
 		g_key_file_remove_group (keyfile, groups[i], NULL);
 }
 
+static gboolean
+position_identity_matches (GKeyFile *keyfile, const char *group, GFile *file)
+{
+	g_autoptr (GError) error = NULL;
+	gint64 size, mtime;
+	gint64 stored_size = g_key_file_get_int64 (keyfile, group, POSITION_KEY_SIZE, &error);
+	gint64 stored_mtime = g_key_file_get_int64 (keyfile, group, POSITION_KEY_MTIME, NULL);
+
+	if (error == NULL && position_file_identity (file, &size, &mtime) &&
+	    (stored_size != size || stored_mtime != mtime)) {
+		g_key_file_remove_group (keyfile, group, NULL);
+		position_queue_save ();
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static void
+position_store_identity (GKeyFile *keyfile, const char *group, GFile *file)
+{
+	gint64 size, mtime;
+
+	g_key_file_set_int64 (keyfile, group, POSITION_KEY_STAMP, g_get_real_time () / G_USEC_PER_SEC);
+	if (position_file_identity (file, &size, &mtime)) {
+		g_key_file_set_int64 (keyfile, group, POSITION_KEY_SIZE, size);
+		g_key_file_set_int64 (keyfile, group, POSITION_KEY_MTIME, mtime);
+	} else {
+		g_key_file_remove_key (keyfile, group, POSITION_KEY_SIZE, NULL);
+		g_key_file_remove_key (keyfile, group, POSITION_KEY_MTIME, NULL);
+	}
+}
+
+gboolean
+nemo_media_position_lookup (GFile *file, gint64 *position)
+{
+	g_return_val_if_fail (G_IS_FILE (file), FALSE);
+	g_return_val_if_fail (position != NULL, FALSE);
+	*position = 0;
+	if (!nemo_document_position_is_enabled ())
+		return FALSE;
+
+	g_autofree char *uri_group = position_group (file);
+	g_autofree char *group = uri_group != NULL ? g_strconcat ("media:", uri_group, NULL) : NULL;
+	GKeyFile *keyfile = position_get_keyfile ();
+	g_autoptr (GError) error = NULL;
+
+	if (group == NULL || !g_key_file_has_group (keyfile, group) ||
+	    !position_identity_matches (keyfile, group, file))
+		return FALSE;
+	gint64 stored = g_key_file_get_int64 (keyfile, group, "nanoseconds", &error);
+	if (error != NULL || stored <= 0)
+		return FALSE;
+	*position = stored;
+	return TRUE;
+}
+
+void
+nemo_media_position_store (GFile *file, gint64 position)
+{
+	g_return_if_fail (G_IS_FILE (file));
+	if (!nemo_document_position_is_enabled () || position < 0)
+		return;
+
+	g_autofree char *uri_group = position_group (file);
+	g_autofree char *group = uri_group != NULL ? g_strconcat ("media:", uri_group, NULL) : NULL;
+	GKeyFile *keyfile = position_get_keyfile ();
+
+	if (group == NULL)
+		return;
+	if (position == 0)
+		g_key_file_remove_group (keyfile, group, NULL);
+	else {
+		g_key_file_set_int64 (keyfile, group, "nanoseconds", position);
+		position_store_identity (keyfile, group, file);
+		position_prune (keyfile);
+	}
+	position_queue_save ();
+}
+
 void
 nemo_document_position_forget (GFile *file)
 {
@@ -202,7 +281,7 @@ nemo_document_position_lookup (GFile *file, guint *page, gdouble *offset)
 	g_autofree char *group = position_group (file);
 	GKeyFile *keyfile = position_get_keyfile ();
 	g_autoptr (GError) error = NULL;
-	gint64 stored_page, stored_size, stored_mtime, size, mtime;
+	gint64 stored_page;
 	gdouble stored_offset;
 
 	if (group == NULL || !g_key_file_has_group (keyfile, group))
@@ -210,14 +289,7 @@ nemo_document_position_lookup (GFile *file, guint *page, gdouble *offset)
 	stored_page = g_key_file_get_int64 (keyfile, group, POSITION_KEY_PAGE, &error);
 	if (error != NULL || stored_page < 0 || stored_page >= POSITION_MAX_PAGES)
 		return FALSE;
-	g_autoptr (GError) identity_error = NULL;
-	stored_size = g_key_file_get_int64 (keyfile, group, POSITION_KEY_SIZE, &identity_error);
-	stored_mtime = g_key_file_get_int64 (keyfile, group, POSITION_KEY_MTIME, NULL);
-	if (identity_error == NULL && position_file_identity (file, &size, &mtime) &&
-	    (stored_size != size || stored_mtime != mtime)) {
-		/* The document changed on disk, so the old page is meaningless. */
-		g_key_file_remove_group (keyfile, group, NULL);
-		position_queue_save ();
+	if (!position_identity_matches (keyfile, group, file)) {
 		return FALSE;
 	}
 	stored_offset = g_key_file_get_double (keyfile, group, POSITION_KEY_OFFSET, NULL);
@@ -238,7 +310,6 @@ nemo_document_position_store (GFile *file, guint page, gdouble offset, guint pag
 
 	g_autofree char *group = position_group (file);
 	GKeyFile *keyfile = position_get_keyfile ();
-	gint64 size, mtime;
 
 	if (group == NULL)
 		return;
@@ -251,14 +322,7 @@ nemo_document_position_store (GFile *file, guint page, gdouble offset, guint pag
 	g_key_file_set_int64 (keyfile, group, POSITION_KEY_PAGE, page);
 	g_key_file_set_double (keyfile, group, POSITION_KEY_OFFSET, offset);
 	g_key_file_set_int64 (keyfile, group, POSITION_KEY_PAGES, page_count);
-	g_key_file_set_int64 (keyfile, group, POSITION_KEY_STAMP, g_get_real_time () / G_USEC_PER_SEC);
-	if (position_file_identity (file, &size, &mtime)) {
-		g_key_file_set_int64 (keyfile, group, POSITION_KEY_SIZE, size);
-		g_key_file_set_int64 (keyfile, group, POSITION_KEY_MTIME, mtime);
-	} else {
-		g_key_file_remove_key (keyfile, group, POSITION_KEY_SIZE, NULL);
-		g_key_file_remove_key (keyfile, group, POSITION_KEY_MTIME, NULL);
-	}
+	position_store_identity (keyfile, group, file);
 	position_prune (keyfile);
 	position_queue_save ();
 }

@@ -5,6 +5,7 @@
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
 #include <libnemo-private/nemo-file-operations.h>
+#include <libnemo-private/nemo-file-utilities.h>
 #include "../src/nemo-quick-preview.h"
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
@@ -15,6 +16,7 @@
 #endif
 
 static GThread *main_thread;
+static const char *test_program;
 static GMutex delay_lock;
 static GCond delay_cond;
 static gboolean release_io;
@@ -1009,6 +1011,205 @@ test_media_audio_only (void)
 	g_assert_cmpint (g_unlink (path), ==, 0);
 }
 
+static gint64
+media_position (NemoQuickPreview *preview)
+{
+	gint64 position = -1;
+	g_assert_true (gst_element_query_position (preview->pipeline, GST_FORMAT_TIME, &position));
+	return position;
+}
+
+static void
+media_seek_to (NemoQuickPreview *preview, gint64 position)
+{
+	preview->media_ready = FALSE;
+	g_assert_true (gst_element_seek_simple (preview->pipeline, GST_FORMAT_TIME,
+		GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, position));
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_cmpint (media_position (preview), ==, position);
+}
+
+static void
+test_media_resume (gconstpointer data)
+{
+	gboolean audio = GPOINTER_TO_INT (data);
+	if (g_test_subprocess ()) {
+		GFile *file = g_file_new_for_uri (g_getenv ("NEMO_TEST_SAVED_MEDIA_URI"));
+		NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+		nemo_quick_preview_show_file (preview, file, NULL);
+		WAIT_UNTIL (preview->media_ready);
+		g_assert_cmpint (media_position (preview), ==, 5 * GST_SECOND);
+		g_assert_false (preview->video_playing);
+		gtk_widget_destroy (GTK_WIDGET (preview));
+		g_object_unref (preview);
+		WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+		g_object_unref (file);
+		return;
+	}
+	g_autofree char *generated = audio ? preview_media_encode_fixture (
+		"audiotestsrc num-buffers=480 samplesperbuffer=1000 ! "
+		"audio/x-raw,rate=48000 ! audioconvert ! opusenc ! oggmux ! filesink name=output", "ogg")
+		: preview_media_encode_fixture (
+		"videotestsrc num-buffers=300 ! video/x-raw,width=128,height=72,framerate=30/1 ! "
+		"vp8enc deadline=1 keyframe-max-dist=1 ! webmmux ! filesink name=output", "webm");
+	g_autofree char *directory = g_dir_make_tmp ("nemo-media-resume-XXXXXX", NULL);
+	g_autofree char *path = g_build_filename (directory, audio ? "first.ogg" : "first.webm", NULL);
+	g_assert_cmpint (g_rename (generated, path), ==, 0);
+	GFile *file = g_file_new_for_path (path);
+	GFile *other = write_image (directory, "second.png", 0x00ff00ff);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_REMEMBER_DOCUMENT_POSITION, TRUE);
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready && preview->dir_files != NULL);
+	g_assert_cmpint (preview->media_is_audio, ==, audio);
+	media_seek_to (preview, 3 * GST_SECOND);
+	seek_position_update_cb (preview);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->time_label)), ==,
+		audio ? "00:00:03" : "00:00:03:00  Frame 90");
+
+	/* Navigation changes current_file before teardown; save the outgoing file. */
+	navigate_to_offset (preview, 1);
+	WAIT_UNTIL (preview->mode == PREVIEW_IMAGE);
+	gint64 saved;
+	g_assert_true (nemo_media_position_lookup (file, &saved));
+	g_assert_cmpint (saved, ==, 3 * GST_SECOND);
+	g_assert_false (nemo_media_position_lookup (other, &saved));
+	navigate_to_offset (preview, -1);
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_cmpint (media_position (preview), ==, 3 * GST_SECOND);
+	g_assert_false (preview->video_playing);
+	GstState state;
+	gst_element_get_state (preview->pipeline, &state, NULL, 0);
+	g_assert_cmpint (state, ==, GST_STATE_PAUSED);
+	media_seek_to (preview, 5 * GST_SECOND);
+	nemo_quick_preview_dismiss (preview);
+
+	g_autofree char *user_dir = nemo_get_user_directory ();
+	g_autofree char *positions_path = g_build_filename (user_dir, "document-positions", NULL);
+	g_autoptr (GKeyFile) positions = g_key_file_new ();
+	g_assert_true (g_key_file_load_from_file (positions, positions_path, G_KEY_FILE_NONE, NULL));
+	g_autofree char *uri = g_file_get_uri (file);
+	g_autofree char *escaped = g_uri_escape_string (uri, "/:@+$,-_.!~*'()", FALSE);
+	g_autofree char *group = g_strconcat ("media:", escaped, NULL);
+	g_assert_cmpint (g_key_file_get_int64 (positions, group, "nanoseconds", NULL), ==, 5 * GST_SECOND);
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+
+	g_autoptr (GSubprocessLauncher) launcher = g_subprocess_launcher_new (
+		G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE);
+	g_subprocess_launcher_setenv (launcher, "NEMO_TEST_SAVED_MEDIA_URI", uri, TRUE);
+	g_autoptr (GError) error = NULL;
+	g_autoptr (GSubprocess) reader = g_subprocess_launcher_spawn (
+		launcher, &error, test_program, "-p", g_test_get_path (), "--GTestSubprocess", NULL);
+	g_assert_no_error (error);
+	g_assert_nonnull (reader);
+	g_autofree char *reader_output = NULL;
+	g_autofree char *reader_error = NULL;
+	g_assert_true (g_subprocess_communicate_utf8 (reader, NULL, NULL,
+		&reader_output, &reader_error, &error));
+	g_assert_no_error (error);
+	if (!g_subprocess_get_successful (reader))
+		g_error ("Fresh Nemo preview process failed: %s\n%s", reader_output, reader_error);
+
+	preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_cmpint (media_position (preview), ==, 5 * GST_SECOND);
+	nemo_quick_preview_dismiss (preview);
+	g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_REMEMBER_DOCUMENT_POSITION, FALSE);
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_cmpint (media_position (preview), ==, 0);
+	nemo_quick_preview_dismiss (preview);
+	g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_REMEMBER_DOCUMENT_POSITION, TRUE);
+	g_assert_true (nemo_media_position_lookup (file, &saved));
+	g_assert_cmpint (saved, ==, 5 * GST_SECOND);
+	g_autoptr (GFileInfo) info = g_file_query_info (file, G_FILE_ATTRIBUTE_TIME_MODIFIED,
+		G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	g_assert_nonnull (info);
+	g_assert_true (g_file_set_attribute_uint64 (file, G_FILE_ATTRIBUTE_TIME_MODIFIED,
+		g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED) + 10,
+		G_FILE_QUERY_INFO_NONE, NULL, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready);
+	g_assert_cmpint (media_position (preview), ==, 0);
+	g_assert_false (nemo_media_position_lookup (file, &saved));
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (file);
+	remove_fixture (other);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
+test_media_fractional_frame_number (void)
+{
+	g_autofree char *path = preview_media_encode_fixture (
+		"videotestsrc num-buffers=90 ! video/x-raw,width=128,height=72,framerate=30000/1001 ! "
+		"vp8enc deadline=1 keyframe-max-dist=1 ! webmmux ! filesink name=output", "webm");
+	GFile *file = g_file_new_for_path (path);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready && preview->frame_surface != NULL);
+	media_seek_to (preview, 1001 * GST_MSECOND);
+	seek_position_update_cb (preview);
+	g_assert_cmpstr (gtk_label_get_text (GTK_LABEL (preview->time_label)), ==,
+		"00:00:01:00  Frame 30");
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (file);
+}
+
+static void
+test_media_fullscreen_controls (void)
+{
+	g_autofree char *path = preview_media_fixture (128, 72);
+	GFile *file = g_file_new_for_path (path);
+	NemoQuickPreview *preview = g_object_ref_sink (g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL));
+	nemo_quick_preview_show_file (preview, file, NULL);
+	WAIT_UNTIL (preview->media_ready && gtk_widget_get_mapped (preview->media_overlay));
+	g_assert_true (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	g_assert_true (gtk_widget_get_parent (preview->transport_revealer) == preview->media_box);
+	/* Xvfb has no window manager: deliver the actual GTK window-state signal. */
+	GdkEventWindowState state = { .type = GDK_WINDOW_STATE,
+		.changed_mask = GDK_WINDOW_STATE_FULLSCREEN, .new_window_state = GDK_WINDOW_STATE_FULLSCREEN };
+	gboolean handled;
+	g_signal_emit_by_name (preview, "window-state-event", &state, &handled);
+	iterate_for (30);
+	g_assert_false (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	g_assert_true (gtk_widget_get_parent (preview->transport_revealer) == preview->media_overlay);
+	g_assert_false (gtk_widget_get_visible (preview->filename_label));
+	gint x, y, origin_x, origin_y;
+	g_assert_true (gtk_widget_translate_coordinates (preview->media_overlay,
+		GTK_WIDGET (preview), 0, 0, &x, &y));
+	gdk_window_get_origin (gtk_widget_get_window (GTK_WIDGET (preview)), &origin_x, &origin_y);
+	GdkEventMotion motion = { .type = GDK_MOTION_NOTIFY,
+		.x_root = origin_x + x + gtk_widget_get_allocated_width (preview->media_overlay) / 2,
+		.y_root = origin_y + y + gtk_widget_get_allocated_height (preview->media_overlay) - 2 };
+	g_signal_emit_by_name (preview->video_area, "motion-notify-event", &motion, &handled);
+	g_assert_true (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	iterate_for (30);
+	motion.y_root -= 32;
+	g_signal_emit_by_name (preview, "motion-notify-event", &motion, &handled);
+	g_assert_true (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	motion.y_root = origin_y + y + 5;
+	g_signal_emit_by_name (preview->video_area, "motion-notify-event", &motion, &handled);
+	g_assert_false (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	media_seek_to (preview, 1800 * GST_SECOND);
+	state.new_window_state = 0;
+	g_signal_emit_by_name (preview, "window-state-event", &state, &handled);
+	g_assert_true (gtk_revealer_get_reveal_child (GTK_REVEALER (preview->transport_revealer)));
+	g_assert_true (gtk_widget_get_parent (preview->transport_revealer) == preview->media_box);
+	g_assert_true (gtk_widget_get_visible (preview->filename_label));
+	gtk_widget_destroy (GTK_WIDGET (preview));
+	g_object_unref (preview);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (file);
+}
+
 static void
 test_media_frame_metadata (void)
 {
@@ -1313,6 +1514,7 @@ main (int argc, char **argv)
 	g_setenv ("GIO_USE_VFS", "local", TRUE);
 	g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
 	g_setenv ("NO_AT_BRIDGE", "1", TRUE);
+	test_program = argv[0];
 	gtk_test_init (&argc, &argv, NULL);
 	g_assert_cmpstr (gdk_display_get_name (gdk_display_get_default ()), ==, g_getenv ("DISPLAY"));
 	g_test_message ("GTK display: %s", gdk_display_get_name (gdk_display_get_default ()));
@@ -1348,6 +1550,10 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/media/missing-video-decoder", test_media_missing_video);
 	g_test_add_func ("/preview/media/loading-timeout", test_media_loading_timeout);
 	g_test_add_func ("/preview/media/audio-only", test_media_audio_only);
+	g_test_add_data_func ("/preview/media/resume-video", GINT_TO_POINTER (FALSE), test_media_resume);
+	g_test_add_data_func ("/preview/media/resume-audio", GINT_TO_POINTER (TRUE), test_media_resume);
+	g_test_add_func ("/preview/media/fullscreen-hover-controls", test_media_fullscreen_controls);
+	g_test_add_func ("/preview/media/fractional-frame-number", test_media_fractional_frame_number);
 	g_test_add_func ("/preview/media/frame-metadata", test_media_frame_metadata);
 	g_test_add_func ("/preview/media/scaled-aspect-ratio", test_media_aspect_ratio);
 	g_test_add_func ("/preview/media/optional-decoders", test_media_optional_decoders);
