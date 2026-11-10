@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <errno.h>
 
 /* Yield to the main thread every N directory entries so the scanner
  * doesn't saturate the I/O queue and starve the UI.               */
@@ -174,7 +175,7 @@ scan_recursive (const char   *path,
                 GArray       *top,
                 gboolean      include_self,
                 gint64        deadline_us,
-                gboolean     *timed_out)
+                NemoDirScanStats *stats)
 {
 	DIR *dp;
 	struct dirent *entry;
@@ -182,15 +183,18 @@ scan_recursive (const char   *path,
 	guint64 total = 0;
 
 	if (deadline_us > 0 && g_get_monotonic_time () >= deadline_us) {
-		if (timed_out) *timed_out = TRUE;
+		stats->timed_out = TRUE;
+		stats->incomplete = TRUE;
 		return 0;
 	}
 
 	if (g_cancellable_is_cancelled (cancel))
 		return 0;
 
-	if (lstat (path, &pst) != 0)
+	if (lstat (path, &pst) != 0) {
+		stats->incomplete = TRUE;
 		return 0;
+	}
 
 	if (S_ISREG (pst.st_mode)) {
 		total = (guint64) pst.st_size;
@@ -202,17 +206,28 @@ scan_recursive (const char   *path,
 		return 0;
 
 	dp = opendir (path);
-	if (dp == NULL)
+	if (dp == NULL) {
+		stats->incomplete = TRUE;
 		return 0;
+	}
 
 	guint yield_counter = 0;
 
-	while ((entry = readdir (dp)) != NULL) {
+	for (;;) {
 		struct stat st;
 		char *child;
 
+		errno = 0;
+		entry = readdir (dp);
+		if (entry == NULL) {
+			if (errno != 0)
+				stats->incomplete = TRUE;
+			break;
+		}
+
 		if (deadline_us > 0 && g_get_monotonic_time () >= deadline_us) {
-			if (timed_out) *timed_out = TRUE;
+			stats->timed_out = TRUE;
+			stats->incomplete = TRUE;
 			break;
 		}
 
@@ -237,11 +252,15 @@ scan_recursive (const char   *path,
 			} else if (S_ISDIR (st.st_mode) && st.st_dev == dev) {
 				total += scan_recursive (child, root_path, dev,
 				                         cancel, top, TRUE,
-				                         deadline_us, timed_out);
+				                         deadline_us, stats);
 			}
+		} else {
+			stats->incomplete = TRUE;
 		}
 
 		g_free (child);
+		if (stats->timed_out || g_cancellable_is_cancelled (cancel))
+			break;
 	}
 
 	closedir (dp);
@@ -259,19 +278,21 @@ GArray *
 nemo_dir_scan_collect_top (const char   *root_path,
                             GCancellable *cancel,
                             int           time_budget_ms,
-                            guint64      *total_size_out)
+                            NemoDirScanStats *stats_out)
 {
 	struct stat st;
 	GArray *top;
 	guint64 total;
 	gint64  deadline_us;
-	gboolean timed_out = FALSE;
+	NemoDirScanStats stats = { 0 };
 
-	if (root_path == NULL)
+	if (stats_out != NULL)
+		*stats_out = stats;
+	if (root_path == NULL || stat (root_path, &st) != 0) {
+		if (stats_out != NULL)
+			stats_out->incomplete = TRUE;
 		return NULL;
-
-	if (stat (root_path, &st) != 0)
-		return NULL;
+	}
 
 	top = nemo_dir_entry_array_new ();
 	deadline_us = (time_budget_ms > 0)
@@ -280,10 +301,13 @@ nemo_dir_scan_collect_top (const char   *root_path,
 
 	total = scan_recursive (root_path, root_path, st.st_dev,
 	                        cancel, top, FALSE,
-	                        deadline_us, &timed_out);
+	                        deadline_us, &stats);
 
-	if (total_size_out != NULL)
-		*total_size_out = total;
+	stats.total_size = total;
+	if (g_cancellable_is_cancelled (cancel))
+		stats.incomplete = TRUE;
+	if (stats_out != NULL)
+		*stats_out = stats;
 
 	return top;
 }
@@ -614,7 +638,7 @@ struct _NemoDirAnalyzer {
 	GtkWidget     *content_box;    /* hbox: chart + list          */
 
 	GArray        *entries;        /* NemoDirEntry                */
-	guint64        total_size;
+	NemoDirScanStats stats;
 	char          *display_name;
 	int            colour_idx;
 
@@ -641,14 +665,27 @@ rebuild_content (NemoDirAnalyzer *self)
 
 	if (self->entries == NULL || self->entries->len == 0) {
 		gtk_label_set_text (GTK_LABEL (self->status_label),
-		                    _("No files found."));
+		                    self->stats.incomplete
+		                    ? _("Incomplete scan — contents could not be fully read.")
+		                    : _("No files found."));
 		gtk_widget_show (self->status_label);
 		return;
 	}
 
 	/* Status line: total size */
-	if (self->total_size > 0) {
-		char *sz = g_format_size (self->total_size);
+	if (self->stats.incomplete) {
+		char *sz = g_format_size (self->stats.total_size);
+		total_text = g_strdup_printf (
+			self->stats.timed_out
+			? _("Partial total: %s — scan time limit reached; ranking is incomplete.")
+			: _("Partial total: %s — some contents could not be read; ranking is incomplete."),
+			sz);
+		gtk_label_set_text (GTK_LABEL (self->status_label), total_text);
+		g_free (total_text);
+		g_free (sz);
+		gtk_widget_show (self->status_label);
+	} else if (self->stats.total_size > 0) {
+		char *sz = g_format_size (self->stats.total_size);
 		if (self->display_name != NULL)
 			total_text = g_strdup_printf (
 				_("Total: %s — Top %u entries"),
@@ -695,7 +732,7 @@ typedef struct {
 	NemoDirAnalyzer *self;
 	GCancellable    *cancel;
 	GArray          *entries;
-	guint64          total_size;
+	NemoDirScanStats stats;
 } ScanIdleData;
 
 static gboolean
@@ -706,23 +743,15 @@ scan_idle_cb (gpointer data)
 	if (g_cancellable_is_cancelled (sid->cancel))
 		goto out;
 
-	if (sid->entries != NULL && sid->entries->len > 0) {
-		g_clear_pointer (&sid->self->entries, g_array_unref);
-		sid->self->entries    = g_array_ref (sid->entries);
-		sid->self->total_size = sid->total_size;
-		sid->self->scanning   = FALSE;
-
-		rebuild_content (sid->self);
-	} else {
-		gtk_label_set_text (
-			GTK_LABEL (sid->self->status_label),
-			_("No files found."));
-		gtk_widget_show (sid->self->status_label);
-		sid->self->scanning = FALSE;
-	}
+	g_clear_pointer (&sid->self->entries, g_array_unref);
+	if (sid->entries != NULL)
+		sid->self->entries = g_array_ref (sid->entries);
+	sid->self->stats = sid->stats;
+	sid->self->scanning = FALSE;
+	rebuild_content (sid->self);
 
 	g_signal_emit (sid->self, signals[SIGNAL_SCAN_FINISHED], 0,
-	               sid->total_size);
+	               sid->stats.total_size);
 
 out:
 	g_clear_object (&sid->cancel);
@@ -747,17 +776,17 @@ scan_thread_func (gpointer data)
 {
 	ScanThreadData *td = data;
 	GArray     *entries;
-	guint64     total = 0;
+	NemoDirScanStats stats;
 	ScanIdleData *sid;
 
 	entries = nemo_dir_scan_collect_top (td->path, td->cancel,
-	                                     td->time_budget_ms, &total);
+	                                     td->time_budget_ms, &stats);
 
 	sid = g_new0 (ScanIdleData, 1);
 	sid->self       = g_object_ref (td->self);
 	sid->cancel     = g_object_ref (td->cancel);
 	sid->entries    = entries;   /* takes ownership */
-	sid->total_size = total;
+	sid->stats      = stats;
 
 	g_idle_add (scan_idle_cb, sid);
 
@@ -801,7 +830,6 @@ nemo_dir_analyzer_init (NemoDirAnalyzer *self)
 {
 	self->colour_idx = 0;
 	self->scanning   = FALSE;
-	self->total_size = 0;
 
 	gtk_orientable_set_orientation (GTK_ORIENTABLE (self),
 	                                GTK_ORIENTATION_VERTICAL);
@@ -847,9 +875,11 @@ void
 nemo_dir_analyzer_set_entries (NemoDirAnalyzer *self,
                                 GArray          *entries,
                                 const char      *display_name,
-                                int              colour_idx)
+                                int              colour_idx,
+                                const NemoDirScanStats *stats)
 {
 	g_return_if_fail (NEMO_IS_DIR_ANALYZER (self));
+	g_return_if_fail (stats != NULL);
 
 	g_free (self->display_name);
 	self->display_name = g_strdup (display_name);
@@ -859,16 +889,7 @@ nemo_dir_analyzer_set_entries (NemoDirAnalyzer *self,
 	if (entries != NULL)
 		self->entries = nemo_dir_entry_array_dup (entries);
 
-	/* Compute total from entries if not already set */
-	if (self->entries != NULL && self->entries->len > 0) {
-		guint64 sum = 0;
-		guint i;
-		for (i = 0; i < self->entries->len; i++)
-			sum += g_array_index (self->entries,
-			                     NemoDirEntry, i).size;
-		if (sum > self->total_size)
-			self->total_size = sum;
-	}
+	self->stats = *stats;
 
 	rebuild_content (self);
 }
@@ -925,7 +946,7 @@ nemo_dir_analyzer_clear (NemoDirAnalyzer *self)
 
 	nemo_dir_analyzer_cancel (self);
 	g_clear_pointer (&self->entries, g_array_unref);
-	self->total_size = 0;
+	self->stats = (NemoDirScanStats) { 0 };
 
 	if (self->content_box != NULL) {
 		gtk_widget_destroy (self->content_box);
@@ -941,4 +962,11 @@ nemo_dir_analyzer_get_entries (NemoDirAnalyzer *self)
 {
 	g_return_val_if_fail (NEMO_IS_DIR_ANALYZER (self), NULL);
 	return self->entries;
+}
+
+const NemoDirScanStats *
+nemo_dir_analyzer_get_stats (NemoDirAnalyzer *self)
+{
+	g_return_val_if_fail (NEMO_IS_DIR_ANALYZER (self), NULL);
+	return &self->stats;
 }

@@ -120,14 +120,25 @@ struct DirectoryCountState {
 	int file_count;
 };
 
+typedef struct {
+	guint directories;
+	guint files;
+	guint unreadable;
+	guint hidden;
+	goffset size;
+} DeepCountTotals;
+
 struct DeepCountState {
+	/* Only the main thread accesses the directory, file and progress source. */
 	NemoDirectory *directory;
+	NemoFile *file;
+	guint progress_source;
 	GCancellable *cancellable;
-	GFileEnumerator *enumerator;
-	GFile *deep_count_location;
-	GList *deep_count_subdirectories;
-	GHashTable *seen_deep_count_inodes;
-	char *fs_id;
+	GFile *location;
+	gboolean show_hidden;
+	GMutex lock;
+	DeepCountTotals totals;
+	char *first_error;
 };
 
 struct FavoriteCheckState {
@@ -174,8 +185,6 @@ static GHashTable *async_jobs;
 #endif
 
 /* Forward declarations for functions that need them. */
-static void     deep_count_load                               (DeepCountState         *state,
-							       GFile                  *location);
 static gboolean request_is_satisfied                          (NemoDirectory      *directory,
 							       NemoFile           *file,
 							       Request                 request);
@@ -478,21 +487,29 @@ directory_count_cancel (NemoDirectory *directory)
 }
 
 static void
+deep_count_cancel_one (DeepCountState *state)
+{
+	NemoDirectory *directory = state->directory;
+	g_cancellable_cancel (state->cancellable);
+	if (state->file != NULL)
+		state->file->details->deep_counts_status = NEMO_REQUEST_NOT_STARTED;
+	if (state->progress_source != 0) {
+		g_source_remove (state->progress_source);
+		state->progress_source = 0;
+	}
+	directory->details->deep_counts_in_progress =
+		g_list_remove (directory->details->deep_counts_in_progress, state);
+	state->directory = NULL;
+	state->file = NULL;
+	if (directory->details->deep_counts_in_progress == NULL)
+		async_job_end (directory, "deep count");
+}
+
+static void
 deep_count_cancel (NemoDirectory *directory)
 {
-	if (directory->details->deep_count_in_progress != NULL) {
-		g_assert (NEMO_IS_FILE (directory->details->deep_count_file));
-		
-		g_cancellable_cancel (directory->details->deep_count_in_progress->cancellable);
-
-		directory->details->deep_count_file->details->deep_counts_status = NEMO_REQUEST_NOT_STARTED;
-
-		directory->details->deep_count_in_progress->directory = NULL;
-		directory->details->deep_count_in_progress = NULL;
-		directory->details->deep_count_file = NULL;
-
-		async_job_end (directory, "deep count");
-	}
+	while (directory->details->deep_counts_in_progress != NULL)
+		deep_count_cancel_one (directory->details->deep_counts_in_progress->data);
 }
 
 static void
@@ -1574,9 +1591,12 @@ nemo_async_destroying_file (NemoFile *file)
 		directory->details->count_in_progress->count_file = NULL;
 		changed = TRUE;
 	}
-	if (directory->details->deep_count_file == file) {
-		directory->details->deep_count_file = NULL;
-		changed = TRUE;
+	for (GList *l = directory->details->deep_counts_in_progress; l != NULL; l = l->next) {
+		DeepCountState *state = l->data;
+		if (state->file == file) {
+			state->file = NULL;
+			changed = TRUE;
+		}
 	}
 	if (directory->details->mime_list_in_progress != NULL &&
 	    directory->details->mime_list_in_progress->mime_list_file == file) {
@@ -2531,7 +2551,7 @@ directory_count_start (NemoDirectory *directory,
 }
 
 static inline gboolean
-seen_inode (DeepCountState *state,
+seen_inode (GHashTable *inodes,
 	    GFileInfo *info)
 {
 	guint64 inode;
@@ -2544,272 +2564,239 @@ seen_inode (DeepCountState *state,
 		return FALSE;
 	/* Inodes are unique only within their filesystem, including mount entries. */
 	key = g_strdup_printf ("%s:%" G_GUINT64_FORMAT, filesystem, inode);
-	return !g_hash_table_add (state->seen_deep_count_inodes, key);
+	return !g_hash_table_add (inodes, key);
 }
 
 static void
-deep_count_one (DeepCountState *state,
-		GFileInfo *info)
+deep_count_state_free (gpointer data)
 {
-	NemoFile *file;
-	GFile *subdir;
-	gboolean is_seen_inode;
-	const char *id;
-    gboolean hidden;
-	is_seen_inode = seen_inode (state, info);
-
-	file = state->directory->details->deep_count_file;
-
-    hidden = should_skip_file (NULL, info);
-
-	if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY) {
-		/* Count the directory. */
-        if (hidden) {
-            file->details->deep_hidden_count += 1;
-        } else {
-            file->details->deep_directory_count += 1;
-        }
-		/* Record the fact that we have to descend into this directory. */
-		id = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
-		if (g_strcmp0 (id, state->fs_id) == 0) {
-			/* only if it is on the same filesystem */
-			subdir = g_file_get_child (state->deep_count_location, g_file_info_get_name (info));
-			state->deep_count_subdirectories = g_list_prepend
-				(state->deep_count_subdirectories, subdir);
-		}
-	} else {
-		/* Even non-regular files count as files. */
-        if (hidden) {
-            file->details->deep_hidden_count += 1;
-        } else {
-            file->details->deep_file_count += 1;
-        }
-	}
-
-	/* Count the size, hidden or not */
-	if (!is_seen_inode && g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE)) {
-		file->details->deep_size += g_file_info_get_size (info);
-	}
-}
-
-static void
-deep_count_state_free (DeepCountState *state)
-{
-	if (state->enumerator) {
-		if (!g_file_enumerator_is_closed (state->enumerator)) {
-			g_file_enumerator_close_async (state->enumerator,
-						       0, NULL, NULL, NULL);
-		}
-		g_object_unref (state->enumerator);
-	}
+	DeepCountState *state = data;
+	g_object_unref (state->location);
 	g_object_unref (state->cancellable);
-	if (state->deep_count_location) {
-		g_object_unref (state->deep_count_location);
-	}
-	g_list_free_full (state->deep_count_subdirectories, g_object_unref);
-	g_hash_table_destroy (state->seen_deep_count_inodes);
-	g_free (state->fs_id);
+	g_free (state->first_error);
+	g_mutex_clear (&state->lock);
 	g_free (state);
 }
 
 static void
-deep_count_next_dir (DeepCountState *state)
+deep_count_publish (DeepCountState *state, const DeepCountTotals *totals)
 {
-	GFile *location;
-	NemoFile *file;
-	NemoDirectory *directory;
-	gboolean done;
+	g_mutex_lock (&state->lock);
+	state->totals = *totals;
+	g_mutex_unlock (&state->lock);
+}
 
-	directory = state->directory;
-	
-	g_object_unref (state->deep_count_location);
-	state->deep_count_location = NULL;
+static void
+deep_count_apply (DeepCountState *state)
+{
+	DeepCountTotals totals;
+	NemoFile *file = state->file;
 
-	done = FALSE;
-	file = directory->details->deep_count_file;
-	
-	if (state->deep_count_subdirectories != NULL) {
-		/* Work on a new directory. */
-		location = state->deep_count_subdirectories->data;
-		state->deep_count_subdirectories = g_list_remove
-			(state->deep_count_subdirectories, location);
-		deep_count_load (state, location);
+	g_mutex_lock (&state->lock);
+	totals = state->totals;
+	g_mutex_unlock (&state->lock);
+
+	if (file != NULL) {
+		file->details->deep_directory_count = totals.directories;
+		file->details->deep_file_count = totals.files;
+		file->details->deep_hidden_count = totals.hidden;
+		file->details->deep_unreadable_count = totals.unreadable;
+		file->details->deep_size = totals.size;
+	}
+}
+
+static gboolean
+deep_count_progress (gpointer data)
+{
+	DeepCountState *state = data;
+	deep_count_apply (state);
+	if (state->file != NULL)
+		nemo_file_updated_deep_count_in_progress (state->file);
+	return G_SOURCE_CONTINUE;
+}
+
+static void
+deep_count_error (DeepCountState *state, DeepCountTotals *totals,
+                  GFile *location, const GError *error)
+{
+	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+		return;
+	totals->unreadable++;
+	if (state->first_error == NULL) {
+		char *name = g_file_get_parse_name (location);
+		state->first_error = g_strdup_printf ("%s: %s", name, error->message);
+		g_free (name);
+	}
+}
+
+static void
+deep_count_worker (gpointer data, gpointer user_data)
+{
+	GTask *task = data;
+	DeepCountState *state = g_task_get_task_data (task);
+	DeepCountTotals totals = { 0 };
+	GQueue pending = G_QUEUE_INIT;
+	GHashTable *inodes = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	GError *error = NULL;
+	GFileInfo *root_info;
+	char *fs_id = NULL;
+	guint batch = 0;
+	gint64 last_publish = g_get_monotonic_time ();
+
+	nemo_thread_set_background_priority ();
+	if (g_cancellable_is_cancelled (state->cancellable))
+		goto out;
+	root_info = g_file_query_info (state->location, G_FILE_ATTRIBUTE_ID_FILESYSTEM,
+	                              G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+	                              state->cancellable, &error);
+	if (root_info == NULL) {
+		deep_count_error (state, &totals, state->location, error);
+		g_clear_error (&error);
+		goto out;
+	}
+	fs_id = g_strdup (g_file_info_get_attribute_string (root_info, G_FILE_ATTRIBUTE_ID_FILESYSTEM));
+	g_object_unref (root_info);
+	g_queue_push_head (&pending, g_object_ref (state->location));
+
+	while (!g_queue_is_empty (&pending) &&
+	       !g_cancellable_is_cancelled (state->cancellable)) {
+		GFile *location = g_queue_pop_head (&pending);
+		GFileEnumerator *enumerator = g_file_enumerate_children (
+			location,
+			G_FILE_ATTRIBUTE_STANDARD_NAME ","
+			G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+			G_FILE_ATTRIBUTE_STANDARD_SIZE ","
+			G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN ","
+			G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP ","
+			G_FILE_ATTRIBUTE_ID_FILESYSTEM ","
+			G_FILE_ATTRIBUTE_UNIX_INODE,
+			G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, state->cancellable, &error);
+
+		if (enumerator != NULL) {
+			gboolean read_failed = FALSE;
+			while (!g_cancellable_is_cancelled (state->cancellable)) {
+				GFileInfo *info = g_file_enumerator_next_file (
+					enumerator, state->cancellable, &error);
+				gboolean hidden, is_directory;
+				if (info == NULL)
+					break;
+				hidden = !state->show_hidden &&
+					(g_file_info_get_is_hidden (info) ||
+					 g_file_info_get_is_backup (info));
+				is_directory = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
+				if (hidden)
+					totals.hidden++;
+				else if (is_directory)
+					totals.directories++;
+				else
+					totals.files++;
+
+				if (is_directory &&
+				    g_strcmp0 (fs_id, g_file_info_get_attribute_string (
+					info, G_FILE_ATTRIBUTE_ID_FILESYSTEM)) == 0)
+					g_queue_push_head (&pending, g_file_get_child (
+						location, g_file_info_get_name (info)));
+
+				if (!seen_inode (inodes, info) &&
+				    g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
+					totals.size += g_file_info_get_size (info);
+				g_object_unref (info);
+				if (++batch == DIRECTORY_LOAD_ITEMS_PER_CALLBACK) {
+					deep_count_publish (state, &totals);
+					batch = 0;
+				}
+			}
+			if (error != NULL) {
+				deep_count_error (state, &totals, location, error);
+				read_failed = TRUE;
+				g_clear_error (&error);
+			}
+			if (!g_file_enumerator_close (enumerator, NULL, &error)) {
+				if (!read_failed)
+					deep_count_error (state, &totals, location, error);
+				g_clear_error (&error);
+			}
+			g_object_unref (enumerator);
+		} else {
+			deep_count_error (state, &totals, location, error);
+			g_clear_error (&error);
+		}
 		g_object_unref (location);
-	} else {
-		file->details->deep_counts_status = NEMO_REQUEST_DONE;
-		directory->details->deep_count_file = NULL;
-		directory->details->deep_count_in_progress = NULL;
-		deep_count_state_free (state);
-		done = TRUE;
+		if (g_get_monotonic_time () - last_publish >= 100 * G_TIME_SPAN_MILLISECOND) {
+			deep_count_publish (state, &totals);
+			last_publish = g_get_monotonic_time ();
+		}
 	}
-	
-	nemo_file_updated_deep_count_in_progress (file);
 
-	if (done) {
-		nemo_file_changed (file);
-		async_job_end (directory, "deep count");
-		nemo_directory_async_state_changed (directory);
-	}
+out:
+	deep_count_publish (state, &totals);
+	g_list_free_full (pending.head, g_object_unref);
+	g_hash_table_unref (inodes);
+	g_free (fs_id);
+	g_task_return_boolean (task, TRUE);
+	g_object_unref (task);
 }
 
 static void
-deep_count_more_files_callback (GObject *source_object,
-				GAsyncResult *res,
-				gpointer user_data)
+deep_count_done (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-	DeepCountState *state;
+	GTask *task = G_TASK (result);
+	DeepCountState *state = g_task_get_task_data (task);
 	NemoDirectory *directory;
-	GList *files, *l;
-	GFileInfo *info;
-
-	state = user_data;
-
-	if (state->directory == NULL) {
-		/* Operation was cancelled. Bail out */
-		deep_count_state_free (state);
-		return;
-	}
-
-	directory = nemo_directory_ref (state->directory);
-	
-	g_assert (directory->details->deep_count_in_progress != NULL);
-	g_assert (directory->details->deep_count_in_progress == state);
-
-	files = g_file_enumerator_next_files_finish (state->enumerator,
-						     res, NULL);
-
-	for (l = files; l != NULL; l = l->next)	{
-		info = l->data;
-		deep_count_one (state, info);
-		g_object_unref (info);
-	}
-	
-	if (files == NULL) {
-		g_file_enumerator_close_async (state->enumerator, 0, NULL, NULL, NULL);
-		g_object_unref (state->enumerator);
-		state->enumerator = NULL;
-		
-		deep_count_next_dir (state);
-	} else {
-		g_file_enumerator_next_files_async (state->enumerator,
-						    DIRECTORY_LOAD_ITEMS_PER_CALLBACK,
-						    G_PRIORITY_LOW,
-						    state->cancellable,
-						    deep_count_more_files_callback,
-						    state);
-	}
-
-	g_list_free (files);
-
-	nemo_directory_unref (directory);
-}
-
-static void
-deep_count_callback (GObject *source_object,
-		     GAsyncResult *res,
-		     gpointer user_data)
-{
-	DeepCountState *state;
-	GFileEnumerator *enumerator;
 	NemoFile *file;
-
-	state = user_data;
+	GError *error = NULL;
+	gboolean success = g_task_propagate_boolean (task, &error);
 
 	if (state->directory == NULL) {
-		/* Operation was cancelled. Bail out */
-		deep_count_state_free (state);
+		g_clear_error (&error);
 		return;
 	}
-
-	file = state->directory->details->deep_count_file;
-
-	enumerator = g_file_enumerate_children_finish  (G_FILE (source_object),	res, NULL);
-	
-	if (enumerator == NULL) {
-		file->details->deep_unreadable_count += 1;
-		
-		deep_count_next_dir (state);
-	} else {
-		state->enumerator = enumerator;
-		g_file_enumerator_next_files_async (state->enumerator,
-						    DIRECTORY_LOAD_ITEMS_PER_CALLBACK,
-						    G_PRIORITY_LOW,
-						    state->cancellable,
-						    deep_count_more_files_callback,
-						    state);
+	if (state->file == NULL) {
+		g_clear_error (&error);
+		deep_count_cancel_one (state);
+		return;
 	}
-}
+	directory = nemo_directory_ref (state->directory);
+	file = nemo_file_ref (state->file);
+	if (state->progress_source != 0) {
+		g_source_remove (state->progress_source);
+		state->progress_source = 0;
+	}
+	deep_count_apply (state);
+	if (!success && !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+		file->details->deep_unreadable_count++;
+		g_free (state->first_error);
+		state->first_error = g_strdup (error->message);
+	}
+	g_clear_error (&error);
+	g_free (file->details->deep_count_error);
+	file->details->deep_count_error = g_steal_pointer (&state->first_error);
+	file->details->deep_counts_status = NEMO_REQUEST_DONE;
+	directory->details->deep_counts_in_progress =
+		g_list_remove (directory->details->deep_counts_in_progress, state);
+	state->directory = NULL;
+	state->file = NULL;
+	if (directory->details->deep_counts_in_progress == NULL)
+		async_job_end (directory, "deep count");
 
-
-static void
-deep_count_load (DeepCountState *state, GFile *location)
-{
-	state->deep_count_location = g_object_ref (location);
-
-#ifdef DEBUG_LOAD_DIRECTORY		
-	g_message ("load_directory called to get deep file count for %p", location);
-#endif	
-	g_file_enumerate_children_async (state->deep_count_location,
-					 G_FILE_ATTRIBUTE_STANDARD_NAME ","
-					 G_FILE_ATTRIBUTE_STANDARD_TYPE ","
-					 G_FILE_ATTRIBUTE_STANDARD_SIZE ","
-					 G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN ","
-					 G_FILE_ATTRIBUTE_STANDARD_IS_BACKUP ","
-					 G_FILE_ATTRIBUTE_ID_FILESYSTEM ","
-					 G_FILE_ATTRIBUTE_UNIX_INODE,
-					 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, /* flags */
-					 G_PRIORITY_LOW, /* prio */
-					 state->cancellable,
-					 deep_count_callback,
-					 state);
+	nemo_file_updated_deep_count_in_progress (file);
+	nemo_file_changed (file);
+	nemo_directory_async_state_changed (directory);
+	nemo_file_unref (file);
+	nemo_directory_unref (directory);
 }
 
 static void
 deep_count_stop (NemoDirectory *directory)
 {
-	NemoFile *file;
-
-	if (directory->details->deep_count_in_progress != NULL) {
-		file = directory->details->deep_count_file;
-		if (file != NULL) {
-			g_assert (NEMO_IS_FILE (file));
-			g_assert (file->details->directory == directory);
-			if (is_needy (file,
-				      lacks_deep_count,
-				      REQUEST_DEEP_COUNT)) {
-				return;
-			}
-		}
-
-		/* The count is not wanted, so stop it. */
-		deep_count_cancel (directory);
+	GList *l = directory->details->deep_counts_in_progress;
+	while (l != NULL) {
+		DeepCountState *state = l->data;
+		l = l->next;
+		if (state->file == NULL ||
+		    !is_needy (state->file, lacks_deep_count, REQUEST_DEEP_COUNT))
+			deep_count_cancel_one (state);
 	}
-}
-
-static void
-deep_count_got_info (GObject *source_object,
-		     GAsyncResult *res,
-		     gpointer user_data)
-{
-	GFileInfo *info;
-	const char *id;
-	GFile *file = (GFile *)source_object;
-	DeepCountState *state = (DeepCountState *)user_data;
-
-	info = g_file_query_info_finish (file,
-					 res,
-					 NULL);
-	if (state->directory == NULL) {
-		g_clear_object (&info);
-		deep_count_state_free (state);
-		return;
-	}
-	if (info) {
-		id = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_ID_FILESYSTEM);
-		state->fs_id = g_strdup (id);
-		g_object_unref (info);
-	}
-	deep_count_load (state, file);
 }
 
 static void
@@ -2817,20 +2804,19 @@ deep_count_start (NemoDirectory *directory,
 		  NemoFile *file,
 		  gboolean *doing_io)
 {
-	GFile *location;
+	static GThreadPool *pool;
 	DeepCountState *state;
-	
-	if (directory->details->deep_count_in_progress != NULL) {
-		*doing_io = TRUE;
-		return;
-	}
+	GTask *task;
+	GError *error = NULL;
 
 	if (!is_needy (file,
 		       lacks_deep_count,
 		       REQUEST_DEEP_COUNT)) {
 		return;
 	}
-	*doing_io = TRUE;
+	for (GList *l = directory->details->deep_counts_in_progress; l != NULL; l = l->next)
+		if (((DeepCountState *) l->data)->file == file)
+			return;
 
 	if (!nemo_file_is_directory (file)) {
 		file->details->deep_counts_status = NEMO_REQUEST_DONE;
@@ -2839,7 +2825,10 @@ deep_count_start (NemoDirectory *directory,
 		return;
 	}
 
-	if (!async_job_start (directory, "deep count")) {
+	/* One scheduler slot per parent; the pool bounds actual scan concurrency. */
+	if (directory->details->deep_counts_in_progress == NULL &&
+	    !async_job_start (directory, "deep count")) {
+		*doing_io = TRUE;
 		return;
 	}
 
@@ -2848,27 +2837,42 @@ deep_count_start (NemoDirectory *directory,
 	file->details->deep_directory_count = 0;
 	file->details->deep_file_count = 0;
 	file->details->deep_unreadable_count = 0;
-    file->details->deep_hidden_count = 0;
+	file->details->deep_hidden_count = 0;
 	file->details->deep_size = 0;
-	directory->details->deep_count_file = file;
+	g_clear_pointer (&file->details->deep_count_error, g_free);
 
 	state = g_new0 (DeepCountState, 1);
 	state->directory = directory;
+	state->file = file;
 	state->cancellable = g_cancellable_new ();
-	state->seen_deep_count_inodes = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+	state->location = nemo_file_get_location (file);
+	state->show_hidden = g_settings_get_boolean (nemo_preferences,
+	                                            NEMO_PREFERENCES_SHOW_HIDDEN_FILES);
+	g_mutex_init (&state->lock);
+	directory->details->deep_counts_in_progress =
+		g_list_prepend (directory->details->deep_counts_in_progress, state);
+	state->progress_source = g_timeout_add_full (G_PRIORITY_LOW, 100,
+	                                           deep_count_progress, state, NULL);
+	task = g_task_new (NULL, state->cancellable, deep_count_done, NULL);
+	g_task_set_task_data (task, state, deep_count_state_free);
 
-	directory->details->deep_count_in_progress = state;
-	
-	location = nemo_file_get_location (file);
-	state->fs_id = NULL;
-	g_file_query_info_async (location,
-				 G_FILE_ATTRIBUTE_ID_FILESYSTEM,
-				 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-				 G_PRIORITY_DEFAULT,
-				 state->cancellable,
-				 deep_count_got_info,
-				 state);
-	g_object_unref (location);
+	/* Dedicated threads keep idle I/O/nice settings out of GLib's shared pool. */
+	if (pool == NULL) {
+		pool = g_thread_pool_new (deep_count_worker, NULL, 4, TRUE, &error);
+		if (error != NULL) {
+			if (pool != NULL)
+				g_thread_pool_free (pool, TRUE, FALSE);
+			pool = NULL;
+			g_task_return_error (task, error);
+			g_object_unref (task);
+			return;
+		}
+	}
+	/* GLib retains queued work even when thread creation reports an error. */
+	if (!g_thread_pool_push (pool, task, &error)) {
+		g_warning ("Could not start directory count worker: %s", error->message);
+		g_clear_error (&error);
+	}
 }
 
 static void
@@ -4521,8 +4525,12 @@ static void
 cancel_deep_counts_for_file (NemoDirectory *directory,
 			     NemoFile      *file)
 {
-	if (directory->details->deep_count_file == file) {
-		deep_count_cancel (directory);
+	for (GList *l = directory->details->deep_counts_in_progress; l != NULL; l = l->next) {
+		DeepCountState *state = l->data;
+		if (state->file == file) {
+			deep_count_cancel_one (state);
+			break;
+		}
 	}
 }
 

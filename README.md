@@ -363,7 +363,13 @@ sort by their byte totals rather than item counts. Press Space again to
 recalculate; totals are temporary, not saved as folder metadata. Navigating away
 or closing the view cancels its unfinished size requests. Hard-link detection
 uses indexed filesystem/inode identities so large trees do not require repeated
-linear searches on the UI thread. Configure
+linear searches on the UI thread.
+Selected folders share a dedicated pool of up to four workers with low CPU and
+idle disk-I/O priority on Linux. Folders run concurrently without imposing a
+scan time limit; a single folder is scanned by one worker. Navigation cancels
+both queued and running requests. **Incomplete** means some contents could not
+be read, not that a size or time limit was reached; the folder tooltip includes
+the first failed path and error when tooltips are enabled. Configure
 **Calculate Folder Sizes** under **Keyboard Shortcuts → File Operations**.
 For a selection containing no folders, Space retains its preview behavior;
 typing, filtering, and text editing keep their existing Space handling.

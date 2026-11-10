@@ -872,12 +872,12 @@ on_dir_scan_finished (NemoDirAnalyzer *analyzer,
 	NemoQuickPreview *self = NEMO_QUICK_PREVIEW (data);
 	char *sz, *subtitle;
 
-	(void) analyzer;
-
 	if (self->mode != PREVIEW_DIR)
 		return;
 
-	if (total_size > 0) {
+	if (nemo_dir_analyzer_get_stats (analyzer)->incomplete) {
+		subtitle = g_strdup (_("Directory — incomplete scan"));
+	} else if (total_size > 0) {
 		sz = g_format_size (total_size);
 		subtitle = g_strdup_printf (_("Directory — %s"), sz);
 		g_free (sz);

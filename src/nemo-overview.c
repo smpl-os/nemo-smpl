@@ -17,13 +17,11 @@
 
 #include <glib/gi18n.h>
 #include <gio/gio.h>
-#include <errno.h>
 #include <math.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
-#include <unistd.h>
+#include <libnemo-private/nemo-file-utilities.h>
 
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
@@ -38,36 +36,7 @@
 
 /* ── Scan budgets & cache ───────────────────────────────────────── */
 #define CACHE_RESCAN_SECS  120   /* background cache refresh period */
-#define SCAN_TIME_BUDGET_MS_UI     12000 /* per-volume interactive budget */
-#define SCAN_TIME_BUDGET_MS_CACHE   8000 /* per-volume cache refresh budget */
 #define LAZY_CACHE_DELAY_MS         150  /* let UI render before scanning */
-
-/* ── I/O priority helpers (Linux) ──────────────────────────────── */
-#ifdef __linux__
-#include <sched.h>
-#ifndef IOPRIO_WHO_THREAD
-#define IOPRIO_WHO_THREAD  1
-#endif
-#ifndef IOPRIO_CLASS_IDLE
-#define IOPRIO_CLASS_IDLE  3
-#endif
-#define IOPRIO_PRIO_VALUE(class, data) (((class) << 13) | (data))
-static inline void
-set_thread_low_priority (void)
-{
-	/* Idle I/O class: only use disk when nobody else needs it */
-	if (syscall (SYS_ioprio_set, IOPRIO_WHO_THREAD, 0,
-	             IOPRIO_PRIO_VALUE (IOPRIO_CLASS_IDLE, 0)) == -1) {
-		g_warning ("Could not lower disk overview I/O priority: %s", g_strerror (errno));
-	}
-	errno = 0;
-	if (nice (19) == -1 && errno != 0) {
-		g_warning ("Could not lower disk overview CPU priority: %s", g_strerror (errno));
-	}
-}
-#else
-static inline void set_thread_low_priority (void) { }
-#endif
 
 /* ── Per-volume data ───────────────────────────────────────────── */
 typedef struct {
@@ -90,6 +59,7 @@ typedef struct {
 	char         *mount_path;
 	int           colour_idx;
 	GArray       *deep;     /* full-depth top offenders          */
+	NemoDirScanStats stats;
 } ScanResult;
 
 /* ── Data passed to the background scan thread ─────────────────── */
@@ -107,6 +77,7 @@ typedef struct {
 	char   *mount_path;
 	int     colour_idx;
 	GArray *deep;
+	NemoDirScanStats stats;
 	gint64  updated_msec;
 } CachedVolumeResult;
 
@@ -301,9 +272,10 @@ scan_cache_lookup_copy (const char *mount_path, ScanResult *sr)
 
 	g_mutex_lock (&g_scan_cache_lock);
 	cv = g_scan_cache != NULL ? g_hash_table_lookup (g_scan_cache, mount_path) : NULL;
-	if (cv != NULL && cv->deep != NULL && cv->deep->len > 0) {
+	if (cv != NULL) {
 		sr->deep = nemo_dir_entry_array_dup (cv->deep);
-		ok = (sr->deep != NULL && sr->deep->len > 0);
+		sr->stats = cv->stats;
+		ok = TRUE;
 	}
 	g_mutex_unlock (&g_scan_cache_lock);
 
@@ -314,11 +286,12 @@ static void
 scan_cache_store (const char *volume_name,
                   const char *mount_path,
                   int colour_idx,
-                  GArray *deep)
+                  GArray *deep,
+                  const NemoDirScanStats *stats)
 {
 	CachedVolumeResult *cv;
 
-	if (mount_path == NULL || deep == NULL)
+	if (mount_path == NULL)
 		return;
 
 	scan_cache_init_once ();
@@ -328,6 +301,7 @@ scan_cache_store (const char *volume_name,
 	cv->mount_path = g_strdup (mount_path);
 	cv->colour_idx = colour_idx;
 	cv->deep = nemo_dir_entry_array_dup (deep);
+	cv->stats = *stats;
 	cv->updated_msec = g_get_monotonic_time () / 1000;
 
 	g_mutex_lock (&g_scan_cache_lock);
@@ -780,7 +754,6 @@ pareto_idle_cb (gpointer data)
 	GtkWidget *heading;
 	NemoDirAnalyzer *analyzer;
 	char *heading_text;
-	gboolean have_deep;
 
 	if (g_cancellable_is_cancelled (sr->cancel)) {
 		g_object_unref (sr->self);
@@ -789,17 +762,10 @@ pareto_idle_cb (gpointer data)
 	}
 
 	self = sr->self;
-	have_deep = (sr->deep != NULL && sr->deep->len > 0);
 	overview_scan_debug_log ("ui result: volume='%s' mount='%s' entries=%u",
 	                         sr->volume_name,
 	                         sr->mount_path,
 	                         sr->deep != NULL ? sr->deep->len : 0);
-
-	if (!have_deep) {
-		g_object_unref (sr->self);
-		scan_result_free (sr);
-		return G_SOURCE_REMOVE;
-	}
 
 	ensure_pareto_section_visible (self);
 	remove_pareto_mount_box (self, sr->mount_path);
@@ -841,7 +807,8 @@ pareto_idle_cb (gpointer data)
 	/* ── NemoDirAnalyzer shows chart + ranked list ── */
 	analyzer = nemo_dir_analyzer_new ();
 	nemo_dir_analyzer_set_entries (analyzer, sr->deep,
-	                               sr->volume_name, sr->colour_idx);
+	                               sr->volume_name, sr->colour_idx,
+	                               &sr->stats);
 	gtk_box_pack_start (GTK_BOX (volume_box),
 	                    GTK_WIDGET (analyzer), FALSE, FALSE, 0);
 	gtk_widget_show (GTK_WIDGET (analyzer));
@@ -862,13 +829,14 @@ scan_thread_func (gpointer data)
 	ScanThreadData *td = data;
 	guint i;
 
-	set_thread_low_priority ();
+	nemo_thread_set_background_priority ();
 
 	for (i = 0; i < td->n_volumes; i++) {
 		GArray *deep;
 		ScanResult *sr;
 		gint64 started_us;
 		gint64 elapsed_ms;
+		NemoDirScanStats stats;
 
 		if (g_cancellable_is_cancelled (td->cancel))
 			break;
@@ -880,12 +848,11 @@ scan_thread_func (gpointer data)
 
 		deep = nemo_dir_scan_collect_top (td->mount_paths[i],
 		                                  td->cancel,
-		                                  SCAN_TIME_BUDGET_MS_UI,
-		                                  NULL);
+		                                  0, &stats);
 
 		elapsed_ms = (g_get_monotonic_time () - started_us) / 1000;
 
-		if (deep == NULL || g_cancellable_is_cancelled (td->cancel)) {
+		if (g_cancellable_is_cancelled (td->cancel)) {
 			overview_scan_debug_log ("scan cancelled/failed: mount='%s' elapsed=%" G_GINT64_FORMAT "ms",
 			                         td->mount_paths[i],
 			                         elapsed_ms);
@@ -897,7 +864,7 @@ scan_thread_func (gpointer data)
 		scan_cache_store (td->volume_names[i],
 		                  td->mount_paths[i],
 		                  td->colour_idxs[i],
-		                  deep);
+		                  deep, &stats);
 
 		sr = g_new0 (ScanResult, 1);
 		sr->self        = g_object_ref (td->self);
@@ -906,10 +873,11 @@ scan_thread_func (gpointer data)
 		sr->mount_path  = g_strdup (td->mount_paths[i]);
 		sr->colour_idx  = td->colour_idxs[i];
 		sr->deep        = deep;
+		sr->stats       = stats;
 
 		overview_scan_debug_log ("scan done: mount='%s' entries=%u elapsed=%" G_GINT64_FORMAT "ms",
 		                         td->mount_paths[i],
-		                         deep->len,
+		                         deep != NULL ? deep->len : 0,
 		                         elapsed_ms);
 
 		g_idle_add (pareto_idle_cb, sr);
@@ -1000,10 +968,11 @@ cache_scan_thread_func (gpointer data)
 	CacheScanJob *job = data;
 	guint i;
 
-	set_thread_low_priority ();
+	nemo_thread_set_background_priority ();
 
 	for (i = 0; i < job->n_volumes; i++) {
 		GArray *deep;
+		NemoDirScanStats stats;
 
 		if (g_scan_cache_cancel != NULL &&
 		    g_cancellable_is_cancelled (g_scan_cache_cancel))
@@ -1011,23 +980,19 @@ cache_scan_thread_func (gpointer data)
 
 		deep = nemo_dir_scan_collect_top (job->mount_paths[i],
 		                                  g_scan_cache_cancel,
-		                                  SCAN_TIME_BUDGET_MS_CACHE,
-		                                  NULL);
-
-		if (deep == NULL)
-			continue;
+		                                  0, &stats);
 
 		if (g_scan_cache_cancel != NULL &&
 		    g_cancellable_is_cancelled (g_scan_cache_cancel)) {
-			g_array_unref (deep);
+			g_clear_pointer (&deep, g_array_unref);
 			break;
 		}
 
 		scan_cache_store (job->volume_names[i],
 		                  job->mount_paths[i],
 		                  job->colour_idxs[i],
-		                  deep);
-		g_array_unref (deep);
+		                  deep, &stats);
+		g_clear_pointer (&deep, g_array_unref);
 	}
 
 	g_mutex_lock (&g_scan_cache_lock);

@@ -36,6 +36,8 @@
 #define DEFAULT_NEMO_DIRECTORY_MODE (0755)
 #define DEFAULT_DESKTOP_DIRECTORY_MODE (0755)
 
+void     nemo_thread_set_background_priority     (void);
+
 /* These functions all return something something that needs to be
  * freed with g_free, is not NULL, and is guaranteed to exist.
  */

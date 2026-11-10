@@ -152,6 +152,16 @@ Double Commander-style instant file viewer:
 - Deep directory scan with top offenders list
 - Side-by-side layout (chart + list) with bookmark/anchor navigation
 - Background cache with periodic refresh
+- Overview scans run to completion in the background rather than stopping at a
+  time limit and presenting an unfinished ranking as final. Unreadable contents
+  are marked as an incomplete scan, including in cached results.
+- Totals measure scanned file sizes, not the sum of overlapping ranked parents
+  and children. Scans include hidden contents, do not follow symbolic links, and
+  stay on the selected filesystem; other mounted filesystems are scanned
+  separately. File-size totals can differ from filesystem space used by metadata,
+  snapshots, compression, sparse files, and inaccessible contents.
+- F3 folder analysis retains its short scan budget but explicitly labels
+  time-limited results as incomplete.
 
 ### smplOS Live Theming
 

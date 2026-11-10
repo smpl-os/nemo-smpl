@@ -113,8 +113,7 @@ struct NemoDirectoryDetails
 
 	DirectoryCountState *count_in_progress;
 
-	NemoFile *deep_count_file;
-	DeepCountState *deep_count_in_progress;
+	GList *deep_counts_in_progress; /* DeepCountState, one per requested file */
 
 	MimeListState *mime_list_in_progress;
 

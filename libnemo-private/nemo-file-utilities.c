@@ -43,6 +43,12 @@
 #include <gio/gio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <errno.h>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <linux/ioprio.h>
+#endif
 
 #define NEMO_USER_DIRECTORY_NAME "nemo"
 
@@ -54,6 +60,24 @@ static void schedule_user_dirs_changed (void);
 static void desktop_dir_changed (void);
 static void update_xdg_user_dir (const char *type, const char *path);
 static GFile *nemo_find_file_insensitive_next (GFile *parent, const gchar *name);
+
+void
+nemo_thread_set_background_priority (void)
+{
+#ifdef __linux__
+	static GPrivate configured = G_PRIVATE_INIT (NULL);
+
+	if (g_private_get (&configured) != NULL)
+		return;
+	g_private_set (&configured, GINT_TO_POINTER (1));
+
+	if (syscall (SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0,
+	             IOPRIO_PRIO_VALUE (IOPRIO_CLASS_IDLE, 0)) == -1)
+		g_warning ("Could not lower background I/O priority: %s", g_strerror (errno));
+	if (setpriority (PRIO_PROCESS, 0, 19) == -1)
+		g_warning ("Could not lower background CPU priority: %s", g_strerror (errno));
+#endif
+}
 
 char *
 nemo_compute_title_for_location (GFile *location)

@@ -901,6 +901,7 @@ finalize (GObject *object)
 	g_clear_pointer (&file->details->group, g_ref_string_release);
 	g_free (file->details->selinux_context);
 	g_free (file->details->description);
+	g_free (file->details->deep_count_error);
 	g_free (file->details->activation_uri);
 	g_clear_object (&file->details->custom_icon);
 
@@ -9264,6 +9265,12 @@ nemo_file_construct_tooltip (NemoFile *file, NemoFileTooltipFlags flags, gpointe
 
     if (nemo_file_is_directory (file)) {
         guint item_count;
+        if (file->details->show_calculated_size && file->details->deep_count_error != NULL) {
+            nice = g_strdup_printf (_("Size calculation incomplete: %s"),
+                                    file->details->deep_count_error);
+            string = add_line (string, nice, TRUE);
+            g_free (nice);
+        }
         if (nemo_file_get_directory_item_count (file, &item_count, NULL)) {
             gchar *launchpad_sucks = THOU_TO_STR (item_count);
             gchar *count = g_strdup_printf (ngettext ("%s item", "%s items", item_count), launchpad_sucks);

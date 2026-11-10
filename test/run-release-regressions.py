@@ -30,6 +30,7 @@ REQUIRED_TESTS = {
     "test-image-viewer",
     "test-nemo-preview-details",
     "test-directory-sizes",
+    "test-overview-scan",
     "Nemo window startup",
     "Installed package version",
     "test-about-version",

@@ -6,6 +6,82 @@
 #include <libnemo-private/nemo-file-private.h>
 #include <libnemo-private/nemo-progress-info.h>
 #include <unistd.h>
+#include <fcntl.h>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <linux/ioprio.h>
+#endif
+
+static GThread *main_thread;
+static GMutex worker_lock;
+static GCond worker_cond;
+static gboolean release_workers;
+static guint workers_started;
+static guint workers_active;
+static guint peak_workers;
+static gint inject_enumeration_timeout;
+static gint fault_entries;
+static gint fail_pool_creation;
+
+GFileEnumerator *__real_g_file_enumerate_children (GFile *, const char *,
+    GFileQueryInfoFlags, GCancellable *, GError **);
+GFileInfo *__real_g_file_enumerator_next_file (GFileEnumerator *, GCancellable *, GError **);
+GThreadPool *__real_g_thread_pool_new (GFunc, gpointer, gint, gboolean, GError **);
+
+GThreadPool *
+__wrap_g_thread_pool_new (GFunc function, gpointer data, gint max_threads,
+                          gboolean exclusive, GError **error)
+{
+    if (exclusive && max_threads == 4 &&
+        g_atomic_int_compare_and_exchange (&fail_pool_creation, 1, 0)) {
+        g_set_error_literal (error, G_THREAD_ERROR, G_THREAD_ERROR_AGAIN,
+                             "Injected directory count pool failure");
+        return NULL;
+    }
+    return __real_g_thread_pool_new (function, data, max_threads, exclusive, error);
+}
+
+GFileEnumerator *
+__wrap_g_file_enumerate_children (GFile *file, const char *attributes,
+    GFileQueryInfoFlags flags, GCancellable *cancel, GError **error)
+{
+    g_autofree char *name = g_file_get_basename (file);
+    if (g_str_has_prefix (name, "parallel-") && strstr (attributes, G_FILE_ATTRIBUTE_UNIX_INODE)) {
+        g_assert_true (g_thread_self () != main_thread);
+#ifdef __linux__
+        g_assert_cmpint (getpriority (PRIO_PROCESS, 0), ==, 19);
+        gint priority = syscall (SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0);
+        g_assert_cmpint (priority, >=, 0);
+        g_assert_cmpint (IOPRIO_PRIO_CLASS (priority), ==, IOPRIO_CLASS_IDLE);
+#endif
+        g_mutex_lock (&worker_lock);
+        workers_started++;
+        workers_active++;
+        peak_workers = MAX (peak_workers, workers_active);
+        while (!release_workers)
+            g_cond_wait (&worker_cond, &worker_lock);
+        workers_active--;
+        g_mutex_unlock (&worker_lock);
+    }
+    return __real_g_file_enumerate_children (file, attributes, flags, cancel, error);
+}
+
+GFileInfo *
+__wrap_g_file_enumerator_next_file (GFileEnumerator *enumerator,
+                                    GCancellable *cancel, GError **error)
+{
+    if (g_atomic_int_get (&inject_enumeration_timeout)) {
+        GFile *container = g_file_enumerator_get_container (enumerator);
+        g_autofree char *name = g_file_get_basename (container);
+        if (g_str_equal (name, "faulty") && g_atomic_int_add (&fault_entries, 1) == 1) {
+            g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT,
+                                 "Injected backend enumeration timeout");
+            return NULL;
+        }
+    }
+    return __real_g_file_enumerator_next_file (enumerator, cancel, error);
+}
 
 static void
 send_key (NemoWindow *window, guint key, GdkModifierType modifiers)
@@ -147,7 +223,10 @@ test_large_scan (void)
     const guint entries = 200000;
     for (guint i = 0; i < entries; i++) {
         g_autofree char *path = g_strdup_printf ("%s/file-%u", folder_path, i);
-        g_assert_true (g_file_set_contents (path, "x", 1, NULL));
+        gint fd = g_open (path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        g_assert_cmpint (fd, >=, 0);
+        g_assert_cmpint (write (fd, "x", 1), ==, 1);
+        g_assert_cmpint (close (fd), ==, 0);
     }
     g_autofree char *hardlink = g_build_filename (folder_path, "hardlink", NULL);
     g_autofree char *first = g_build_filename (folder_path, "file-0", NULL);
@@ -194,6 +273,179 @@ test_large_scan (void)
         g_assert_cmpint (g_remove (path), ==, 0);
     }
     g_assert_cmpint (g_remove (hardlink), ==, 0);
+    nemo_file_unref (folder);
+    fixture_clear (&fixture);
+    g_object_unref (application);
+}
+
+static void
+test_parallel_cancel_and_retry (void)
+{
+    if (!g_test_subprocess ()) {
+        g_test_trap_subprocess (NULL, 30000000, 0);
+        g_test_trap_assert_passed ();
+        return;
+    }
+    g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    application = nemo_main_application_get_singleton ();
+    g_assert_true (g_application_register (G_APPLICATION (application), NULL, NULL));
+    g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, "list-view");
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    Fixture fixture = fixture_new ();
+    NemoFile *folders[8];
+    GList *selection = NULL;
+    guint started;
+#ifdef __linux__
+    gint ui_nice = getpriority (PRIO_PROCESS, 0);
+    gint ui_io = syscall (SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0);
+#endif
+    for (guint i = 0; i < G_N_ELEMENTS (folders); i++) {
+        g_autofree char *name = g_strdup_printf ("parallel-%u", i);
+        g_autoptr (GFile) location = g_file_get_child (fixture.origin, name);
+        g_autofree char *path = g_file_get_path (location);
+        g_autofree char *item = g_build_filename (path, ".hidden", NULL);
+        g_assert_true (g_file_make_directory (location, NULL, NULL));
+        g_assert_true (g_file_set_contents (item, "data", 4, NULL));
+        folders[i] = nemo_file_get (location);
+        WAIT_FOR (nemo_file_is_directory (folders[i]));
+        selection = g_list_prepend (selection, folders[i]);
+    }
+    NemoView *view = fixture.slot->content_view;
+    WAIT_FOR ((nemo_view_set_selection (view, selection),
+               nemo_view_get_selection_count (view) == G_N_ELEMENTS (folders)));
+    nemo_view_grab_focus (view);
+    Heartbeat heartbeat = { .last_tick = g_get_monotonic_time () };
+    guint timer = g_timeout_add (5, scan_heartbeat, &heartbeat);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+    do {
+        iterate ();
+        g_mutex_lock (&worker_lock);
+        started = workers_started;
+        g_mutex_unlock (&worker_lock);
+    } while (started < 4 && g_get_monotonic_time () < deadline);
+    g_assert_cmpuint (started, ==, 4);
+    WAIT_FOR (heartbeat.ticks >= 5);
+    for (guint i = 0; i < G_N_ELEMENTS (folders); i++)
+        g_assert_true (folders[i]->details->calculated_size_pending);
+
+    g_autoptr (GFile) parent = g_file_get_parent (fixture.origin);
+    nemo_window_slot_open_location (fixture.slot, parent, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, parent));
+    for (guint i = 0; i < G_N_ELEMENTS (folders); i++) {
+        g_assert_false (folders[i]->details->calculated_size_pending);
+        g_assert_false (folders[i]->details->show_calculated_size);
+    }
+    nemo_window_slot_open_location (fixture.slot, fixture.origin, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    view = fixture.slot->content_view;
+    nemo_view_set_selection (view, selection);
+    g_assert_cmpuint (nemo_view_get_selection_count (view), ==, G_N_ELEMENTS (folders));
+    nemo_view_grab_focus (view);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    for (guint i = 0; i < G_N_ELEMENTS (folders); i++)
+        g_assert_true (folders[i]->details->calculated_size_pending);
+    g_mutex_lock (&worker_lock);
+    release_workers = TRUE;
+    g_cond_broadcast (&worker_cond);
+    g_mutex_unlock (&worker_lock);
+
+    for (guint i = 0; i < G_N_ELEMENTS (folders); i++) {
+        goffset size;
+        guint unreadable;
+        WAIT_FOR (!folders[i]->details->calculated_size_pending);
+        g_assert_cmpint (nemo_file_get_deep_counts (folders[i], NULL, NULL,
+                         &unreadable, NULL, &size, TRUE), ==, NEMO_REQUEST_DONE);
+        g_assert_cmpint (size, ==, 4);
+        g_assert_cmpuint (unreadable, ==, 0);
+        g_autofree char *formatted = g_format_size_full (
+            4, nemo_global_preferences_get_size_prefix_preference ());
+        assert_column (view, folders[i], formatted);
+        g_autoptr (GFile) location = nemo_file_get_location (folders[i]);
+        g_autoptr (GFile) item = g_file_get_child (location, ".hidden");
+        g_assert_true (g_file_delete (item, NULL, NULL));
+        g_assert_true (g_file_delete (location, NULL, NULL));
+        nemo_file_unref (folders[i]);
+    }
+    g_source_remove (timer);
+    g_mutex_lock (&worker_lock);
+    g_assert_cmpuint (peak_workers, ==, 4);
+    g_assert_cmpuint (workers_active, ==, 0);
+    /* Cancelled queued requests never enter the filesystem backend. */
+    g_assert_cmpuint (workers_started, ==, 4 + G_N_ELEMENTS (folders));
+    g_mutex_unlock (&worker_lock);
+#ifdef __linux__
+    g_assert_cmpint (getpriority (PRIO_PROCESS, 0), ==, ui_nice);
+    g_assert_cmpint (syscall (SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0), ==, ui_io);
+#endif
+    g_list_free (selection);
+    fixture_clear (&fixture);
+    g_object_unref (application);
+}
+
+static void
+test_enumeration_failure_and_retry (void)
+{
+    if (!g_test_subprocess ()) {
+        g_test_trap_subprocess (NULL, 25000000, 0);
+        g_test_trap_assert_passed ();
+        return;
+    }
+    g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    application = nemo_main_application_get_singleton ();
+    g_assert_true (g_application_register (G_APPLICATION (application), NULL, NULL));
+    g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, "list-view");
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    Fixture fixture = fixture_new ();
+    g_autoptr (GFile) location = g_file_get_child (fixture.origin, "faulty");
+    g_autofree char *path = g_file_get_path (location);
+    g_autofree char *first = g_build_filename (path, "first", NULL);
+    g_autofree char *second = g_build_filename (path, "second", NULL);
+    g_assert_true (g_file_make_directory (location, NULL, NULL));
+    g_assert_true (g_file_set_contents (first, "1234567890", 10, NULL));
+    g_assert_true (g_file_set_contents (second, "1234567890", 10, NULL));
+    NemoFile *folder = nemo_file_get (location);
+    WAIT_FOR (nemo_file_is_directory (folder));
+    NemoView *view = fixture.slot->content_view;
+    GList selection = { .data = folder };
+    WAIT_FOR ((nemo_view_set_selection (view, &selection),
+               nemo_view_get_selection_count (view) == 1));
+    nemo_view_grab_focus (view);
+    g_atomic_int_set (&fail_pool_creation, 1);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    WAIT_FOR (!folder->details->calculated_size_pending);
+    g_assert_cmpint (g_atomic_int_get (&fail_pool_creation), ==, 0);
+    g_assert_cmpuint (folder->details->deep_unreadable_count, ==, 1);
+    g_assert_nonnull (strstr (folder->details->deep_count_error,
+                              "Injected directory count pool failure"));
+    g_atomic_int_set (&inject_enumeration_timeout, TRUE);
+    send_key (fixture.window, GDK_KEY_space, 0);
+    WAIT_FOR (!folder->details->calculated_size_pending);
+    g_atomic_int_set (&inject_enumeration_timeout, FALSE);
+    guint unreadable;
+    goffset size;
+    g_assert_cmpint (nemo_file_get_deep_counts (folder, NULL, NULL, &unreadable,
+                     NULL, &size, TRUE), ==, NEMO_REQUEST_DONE);
+    g_assert_cmpuint (unreadable, ==, 1);
+    g_assert_cmpint (size, ==, 10);
+    g_autofree char *formatted = g_format_size_full (
+        size, nemo_global_preferences_get_size_prefix_preference ());
+    g_autofree char *partial = g_strdup_printf ("%s (incomplete)", formatted);
+    assert_column (view, folder, partial);
+    g_autofree char *tooltip = nemo_file_construct_tooltip (folder, 0, NULL);
+    g_assert_nonnull (strstr (tooltip, path));
+    g_assert_nonnull (strstr (tooltip, "Injected backend enumeration timeout"));
+
+    send_key (fixture.window, GDK_KEY_space, 0);
+    WAIT_FOR (!folder->details->calculated_size_pending);
+    g_assert_cmpint (nemo_file_get_deep_counts (folder, NULL, NULL, &unreadable,
+                     NULL, &size, TRUE), ==, NEMO_REQUEST_DONE);
+    g_assert_cmpuint (unreadable, ==, 0);
+    g_assert_cmpint (size, ==, 20);
+    g_assert_null (folder->details->deep_count_error);
+    g_assert_cmpint (g_remove (first), ==, 0);
+    g_assert_cmpint (g_remove (second), ==, 0);
+    g_assert_true (g_file_delete (location, NULL, NULL));
     nemo_file_unref (folder);
     fixture_clear (&fixture);
     g_object_unref (application);
@@ -283,6 +535,9 @@ test_sizes (gconstpointer data)
             size, nemo_global_preferences_get_size_prefix_preference ());
         g_autofree char *expected = g_strdup_printf ("%s (incomplete)", partial);
         assert_column (view, empty, expected);
+        g_autofree char *tooltip = nemo_file_construct_tooltip (empty, 0, NULL);
+        g_assert_nonnull (strstr (tooltip, blocked));
+        g_assert_nonnull (strstr (tooltip, "Permission denied"));
         g_assert_cmpint (g_chmod (blocked, 0700), ==, 0);
         g_assert_cmpint (g_remove (hidden), ==, 0);
         g_assert_cmpint (g_rmdir (blocked), ==, 0);
@@ -344,6 +599,7 @@ main (int argc, char **argv)
         return 77;
     g_assert_cmpstr (g_getenv ("GSETTINGS_BACKEND"), ==, "memory");
     gtk_test_init (&argc, &argv, NULL);
+    main_thread = g_thread_self ();
     nemo_keybindings_init ();
     const NemoKeybindingEntry *entry = NULL;
     for (gint i = 0; i < nemo_keybinding_entries_count; i++)
@@ -363,5 +619,7 @@ main (int argc, char **argv)
     g_test_add_data_func ("/directory-sizes/cancel-icon", "icon-view", test_navigation_cancel);
     g_test_add_data_func ("/directory-sizes/cancel-compact", "compact-view", test_navigation_cancel);
     g_test_add_func ("/directory-sizes/large-tree-responsive", test_large_scan);
+    g_test_add_func ("/directory-sizes/parallel-cancel-and-retry", test_parallel_cancel_and_retry);
+    g_test_add_func ("/directory-sizes/enumeration-failure-and-retry", test_enumeration_failure_and_retry);
     return g_test_run ();
 }

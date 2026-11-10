@@ -40,10 +40,17 @@ GArray *nemo_dir_entry_array_dup (GArray *src);
 
 #define NEMO_DIR_SCAN_MAX_ENTRIES  10
 
+typedef struct {
+	guint64 total_size;
+	gboolean incomplete;
+	gboolean timed_out;
+} NemoDirScanStats;
+
+/* A non-positive budget scans to completion (or cancellation). */
 GArray *nemo_dir_scan_collect_top (const char   *root_path,
                                    GCancellable *cancel,
                                    int           time_budget_ms,
-                                   guint64      *total_size_out);
+                                   NemoDirScanStats *stats);
 
 /* ── Colour palette shared by charts ────────────────────────────── */
 
@@ -70,7 +77,8 @@ void nemo_dir_analyzer_show_scanning (NemoDirAnalyzer *self,
 void nemo_dir_analyzer_set_entries   (NemoDirAnalyzer *self,
                                       GArray          *entries,
                                       const char      *display_name,
-                                      int              colour_idx);
+                                      int              colour_idx,
+                                      const NemoDirScanStats *stats);
 
 /* Scan a path in a background thread and display results. */
 void nemo_dir_analyzer_scan_async    (NemoDirAnalyzer *self,
@@ -87,6 +95,7 @@ void nemo_dir_analyzer_clear         (NemoDirAnalyzer *self);
 
 /* Retrieve scan results (may be NULL). Caller must NOT free. */
 GArray *nemo_dir_analyzer_get_entries (NemoDirAnalyzer *self);
+const NemoDirScanStats *nemo_dir_analyzer_get_stats (NemoDirAnalyzer *self);
 
 G_END_DECLS
 
