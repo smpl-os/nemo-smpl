@@ -147,6 +147,7 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	{ "trash",                 NULL,                                        N_("Move to Trash"),              N_("File Operations"), "Delete",             "NemoView", "trash" },
 	{ "trash-alt",             NULL,                                        N_("Move to Trash (alternate)"),  N_("File Operations"), "",                   "NemoView", "trash" },
 	{ "delete-permanently",    NULL,                                        N_("Delete Permanently"),         N_("File Operations"), "<Shift>Delete",      "NemoView", "delete" },
+	{ "delete-permanently-alt", NULL,                                       N_("Delete Permanently (alternate)"), N_("File Operations"), "<Shift>F8",       "NemoView", "delete" },
 
 	/* Clipboard */
 	{ "cut",                   "<Actions>/DirViewActions/Cut",              N_("Cut"),                        N_("Clipboard"), "<Control>x",               NULL, NULL },
@@ -169,6 +170,54 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 
 const gint nemo_keybinding_entries_count = G_N_ELEMENTS (nemo_keybinding_entries);
 
+static void
+apply_binding_set_keybindings (void)
+{
+	static guint previous_keys[G_N_ELEMENTS (nemo_keybinding_entries)];
+	static GdkModifierType previous_mods[G_N_ELEMENTS (nemo_keybinding_entries)];
+
+	/* Remove the old set before installing any new chords, including swapped keys. */
+	for (gint i = 0; i < nemo_keybinding_entries_count; i++) {
+		const NemoKeybindingEntry *entry = &nemo_keybinding_entries[i];
+		if (entry->binding_set_name == NULL)
+			continue;
+		GtkBindingSet *set = gtk_binding_set_find (entry->binding_set_name);
+		if (set == NULL)
+			continue;
+		guint key;
+		GdkModifierType mods;
+		gtk_accelerator_parse (entry->default_accel, &key, &mods);
+		if (key != 0)
+			gtk_binding_entry_remove (set, key, mods);
+		if (previous_keys[i] != 0)
+			gtk_binding_entry_remove (set, previous_keys[i], previous_mods[i]);
+		previous_keys[i] = 0;
+	}
+	for (gint i = 0; i < nemo_keybinding_entries_count; i++) {
+		const NemoKeybindingEntry *entry = &nemo_keybinding_entries[i];
+		if (entry->binding_set_name == NULL)
+			continue;
+		GtkBindingSet *set = gtk_binding_set_find (entry->binding_set_name);
+		if (set == NULL)
+			continue;
+		g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings,
+		                                               entry->settings_key);
+		if (accel[0] == '\0')
+			continue;
+		guint key;
+		GdkModifierType mods;
+		gtk_accelerator_parse (accel, &key, &mods);
+		if (key == 0) {
+			g_warning ("Failed to parse accelerator '%s' for %s", accel, entry->settings_key);
+			continue;
+		}
+		gtk_binding_entry_remove (set, key, mods);
+		gtk_binding_entry_add_signal (set, key, mods, entry->signal_name, 0);
+		previous_keys[i] = key;
+		previous_mods[i] = mods;
+	}
+}
+
 /*
  * Apply a single keybinding from GSettings.
  *
@@ -182,47 +231,13 @@ apply_keybinding (const NemoKeybindingEntry *entry, gboolean setting_changed)
 	g_autofree gchar *accel_string = NULL;
 	guint key = 0;
 	GdkModifierType mods = 0;
-	guint default_key = 0;
-	GdkModifierType default_mods = 0;
-
-	accel_string = g_settings_get_string (nemo_keybinding_settings,
-	                                      entry->settings_key);
-
-	/* Parse the default so we can remove the old binding-set entry */
-	gtk_accelerator_parse (entry->default_accel, &default_key, &default_mods);
 
 	if (entry->binding_set_name != NULL) {
-		/* --- Binding-set entry --- */
-		GtkBindingSet *binding_set;
-
-		binding_set = gtk_binding_set_find (entry->binding_set_name);
-		if (binding_set == NULL) {
-			return;
-		}
-
-		/* Always remove the default binding first */
-		gtk_binding_entry_remove (binding_set, default_key, default_mods);
-
-		if (accel_string == NULL || accel_string[0] == '\0') {
-			/* Disabled — just leave it removed */
-			return;
-		}
-
-		gtk_accelerator_parse (accel_string, &key, &mods);
-
-		if (key == 0 && mods == 0) {
-			g_warning ("Failed to parse accelerator '%s' for %s",
-			           accel_string, entry->settings_key);
-			return;
-		}
-
-		/* Remove the new key too in case it was already bound */
-		gtk_binding_entry_remove (binding_set, key, mods);
-
-		gtk_binding_entry_add_signal (binding_set, key, mods,
-		                              entry->signal_name, 0);
+		apply_binding_set_keybindings ();
 		return;
 	}
+	accel_string = g_settings_get_string (nemo_keybinding_settings,
+	                                      entry->settings_key);
 
 	/* --- Accel-map entry --- */
 
@@ -270,8 +285,10 @@ nemo_keybindings_apply_all (void)
 	}
 
 	for (i = 0; i < nemo_keybinding_entries_count; i++) {
-		apply_keybinding (&nemo_keybinding_entries[i], FALSE);
+		if (nemo_keybinding_entries[i].binding_set_name == NULL)
+			apply_keybinding (&nemo_keybinding_entries[i], FALSE);
 	}
+	apply_binding_set_keybindings ();
 }
 
 /*
@@ -309,7 +326,8 @@ static void
 reserve_new_shortcut_defaults (void)
 {
 	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode",
-	                       "preview-scroll-up", "preview-scroll-down", "calculate-directory-sizes" };
+	                       "preview-scroll-up", "preview-scroll-down", "calculate-directory-sizes",
+	                       "delete-permanently-alt" };
 	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
 		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
 		if (user_value != NULL) {

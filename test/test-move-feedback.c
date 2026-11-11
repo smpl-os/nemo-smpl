@@ -3,12 +3,16 @@
 #include "../src/nemo-actions.h"
 #include "../src/nemo-icon-view.h"
 #include "../src/nemo-list-model.h"
+#include "../src/nemo-keybindings.h"
+#include "../src/nemo-list-view.h"
+#include <libnemo-private/nemo-file-private.h>
 #include <libnemo-private/nemo-file-undo-manager.h>
 #include <libnemo-private/nemo-progress-info-manager.h>
 #include <libnemo-private/nemo-transfer-safety.h>
 #include <sys/stat.h>
 
 static gint move_calls, second_waiting, resume_move;
+static guint cancelled_move_dialogs;
 static NemoProgressInfo *progress;
 
 gboolean __real_nemo_transfer_native_move (NemoTransferGuard *, GFile *, GFile *,
@@ -100,7 +104,10 @@ confirm_move (gpointer unused)
                 g_object_get (l->data, "text", &text, "secondary-text", &secondary, NULL);
                 g_error ("Unexpected move dialog: %s; %s", text, secondary);
             }
-            gtk_dialog_response (l->data, GTK_RESPONSE_OK);
+            gtk_dialog_response (l->data, cancelled_move_dialogs > 0
+                                 ? GTK_RESPONSE_CANCEL : GTK_RESPONSE_OK);
+            if (cancelled_move_dialogs > 0)
+                cancelled_move_dialogs--;
         }
     g_list_free (windows);
     return G_SOURCE_CONTINUE;
@@ -125,11 +132,61 @@ remove_fixture_tree (GFile *file)
 }
 
 static void
+test_retired_move_actions (void)
+{
+    if (!g_test_subprocess ()) {
+        g_test_trap_subprocess (NULL, 25000000, 0);
+        g_test_trap_assert_passed ();
+        return;
+    }
+    g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    application = nemo_main_application_get_singleton ();
+    g_assert_true (g_application_register (G_APPLICATION (application), NULL, NULL));
+    g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, "list-view");
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
+    Fixture fixture = fixture_new ();
+    nemo_keybindings_set_for_action ("switch-pane", "");
+    nemo_keybindings_set_for_action ("move-to-other-pane", "F6");
+    nemo_window_split_view_on (fixture.window);
+    NemoWindowSlot *other = nemo_window_get_extra_slot (fixture.window);
+    nemo_window_slot_open_location (other, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (other, fixture.containing));
+    nemo_window_set_active_slot (fixture.window, fixture.slot);
+    NemoView *view = fixture.slot->content_view;
+    g_object_ref (view);
+    GtkAction *retired = NULL;
+    for (GList *l = gtk_ui_manager_get_action_groups (nemo_window_get_ui_manager (fixture.window));
+         l != NULL && retired == NULL; l = l->next)
+        retired = gtk_action_group_get_action (l->data, NEMO_ACTION_MOVE_TO_NEXT_PANE);
+    g_assert_nonnull (retired);
+    g_object_ref (retired);
+    g_assert_cmpuint (g_signal_handler_find (retired, G_SIGNAL_MATCH_DATA,
+                     0, 0, NULL, NULL, view), !=, 0);
+
+    nemo_window_slot_set_content_view (fixture.slot, NEMO_ICON_VIEW_ID);
+    WAIT_FOR (NEMO_IS_ICON_VIEW (fixture.slot->content_view) &&
+              !nemo_view_get_loading (fixture.slot->content_view));
+    /* GtkUIManager can retain actions after their file view has been replaced. */
+    g_assert_false (gtk_action_is_sensitive (retired));
+    g_assert_cmpuint (g_signal_handler_find (retired, G_SIGNAL_MATCH_DATA,
+                     0, 0, NULL, NULL, view), ==, 0);
+    gpointer retired_view = view;
+    g_object_add_weak_pointer (G_OBJECT (view), &retired_view);
+    g_object_unref (view);
+    WAIT_FOR (retired_view == NULL);
+    gtk_action_set_sensitive (retired, TRUE);
+    gtk_action_activate (retired);
+    g_object_unref (retired);
+    fixture_clear (&fixture);
+    g_object_unref (application);
+}
+
+static void
 test_move_feedback (gconstpointer data)
 {
     const char *mode = data;
     if (!g_test_subprocess ()) {
-        g_test_trap_subprocess (NULL, 20000000, 0);
+        g_test_trap_subprocess (NULL, 30000000, 0);
         g_test_trap_assert_passed ();
         return;
     }
@@ -168,13 +225,60 @@ test_move_feedback (gconstpointer data)
         sources[i] = g_file_get_child (origin, name);
         destinations[i] = g_file_get_child (containing, name);
         g_autofree char *path = g_file_get_path (sources[i]);
-        g_assert_true (g_file_set_contents (path, "Owned move feedback fixture", -1, NULL));
+        if (g_str_equal (mode, "list-view")) {
+            g_assert_true (g_file_make_directory (sources[i], NULL, NULL));
+            g_autofree char *child = g_build_filename (path, "contents", NULL);
+            g_assert_true (g_file_set_contents (child, "Owned move feedback fixture", -1, NULL));
+        } else {
+            g_assert_true (g_file_set_contents (path, "Owned move feedback fixture", -1, NULL));
+        }
         g_assert_cmpint (lstat (path, &identities[i]), ==, 0);
         WAIT_FOR (view_contains (source_view, sources[i]));
         uris = g_list_append (uris, g_file_get_uri (sources[i]));
         selection = g_list_append (selection, nemo_file_get (sources[i]));
     }
     nemo_view_set_selection (source_view, selection);
+    /* Repeat real folder counts and size sorting before using the F6 action. */
+    if (g_str_equal (mode, "list-view")) {
+        for (guint i = 0; i < 3; i++) {
+            for (GList *l = selection; l != NULL; l = l->next)
+                NEMO_FILE (l->data)->details->show_calculated_size = FALSE;
+            nemo_view_grab_focus (source_view);
+            g_assert_true (key_press (fixture.window, "space"));
+            for (GList *l = selection; l != NULL; l = l->next) {
+                NemoFile *folder = l->data;
+                WAIT_FOR (folder->details->show_calculated_size);
+                WAIT_FOR (!folder->details->calculated_size_pending);
+            }
+        }
+        GtkTreeView *tree = NULL;
+        find_tree (GTK_WIDGET (source_view), &tree);
+        g_assert_nonnull (tree);
+        NemoListModel *model = NEMO_LIST_MODEL (gtk_tree_view_get_model (tree));
+        gint size_column = nemo_list_model_get_sort_column_id_from_attribute (
+            model, g_quark_from_static_string ("size"));
+        gtk_tree_sortable_set_sort_column_id (GTK_TREE_SORTABLE (model),
+                                              size_column, GTK_SORT_ASCENDING);
+        /* Replace the view repeatedly before dispatching the configured F6 shortcut. */
+        for (guint i = 0; i < 2; i++) {
+            nemo_window_slot_set_content_view (fixture.slot, NEMO_ICON_VIEW_ID);
+            WAIT_FOR (NEMO_IS_ICON_VIEW (fixture.slot->content_view) &&
+                      !nemo_view_get_loading (fixture.slot->content_view));
+            nemo_window_slot_set_content_view (fixture.slot, NEMO_LIST_VIEW_ID);
+            WAIT_FOR (NEMO_IS_LIST_VIEW (fixture.slot->content_view) &&
+                      !nemo_view_get_loading (fixture.slot->content_view));
+        }
+        source_view = fixture.slot->content_view;
+        nemo_view_set_selection (source_view, selection);
+        nemo_view_grab_focus (source_view);
+        nemo_keybindings_set_for_action ("switch-pane", "");
+        nemo_keybindings_set_for_action ("move-to-other-pane", "F6");
+        for (guint i = 0; i < 3; i++) {
+            nemo_window_set_active_slot (fixture.window, target_slot);
+            nemo_window_set_active_slot (fixture.window, fixture.slot);
+        }
+        nemo_view_grab_focus (source_view);
+    }
     nemo_file_list_free (selection);
     NemoProgressInfoManager *manager = nemo_progress_info_manager_new ();
     g_signal_connect (manager, "new-progress-info", G_CALLBACK (progress_created), NULL);
@@ -186,9 +290,15 @@ test_move_feedback (gconstpointer data)
             move = gtk_action_group_get_action (l->data, NEMO_ACTION_MOVE_TO_NEXT_PANE);
         g_assert_nonnull (move);
         WAIT_FOR (gtk_action_is_sensitive (move));
-        gtk_accel_map_change_entry ("<Actions>/ShellActions/SplitViewNextPane", 0, 0, TRUE);
-        g_assert_true (gtk_accel_map_change_entry (
-            "<Actions>/DirViewActions/Move to next pane", GDK_KEY_F6, 0, TRUE));
+        GList *selected = nemo_view_get_selection_for_file_transfer (source_view);
+        g_assert_cmpuint (g_list_length (selected), ==, 3);
+        nemo_file_list_free (selected);
+        cancelled_move_dialogs = 2;
+        g_assert_true (key_press (fixture.window, "F6"));
+        WAIT_FOR (cancelled_move_dialogs == 1);
+        g_assert_true (key_press (fixture.window, "F6"));
+        WAIT_FOR (cancelled_move_dialogs == 0);
+        g_assert_cmpint (g_atomic_int_get (&move_calls), ==, 0);
         g_assert_true (key_press (fixture.window, "F6"));
     } else {
         g_autofree char *target = g_file_get_uri (containing);
@@ -220,6 +330,12 @@ test_move_feedback (gconstpointer data)
         g_assert_cmpint (lstat (path, &installed), ==, 0);
         g_assert_cmpuint (installed.st_ino, ==, identities[i].st_ino);
         g_assert_cmpuint (installed.st_dev, ==, identities[i].st_dev);
+        if (g_str_equal (mode, "list-view")) {
+            g_autofree char *child = g_build_filename (path, "contents", NULL);
+            g_autofree char *contents = NULL;
+            g_assert_true (g_file_get_contents (child, &contents, NULL, NULL));
+            g_assert_cmpstr (contents, ==, "Owned move feedback fixture");
+        }
         g_object_unref (sources[i]);
         g_object_unref (destinations[i]);
     }
@@ -247,6 +363,7 @@ main (int argc, char **argv)
         return 77;
     gtk_test_init (&argc, &argv, NULL);
     g_test_add_data_func ("/move-feedback/keyboard-list", "list-view", test_move_feedback);
+    g_test_add_func ("/move-feedback/retired-actions", test_retired_move_actions);
     g_test_add_data_func ("/move-feedback/drag-icons", "icon-view", test_move_feedback);
     g_test_add_data_func ("/move-feedback/drag-compact", "compact-view", test_move_feedback);
     return g_test_run ();

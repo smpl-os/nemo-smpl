@@ -1338,6 +1338,10 @@
       <default>'&lt;Shift&gt;Delete'</default>
       <summary>Delete permanently</summary>
     </key>
+    <key name="delete-permanently-alt" type="s">
+      <default>'&lt;Shift&gt;F8'</default>
+      <summary>Delete permanently (alternate)</summary>
+    </key>
     <key name="copy-to-other-pane" type="s">
       <default>''</default>
       <summary>Copy selection to other pane</summary>

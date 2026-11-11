@@ -2950,6 +2950,18 @@ real_unmerge_menus (NemoView *view)
 
 	ui_manager = nemo_window_get_ui_manager (view->details->window);
 
+#ifdef NEMO_SMPL
+    if (view->details->dir_action_group != NULL) {
+        GList *actions = gtk_action_group_list_actions (view->details->dir_action_group);
+        /* UIManager removes proxies lazily; their accelerators can outlive the view. */
+        for (GList *l = actions; l != NULL; l = l->next) {
+            gtk_action_set_sensitive (l->data, FALSE);
+            g_signal_handlers_disconnect_by_data (l->data, view);
+        }
+        g_list_free (actions);
+    }
+#endif
+
 	nemo_ui_unmerge_ui (ui_manager,
 				&view->details->dir_merge_id,
 				&view->details->dir_action_group);
@@ -9481,6 +9493,8 @@ real_merge_menus (NemoView *view)
                                GTK_UI_MANAGER_MENUITEM, FALSE);
     }
     nemo_keybindings_apply_all ();
+    /* A pane switch must replace accelerator proxies before the next key event. */
+    gtk_ui_manager_ensure_update (ui_manager);
 #endif
 
 	view->details->scripts_invalid = TRUE;
@@ -12581,12 +12595,14 @@ nemo_view_class_init (NemoViewClass *klass)
 		g_autofree gchar *trash_accel = g_settings_get_string (nemo_keybinding_settings, "trash");
 		g_autofree gchar *trash_alt_accel = g_settings_get_string (nemo_keybinding_settings, "trash-alt");
 		g_autofree gchar *delete_accel = g_settings_get_string (nemo_keybinding_settings, "delete-permanently");
-		guint trash_key = 0, trash_alt_key = 0, delete_key = 0;
-		GdkModifierType trash_mods = 0, trash_alt_mods = 0, delete_mods = 0;
+		g_autofree gchar *delete_alt_accel = g_settings_get_string (nemo_keybinding_settings, "delete-permanently-alt");
+		guint trash_key = 0, trash_alt_key = 0, delete_key = 0, delete_alt_key = 0;
+		GdkModifierType trash_mods = 0, trash_alt_mods = 0, delete_mods = 0, delete_alt_mods = 0;
 
 		gtk_accelerator_parse (trash_accel, &trash_key, &trash_mods);
 		gtk_accelerator_parse (trash_alt_accel, &trash_alt_key, &trash_alt_mods);
 		gtk_accelerator_parse (delete_accel, &delete_key, &delete_mods);
+		gtk_accelerator_parse (delete_alt_accel, &delete_alt_key, &delete_alt_mods);
 
 		if (trash_key != 0) {
 			gtk_binding_entry_add_signal (binding_set, trash_key, trash_mods,
@@ -12598,6 +12614,10 @@ nemo_view_class_init (NemoViewClass *klass)
 		}
 		if (delete_key != 0) {
 			gtk_binding_entry_add_signal (binding_set, delete_key, delete_mods,
+			                              "delete", 0);
+		}
+		if (delete_alt_key != 0) {
+			gtk_binding_entry_add_signal (binding_set, delete_alt_key, delete_alt_mods,
 			                              "delete", 0);
 		}
 	} else {
@@ -12623,5 +12643,7 @@ nemo_view_class_init (NemoViewClass *klass)
 			gtk_binding_entry_add_signal (binding_set, GDK_KEY_Delete, GDK_SHIFT_MASK,
 			                              "delete", 0);
 		}
+		gtk_binding_entry_add_signal (binding_set, GDK_KEY_F8, GDK_SHIFT_MASK,
+		                              "delete", 0);
 	}
 }

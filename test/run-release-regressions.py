@@ -27,6 +27,7 @@ REQUIRED_TESTS = {
     "Completion real backends",
     "Completion pending backend exit",
     "Delete confirmation focus",
+    "test-delete-shortcuts",
     "test-image-viewer",
     "test-nemo-preview-details",
     "test-directory-sizes",

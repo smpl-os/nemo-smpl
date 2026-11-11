@@ -165,6 +165,17 @@ if smpl_features_enabled
     is_parallel: false,
   )
   ui_regressions = [
+    executable('test-delete-shortcuts',
+      'test-delete-shortcuts.c',
+      objects: [copy_selection_objects, nemo.extract_objects('nemo-view.c')],
+      include_directories: [rootInclude, include_directories('../src')],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+      link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache',
+                  '-Wl,--wrap=nemo_inhibit_power_manager',
+                  '-Wl,--wrap=nemo_file_operations_delete',
+                  '-Wl,--wrap=nemo_file_operations_trash_or_delete'],
+    ),
     executable('test-overview-scan',
       ['test-overview-scan.c', '../src/nemo-dir-analyzer.c'],
       include_directories: [rootInclude],

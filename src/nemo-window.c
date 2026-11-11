@@ -1388,14 +1388,29 @@ nemo_window_key_press_event (GtkWidget *widget,
 	    !GTK_IS_EDITABLE (focus_widget) &&
 	    gtk_widget_is_ancestor (focus_widget, GTK_WIDGET (view)) &&
 	    !nemo_view_get_type_jump_active (view) &&
-	    !nemo_view_get_filter_active (view) &&
 	    !NEMO_IS_DESKTOP_WINDOW (window)) {
+		/* TreeView consumes Shift+F8 itself, before ancestor binding sets. */
+		const char *delete_keys[] = { "delete-permanently", "delete-permanently-alt" };
+		for (guint i = 0; i < G_N_ELEMENTS (delete_keys); i++) {
+			g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings, delete_keys[i]);
+			guint key;
+			GdkModifierType mods;
+			gtk_accelerator_parse (accel, &key, &mods);
+			if (key != 0 &&
+			    gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (key) &&
+			    (event->state & gtk_accelerator_get_default_mod_mask ()) == mods) {
+				gboolean handled = FALSE;
+				g_signal_emit_by_name (view, "delete", &handled);
+				if (handled)
+					return TRUE;
+			}
+		}
 		g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings,
 							      "calculate-directory-sizes");
 		guint key;
 		GdkModifierType mods;
 		gtk_accelerator_parse (accel, &key, &mods);
-		if (key != 0 &&
+		if (!nemo_view_get_filter_active (view) && key != 0 &&
 		    gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (key) &&
 		    (event->state & gtk_accelerator_get_default_mod_mask ()) == mods &&
 		    nemo_view_calculate_directory_sizes (view))
