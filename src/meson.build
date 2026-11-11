@@ -54,6 +54,7 @@ nemoCommon_sources = [
   'nemo-notebook.c',
   'nemo-overview.c',
   'nemo-dir-analyzer.c',
+  'nemo-disk-treemap.c',
   'nemo-pathbar.c',
   'nemo-plugin-manager.c',
   'nemo-previewer.c',

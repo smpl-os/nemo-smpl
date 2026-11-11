@@ -4,6 +4,8 @@
 #include "../src/nemo-pathbar.h"
 #include "../src/nemo-query-editor.h"
 #include "../src/nemo-window-bookmarks.h"
+#include "../src/nemo-overview.h"
+#include "../src/nemo-disk-treemap.h"
 #include <libnemo-private/nemo-query.h>
 #include <libxapp/xapp-favorites.h>
 #include <gdk/gdkx.h>
@@ -11,6 +13,13 @@
 
 static GtkMenu *shown_menu;
 static guint popup_count;
+
+GtkWidget *
+__wrap_nemo_overview_new (void)
+{
+    /* Real Overview UI, with fixture volumes instead of scanning the host. */
+    return g_object_new (NEMO_TYPE_OVERVIEW, NULL);
+}
 
 void
 __wrap_eel_pop_up_context_menu (GtkMenu *menu, GdkEvent *event, GtkWidget *widget)
@@ -162,6 +171,83 @@ test_overview_history (void)
     g_assert_true (g_file_equal (fixture.slot->location, overview));
     nemo_window_back_or_forward (fixture.window, FALSE, 0, 0);
     WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    fixture_clear (&fixture);
+}
+
+static GtkWidget *
+overview_find_widget (GtkWidget *root, GType type, const char *button_label)
+{
+    if (G_TYPE_CHECK_INSTANCE_TYPE (root, type) &&
+        (button_label == NULL ||
+         g_strcmp0 (gtk_button_get_label (GTK_BUTTON (root)), button_label) == 0))
+        return root;
+    if (!GTK_IS_CONTAINER (root))
+        return NULL;
+    GList *children = gtk_container_get_children (GTK_CONTAINER (root));
+    GtkWidget *found = NULL;
+    for (GList *l = children; l != NULL && found == NULL; l = l->next)
+        found = overview_find_widget (l->data, type, button_label);
+    g_list_free (children);
+    return found;
+}
+
+static void
+test_overview_heatmap_navigation (void)
+{
+    Fixture fixture = fixture_new ();
+    NemoWindowSlot *left = fixture.slot;
+    nemo_window_split_view_on (fixture.window);
+    fixture.slot = nemo_window_get_extra_slot (fixture.window);
+    nemo_window_slot_open_location (fixture.slot, fixture.origin, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.origin));
+    g_autoptr (GFile) location = g_file_new_for_uri ("overview:///");
+    nemo_window_slot_open_location (fixture.slot, location, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    nemo_window_set_active_pane (fixture.window, left->pane);
+    GtkWidget *overview = overview_find_widget (fixture.slot->view_overlay, NEMO_TYPE_OVERVIEW, NULL);
+    g_assert_nonnull (overview);
+    GtkWidget *stack = overview_find_widget (overview, GTK_TYPE_STACK, NULL);
+    GtkWidget *combo = overview_find_widget (overview, GTK_TYPE_COMBO_BOX_TEXT, NULL);
+    NemoDiskTreemap *map = NEMO_DISK_TREEMAP (
+        overview_find_widget (overview, NEMO_TYPE_DISK_TREEMAP, NULL));
+    GtkWidget *area = overview_find_widget (GTK_WIDGET (map), GTK_TYPE_DRAWING_AREA, NULL);
+    GtkWidget *up = overview_find_widget (GTK_WIDGET (map), GTK_TYPE_BUTTON, "Zoom Out");
+    g_autofree char *root = g_file_get_path (fixture.origin);
+    gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (combo), root, "Fixture");
+    gtk_combo_box_set_active (GTK_COMBO_BOX (combo), 0);
+    gtk_stack_set_visible_child_name (GTK_STACK (stack), "heatmap");
+    WAIT_FOR (!nemo_disk_treemap_is_loading (map));
+    g_assert_true (nemo_disk_treemap_has_result (map));
+    WAIT_FOR (gtk_widget_get_mapped (area));
+    cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
+        gtk_widget_get_allocated_width (area), gtk_widget_get_allocated_height (area));
+    cairo_t *cr = cairo_create (surface);
+    gtk_widget_draw (area, cr);
+    cairo_destroy (cr);
+    cairo_surface_destroy (surface);
+    GdkEvent *event = gdk_event_new (GDK_2BUTTON_PRESS);
+    event->button.window = g_object_ref (gtk_widget_get_window (area));
+    event->button.button = 1;
+    event->button.x = event->button.y = 10;
+    g_assert_true (gtk_widget_event (area, event));
+    gdk_event_free (event);
+    g_assert_true (gtk_widget_get_sensitive (up));
+    g_assert_true (gtk_widget_has_focus (area));
+    g_assert_true (key_press (fixture.window, "BackSpace"));
+    WAIT_FOR (!gtk_widget_get_sensitive (up));
+    g_assert_true (g_file_equal (fixture.slot->location, location));
+    g_assert_true (key_press (fixture.window, "Right"));
+    g_assert_true (key_press (fixture.window, "Return"));
+    WAIT_FOR (gtk_widget_get_sensitive (up));
+    g_assert_true (key_press (fixture.window, "Right"));
+    g_assert_true (key_press (fixture.window, "Return"));
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    g_assert_true (g_file_equal (left->location, fixture.origin));
+    g_assert_true (nemo_window_get_active_slot (fixture.window) == fixture.slot);
+    GList *selection = nemo_view_get_selection (fixture.slot->content_view);
+    g_assert_cmpuint (g_list_length (selection), ==, 1);
+    g_autoptr (GFile) selected = nemo_file_get_location (selection->data);
+    g_assert_true (g_file_equal (selected, fixture.item));
+    nemo_file_list_free (selection);
     fixture_clear (&fixture);
 }
 
@@ -515,6 +601,7 @@ main (int argc, char **argv)
         { "/folders/restore-panes-and-tabs", test_restore_panes_and_tabs },
         { "/folders/restore-overview", test_restore_overview },
         { "/folders/overview-history", test_overview_history },
+        { "/folders/overview-heatmap-navigation", test_overview_heatmap_navigation },
         { "/folders/last-tab-close", test_last_tab_close },
         { "/folders/restore-missing-folder", test_restore_missing_folder },
         { "/folders/restore-missing-pane-tabs", test_restore_missing_pane_tabs },

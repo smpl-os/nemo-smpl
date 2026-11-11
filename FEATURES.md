@@ -148,6 +148,14 @@ Double Commander-style instant file viewer:
 
 ### Disk Usage Overview
 
+- Full-page **Dashboard / Heatmap** toggle preserves the donut/Pareto dashboard
+  and adds a native, file-type-colored treemap for a selected mounted volume.
+  Tile areas represent file sizes; small items are grouped visually without
+  dropping their bytes. Folder zoom, path/size tooltips, keyboard navigation,
+  and opening a file's containing folder are read-only.
+- The full hierarchy is collected only when Heatmap is selected, on a dedicated
+  low-priority worker. Leaving the heatmap cancels unfinished work; completed
+  snapshots are retained until **Measure Again** or an Overview refresh.
 - Interactive Pareto charts for each mounted volume
 - Deep directory scan with top offenders list
 - Side-by-side layout (chart + list) with bookmark/anchor navigation

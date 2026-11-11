@@ -26,6 +26,7 @@
 #include "nemo-window-slot.h"
 #include "nemo-window.h"
 #include "nemo-dir-analyzer.h"
+#include "nemo-disk-treemap.h"
 #include "nemo-style-utilities.h"
 
 /* ── Donut layout ──────────────────────────────────────────────── */
@@ -102,6 +103,14 @@ struct _NemoOverview {
 	GtkWidget    *flow_box;
 	GtkWidget    *pareto_sep;
 	GtkWidget    *pareto_box;
+	GtkWidget    *stack;
+	GtkWidget    *dashboard;
+	GtkWidget    *volume_combo;
+	GtkWidget    *heatmap_empty;
+	NemoDiskTreemap *treemap;
+	gboolean      syncing_volumes;
+	gboolean      heatmap_needs_refresh;
+	gboolean      destroyed;
 	GArray       *volumes;
 	GCancellable *scan_cancel;
 	char         *current_anchor;  /* bookmarked volume mount_path */
@@ -1182,6 +1191,91 @@ rebuild_ui (NemoOverview *self)
 
 /* ── Public API ────────────────────────────────────────────────── */
 
+static void
+heatmap_ensure_scan (NemoOverview *self)
+{
+	if (self->destroyed)
+		return;
+	const char *path = gtk_combo_box_get_active_id (GTK_COMBO_BOX (self->volume_combo));
+	if (self->syncing_volumes || path == NULL ||
+	    g_strcmp0 (gtk_stack_get_visible_child_name (GTK_STACK (self->stack)), "heatmap") != 0)
+		return;
+	if (self->heatmap_needs_refresh ||
+	    g_strcmp0 (path, nemo_disk_treemap_get_path (self->treemap)) != 0 ||
+	    (!nemo_disk_treemap_has_result (self->treemap) &&
+	     !nemo_disk_treemap_is_loading (self->treemap))) {
+		nemo_disk_treemap_scan (self->treemap, path);
+		self->heatmap_needs_refresh = FALSE;
+	}
+}
+
+static void
+heatmap_volume_changed (GtkComboBox *combo, NemoOverview *self)
+{
+	heatmap_ensure_scan (self);
+}
+
+static void
+overview_page_changed (GObject *stack, GParamSpec *pspec, NemoOverview *self)
+{
+	if (self->destroyed)
+		return;
+	if (g_strcmp0 (gtk_stack_get_visible_child_name (GTK_STACK (stack)), "heatmap") == 0)
+		heatmap_ensure_scan (self);
+	else
+		nemo_disk_treemap_cancel (self->treemap);
+}
+
+static void
+heatmap_sync_volumes (NemoOverview *self)
+{
+	g_autofree char *selected = g_strdup (gtk_combo_box_get_active_id (GTK_COMBO_BOX (self->volume_combo)));
+	self->syncing_volumes = TRUE;
+	gtk_combo_box_text_remove_all (GTK_COMBO_BOX_TEXT (self->volume_combo));
+	for (guint i = 0; i < self->volumes->len; i++) {
+		VolumeInfo *volume = &g_array_index (self->volumes, VolumeInfo, i);
+		g_autofree char *name = g_filename_display_name (volume->name);
+		g_autofree char *path = g_filename_display_name (volume->mount_path);
+		g_autofree char *label = g_strdup_printf ("%s (%s)", name, path);
+		gtk_combo_box_text_append (GTK_COMBO_BOX_TEXT (self->volume_combo), volume->mount_path, label);
+	}
+	if (!gtk_combo_box_set_active_id (GTK_COMBO_BOX (self->volume_combo), selected != NULL ? selected : "/"))
+		gtk_combo_box_set_active (GTK_COMBO_BOX (self->volume_combo), self->volumes->len > 0 ? 0 : -1);
+	gtk_widget_set_sensitive (self->volume_combo, self->volumes->len > 0);
+	gtk_widget_set_visible (GTK_WIDGET (self->treemap), self->volumes->len > 0);
+	gtk_widget_set_visible (self->heatmap_empty, self->volumes->len == 0);
+	if (self->volumes->len == 0)
+		nemo_disk_treemap_cancel (self->treemap);
+	self->syncing_volumes = FALSE;
+	heatmap_ensure_scan (self);
+}
+
+static void
+heatmap_open_location (NemoDiskTreemap *treemap, GFile *file, gboolean directory, NemoOverview *self)
+{
+	if (self->destroyed)
+		return;
+	GtkWidget *toplevel = gtk_widget_get_toplevel (GTK_WIDGET (self));
+	if (!NEMO_IS_WINDOW (toplevel))
+		return;
+	GtkWidget *host = gtk_widget_get_ancestor (GTK_WIDGET (self), NEMO_TYPE_WINDOW_SLOT);
+	NemoWindowSlot *slot = host != NULL ? NEMO_WINDOW_SLOT (host)
+		: nemo_window_get_active_slot (NEMO_WINDOW (toplevel));
+	if (slot == NULL)
+		return;
+	if (host != NULL)
+		nemo_window_slot_make_hosting_pane_active (slot);
+	g_autoptr (GFile) location = directory ? g_object_ref (file) : g_file_get_parent (file);
+	if (directory) {
+		nemo_window_slot_open_location (slot, location, 0);
+	} else {
+		NemoFile *selected_file = nemo_file_get (file);
+		GList *selection = g_list_prepend (NULL, selected_file);
+		nemo_window_slot_open_location_full (slot, location, 0, selection, NULL, NULL);
+		nemo_file_list_free (selection);
+	}
+}
+
 static gboolean
 lazy_cache_start_cb (gpointer data)
 {
@@ -1215,6 +1309,8 @@ nemo_overview_refresh (NemoOverview *self)
 	gather_volumes (self);
 	rebuild_ui (self);
 	start_background_scan (self);
+	self->heatmap_needs_refresh = TRUE;
+	heatmap_sync_volumes (self);
 }
 
 /* ── GObject boilerplate ───────────────────────────────────────── */
@@ -1233,6 +1329,18 @@ nemo_overview_dispose (GObject *obj)
 }
 
 static void
+nemo_overview_destroy (GtkWidget *widget)
+{
+	NemoOverview *self = NEMO_OVERVIEW (widget);
+	self->destroyed = TRUE;
+	if (self->scan_cancel != NULL) {
+		g_cancellable_cancel (self->scan_cancel);
+		g_clear_object (&self->scan_cancel);
+	}
+	GTK_WIDGET_CLASS (nemo_overview_parent_class)->destroy (widget);
+}
+
+static void
 nemo_overview_finalize (GObject *obj)
 {
 	NemoOverview *self = NEMO_OVERVIEW (obj);
@@ -1247,6 +1355,7 @@ nemo_overview_class_init (NemoOverviewClass *klass)
 	GObjectClass *oclass = G_OBJECT_CLASS (klass);
 	oclass->dispose  = nemo_overview_dispose;
 	oclass->finalize = nemo_overview_finalize;
+	GTK_WIDGET_CLASS (klass)->destroy = nemo_overview_destroy;
 }
 
 static void
@@ -1259,6 +1368,40 @@ nemo_overview_init (NemoOverview *self)
 	                                GTK_POLICY_AUTOMATIC);
 
 	self->main_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	self->stack = gtk_stack_new ();
+	gtk_stack_set_hhomogeneous (GTK_STACK (self->stack), TRUE);
+	gtk_stack_set_vhomogeneous (GTK_STACK (self->stack), FALSE);
+	GtkWidget *switcher = gtk_stack_switcher_new ();
+	gtk_stack_switcher_set_stack (GTK_STACK_SWITCHER (switcher), GTK_STACK (self->stack));
+	gtk_widget_set_halign (switcher, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_top (switcher, 12);
+	gtk_widget_set_margin_bottom (switcher, 8);
+	gtk_box_pack_start (GTK_BOX (self->main_box), switcher, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (self->main_box), self->stack, TRUE, TRUE, 0);
+	self->dashboard = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+	gtk_stack_add_titled (GTK_STACK (self->stack), self->dashboard, "dashboard", _("Dashboard"));
+	GtkWidget *heatmap = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+	gtk_widget_set_margin_start (heatmap, 16);
+	gtk_widget_set_margin_end (heatmap, 16);
+	gtk_widget_set_margin_bottom (heatmap, 16);
+	GtkWidget *volume_row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+	GtkWidget *volume_label = gtk_label_new_with_mnemonic (_("_Volume:"));
+	self->volume_combo = gtk_combo_box_text_new ();
+	gtk_label_set_mnemonic_widget (GTK_LABEL (volume_label), self->volume_combo);
+	gtk_box_pack_start (GTK_BOX (volume_row), volume_label, FALSE, FALSE, 0);
+	gtk_box_pack_start (GTK_BOX (volume_row), self->volume_combo, TRUE, TRUE, 0);
+	gtk_box_pack_start (GTK_BOX (heatmap), volume_row, FALSE, FALSE, 0);
+	self->treemap = NEMO_DISK_TREEMAP (nemo_disk_treemap_new ());
+	gtk_widget_show_all (GTK_WIDGET (self->treemap));
+	gtk_widget_set_no_show_all (GTK_WIDGET (self->treemap), TRUE);
+	self->heatmap_empty = gtk_label_new (_("No mounted volumes found."));
+	gtk_widget_set_no_show_all (self->heatmap_empty, TRUE);
+	gtk_box_pack_start (GTK_BOX (heatmap), self->heatmap_empty, FALSE, FALSE, 24);
+	gtk_box_pack_start (GTK_BOX (heatmap), GTK_WIDGET (self->treemap), TRUE, TRUE, 0);
+	gtk_stack_add_titled (GTK_STACK (self->stack), heatmap, "heatmap", _("Heatmap"));
+	g_signal_connect (self->stack, "notify::visible-child-name", G_CALLBACK (overview_page_changed), self);
+	g_signal_connect (self->volume_combo, "changed", G_CALLBACK (heatmap_volume_changed), self);
+	g_signal_connect (self->treemap, "open-location", G_CALLBACK (heatmap_open_location), self);
 
 	/* ── Row 1: donut cards ── */
 	self->flow_box = gtk_flow_box_new ();
@@ -1283,7 +1426,7 @@ nemo_overview_init (NemoOverview *self)
 	gtk_widget_set_margin_bottom (self->flow_box, 12);
 	gtk_widget_set_margin_start (self->flow_box, 24);
 	gtk_widget_set_margin_end (self->flow_box, 24);
-	gtk_box_pack_start (GTK_BOX (self->main_box),
+	gtk_box_pack_start (GTK_BOX (self->dashboard),
 	                    self->flow_box, FALSE, FALSE, 0);
 
 	/* ── Separator ── */
@@ -1293,7 +1436,7 @@ nemo_overview_init (NemoOverview *self)
 	gtk_widget_set_margin_top (self->pareto_sep, 4);
 	gtk_widget_set_margin_bottom (self->pareto_sep, 4);
 	gtk_widget_set_no_show_all (self->pareto_sep, TRUE);
-	gtk_box_pack_start (GTK_BOX (self->main_box),
+	gtk_box_pack_start (GTK_BOX (self->dashboard),
 	                    self->pareto_sep, FALSE, FALSE, 0);
 
 	/* ── Row 2: Pareto charts ── */
@@ -1302,7 +1445,7 @@ nemo_overview_init (NemoOverview *self)
 	gtk_widget_set_margin_end (self->pareto_box, 24);
 	gtk_widget_set_margin_bottom (self->pareto_box, 24);
 	gtk_widget_set_no_show_all (self->pareto_box, TRUE);
-	gtk_box_pack_start (GTK_BOX (self->main_box),
+	gtk_box_pack_start (GTK_BOX (self->dashboard),
 	                    self->pareto_box, FALSE, FALSE, 0);
 
 	viewport = gtk_viewport_new (NULL, NULL);

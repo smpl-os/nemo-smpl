@@ -108,6 +108,56 @@ nemo_dir_entry_array_dup (GArray *src)
 
 /* ── Filesystem scan ───────────────────────────────────────────── */
 
+void
+nemo_dir_scan_node_free (NemoDirScanNode *node)
+{
+	if (node == NULL)
+		return;
+	g_free (node->name);
+	g_clear_pointer (&node->children, g_ptr_array_unref);
+	g_free (node);
+}
+
+char *
+nemo_dir_scan_node_get_path (const NemoDirScanNode *node)
+{
+	g_return_val_if_fail (node != NULL, NULL);
+	GPtrArray *parts = g_ptr_array_new ();
+	for (const NemoDirScanNode *n = node; n != NULL; n = n->parent)
+		g_ptr_array_add (parts, n->name);
+	GString *path = g_string_new (g_ptr_array_index (parts, parts->len - 1));
+	for (gint i = (gint) parts->len - 2; i >= 0; i--) {
+		if (!g_str_has_suffix (path->str, G_DIR_SEPARATOR_S))
+			g_string_append_c (path, G_DIR_SEPARATOR);
+		g_string_append (path, g_ptr_array_index (parts, i));
+	}
+	g_ptr_array_unref (parts);
+	return g_string_free (path, FALSE);
+}
+
+static NemoDirScanNode *
+scan_node_new (NemoDirScanNode *parent, const char *name, gboolean directory)
+{
+	NemoDirScanNode *node = g_new0 (NemoDirScanNode, 1);
+	node->parent = parent;
+	node->name = g_strdup (name);
+	if (directory)
+		node->children = g_ptr_array_new_with_free_func ((GDestroyNotify) nemo_dir_scan_node_free);
+	if (parent != NULL)
+		g_ptr_array_add (parent->children, node);
+	return node;
+}
+
+static gint
+scan_node_compare (gconstpointer a, gconstpointer b)
+{
+	const NemoDirScanNode *left = *(NemoDirScanNode * const *) a;
+	const NemoDirScanNode *right = *(NemoDirScanNode * const *) b;
+	if (left->size != right->size)
+		return left->size > right->size ? -1 : 1;
+	return g_strcmp0 (left->name, right->name);
+}
+
 static void
 consider_top (GArray     *top,
               const char *root_path,
@@ -175,7 +225,8 @@ scan_recursive (const char   *path,
                 GArray       *top,
                 gboolean      include_self,
                 gint64        deadline_us,
-                NemoDirScanStats *stats)
+                NemoDirScanStats *stats,
+                NemoDirScanNode *tree)
 {
 	DIR *dp;
 	struct dirent *entry;
@@ -197,6 +248,10 @@ scan_recursive (const char   *path,
 	}
 
 	if (S_ISREG (pst.st_mode)) {
+		if (tree != NULL) {
+			stats->incomplete = TRUE;
+			return 0;
+		}
 		total = (guint64) pst.st_size;
 		consider_top (top, root_path, path, total);
 		return total;
@@ -249,10 +304,20 @@ scan_recursive (const char   *path,
 				total += (guint64) st.st_size;
 				consider_top (top, root_path, child,
 				              (guint64) st.st_size);
+				if (tree != NULL) {
+					NemoDirScanNode *file = scan_node_new (tree, entry->d_name, FALSE);
+					file->size = (guint64) st.st_size;
+					file->files = 1;
+					tree->files++;
+				}
 			} else if (S_ISDIR (st.st_mode) && st.st_dev == dev) {
+				NemoDirScanNode *folder = tree != NULL
+					? scan_node_new (tree, entry->d_name, TRUE) : NULL;
 				total += scan_recursive (child, root_path, dev,
 				                         cancel, top, TRUE,
-				                         deadline_us, stats);
+				                         deadline_us, stats, folder);
+				if (tree != NULL)
+					tree->files += folder->files;
 			}
 		} else {
 			stats->incomplete = TRUE;
@@ -265,13 +330,54 @@ scan_recursive (const char   *path,
 
 	closedir (dp);
 
-	if (!include_self && top->len == 0 && total > 0)
+	if (!include_self && top != NULL && top->len == 0 && total > 0)
 		consider_top (top, root_path, path, total);
 
 	if (include_self)
 		consider_top (top, root_path, path, total);
+	if (tree != NULL) {
+		tree->size = total;
+		if (!g_cancellable_is_cancelled (cancel))
+			g_ptr_array_sort (tree->children, scan_node_compare);
+	}
 
 	return total;
+}
+
+NemoDirScanNode *
+nemo_dir_scan_collect_tree (const char *root_path, GCancellable *cancel,
+                           NemoDirScanStats *stats_out, GError **error)
+{
+	g_return_val_if_fail (root_path != NULL, NULL);
+	struct stat st;
+	NemoDirScanStats stats = { 0 };
+	if (stats_out != NULL)
+		*stats_out = stats;
+	if (g_cancellable_set_error_if_cancelled (cancel, error))
+		return NULL;
+	if (lstat (root_path, &st) != 0) {
+		int saved_errno = errno;
+		g_autofree char *display = g_filename_display_name (root_path);
+		g_set_error (error, G_IO_ERROR, g_io_error_from_errno (saved_errno),
+		             _("Cannot measure %s: %s"), display, g_strerror (saved_errno));
+		return NULL;
+	}
+	if (!S_ISDIR (st.st_mode)) {
+		g_autofree char *display = g_filename_display_name (root_path);
+		g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY,
+		             _("%s is not a directory"), display);
+		return NULL;
+	}
+	NemoDirScanNode *tree = scan_node_new (NULL, root_path, TRUE);
+	stats.total_size = scan_recursive (root_path, root_path, st.st_dev, cancel,
+	                                   NULL, FALSE, 0, &stats, tree);
+	if (g_cancellable_set_error_if_cancelled (cancel, error)) {
+		nemo_dir_scan_node_free (tree);
+		return NULL;
+	}
+	if (stats_out != NULL)
+		*stats_out = stats;
+	return tree;
 }
 
 GArray *
@@ -301,7 +407,7 @@ nemo_dir_scan_collect_top (const char   *root_path,
 
 	total = scan_recursive (root_path, root_path, st.st_dev,
 	                        cancel, top, FALSE,
-	                        deadline_us, &stats);
+	                        deadline_us, &stats, NULL);
 
 	stats.total_size = total;
 	if (g_cancellable_is_cancelled (cancel))

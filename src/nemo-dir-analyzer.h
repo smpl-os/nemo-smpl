@@ -46,6 +46,22 @@ typedef struct {
 	gboolean timed_out;
 } NemoDirScanStats;
 
+typedef struct _NemoDirScanNode NemoDirScanNode;
+struct _NemoDirScanNode {
+	char *name;
+	guint64 size;
+	guint64 files;
+	NemoDirScanNode *parent;
+	GPtrArray *children; /* NULL for files; directories own their children. */
+};
+
+NemoDirScanNode *nemo_dir_scan_collect_tree (const char *root_path,
+                                            GCancellable *cancel,
+                                            NemoDirScanStats *stats,
+                                            GError **error);
+void nemo_dir_scan_node_free (NemoDirScanNode *node);
+char *nemo_dir_scan_node_get_path (const NemoDirScanNode *node);
+
 /* A non-positive budget scans to completion (or cancellation). */
 GArray *nemo_dir_scan_collect_top (const char   *root_path,
                                    GCancellable *cancel,

@@ -18,7 +18,7 @@ nemo-smpl
 | Media keyboard shortcuts (play/mute) | ❌ | ✅ |
 | Copy verification by default (SHA-256) | ❌ | ✅ |
 | Preview Pane (Alt+F3) with GPS map | ❌ | ✅ |
-| Disk Usage Overview (Pareto charts) | ❌ | ✅ |
+| Disk Usage Overview (donuts, Pareto charts, heatmap) | ❌ | ✅ |
 | Archive browsing (ZIP/7z/TAR/ISO as folders) | ❌ | ✅ |
 | Configurable keyboard shortcuts | ❌ | ✅ |
 | Theme-aware filename colors and outline icons | ❌ | ✅ |
@@ -316,6 +316,17 @@ unplugged USB drive) reopen at Home without an error dialog; other tabs and the
 pane layout are preserved. Remote folders require their connection to be available.
 Disk Usage Overview tabs also restore normally, including when Overview is the
 active tab or the only tab in a pane; they do not leave the startup window hidden.
+
+In Disk Usage Overview, **Dashboard / Heatmap** switches the whole page between
+the existing donut/Pareto charts and a size-proportional folder treemap. Choose a
+volume, then double-click a folder to zoom in; **Zoom Out** or Backspace returns
+to its parent, and **Reset Zoom** returns to the volume root. Arrow keys select
+tiles and Enter activates them. Files open their containing folder with the file
+selected, rather than launching it. Hover a tile for its full path and size.
+**Measure Again** refreshes the snapshot. Heatmap scans start only on demand,
+run at background CPU/I/O priority without a time limit, and are cancelled when
+you leave the heatmap or close Overview. Completed snapshots survive switching
+back to the dashboard. Unreadable contents are explicitly marked incomplete.
 
 Right-click any directory in the breadcrumb bar to **Add to Favorites** or
 **Add Bookmark** without navigating there. These act on the clicked directory,

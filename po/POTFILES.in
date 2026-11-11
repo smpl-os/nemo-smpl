@@ -64,7 +64,9 @@ src/nemo-desktop-icon-view.c
 src/nemo-desktop-icon-view-ui.xml
 src/nemo-desktop-item-properties.c
 src/nemo-desktop-window.c
+src/nemo-dir-analyzer.c
 src/nemo-directory-view-ui.xml
+src/nemo-disk-treemap.c
 src/nemo-error-reporting.c
 src/nemo-extension-config-widget.c
 src/nemo-file-management-properties.c
@@ -86,6 +88,7 @@ src/nemo-main.c
 src/nemo-mime-actions.c
 src/nemo-notebook.c
 src/nemo-open-with-main.c
+src/nemo-overview.c
 src/nemo-pathbar.c
 src/nemo-places-sidebar.c
 src/nemo-plugin-manager.c

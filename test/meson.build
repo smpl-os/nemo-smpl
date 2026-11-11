@@ -153,7 +153,8 @@ if smpl_features_enabled
     include_directories: [rootInclude, include_directories('../src')],
     dependencies: nemo_deps,
     c_args: nemo_definitions,
-    link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache', '-Wl,--wrap=eel_pop_up_context_menu'],
+    link_args: ['-Wl,--wrap=nemo_overview_start_lazy_cache',
+                '-Wl,--wrap=nemo_overview_new', '-Wl,--wrap=eel_pop_up_context_menu'],
   )
   test('Nemo session persistence', hardening_python,
     args: hardening_runner + [hardening_python.full_path(), files('test-window-session.py')[0],
