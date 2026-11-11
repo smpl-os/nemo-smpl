@@ -378,6 +378,9 @@ static void     reset_filter_state                             (NemoView      *v
 
 static void     nemo_view_merge_menus                      (NemoView      *view);
 static void     nemo_view_unmerge_menus                    (NemoView      *view);
+static gboolean view_file_still_belongs                    (NemoView      *view,
+                                                           NemoFile      *file,
+                                                           NemoDirectory *directory);
 static void     nemo_view_init_show_hidden_files           (NemoView      *view);
 static void     clipboard_changed_callback                     (NemoClipboardMonitor *monitor,
 								NemoView      *view);
@@ -510,10 +513,27 @@ nemo_view_call_set_selection (NemoView *view, GList *selection)
 GList *
 nemo_view_get_selection_for_file_transfer (NemoView *view)
 {
+	GList *files;
+
 	g_return_val_if_fail (NEMO_IS_VIEW (view), NULL);
 
-	return nemo_file_list_filter_parent_entries (
+	files = nemo_file_list_filter_parent_entries (
 		NEMO_VIEW_CLASS (G_OBJECT_GET_CLASS (view))->get_selection_for_file_transfer (view));
+#ifdef NEMO_SMPL
+	/* Move notifications relocate NemoFiles before batched UI rows are removed. */
+	for (GList *l = files, *next; l != NULL; l = next) {
+		next = l->next;
+		gboolean belongs = view->details->model != NULL &&
+		    view_file_still_belongs (view, l->data, view->details->model);
+		for (GList *d = view->details->subdirectory_list; !belongs && d != NULL; d = d->next)
+			belongs = view_file_still_belongs (view, l->data, d->data);
+		if (!belongs) {
+			nemo_file_unref (l->data);
+			files = g_list_delete_link (files, l);
+		}
+	}
+#endif
+	return files;
 }
 
 /**

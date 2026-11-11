@@ -314,8 +314,28 @@ test_move_feedback (gconstpointer data)
     WAIT_FOR (view_contains (target_view, destinations[0]));
     g_assert_true (view_contains (source_view, sources[1]));
     g_assert_true (view_contains (source_view, sources[2]));
+    nemo_view_freeze_updates (source_view);
     g_atomic_int_set (&resume_move, TRUE);
     WAIT_FOR (nemo_progress_info_get_is_finished (progress));
+    GList *stale_rows = NEMO_VIEW_CLASS (G_OBJECT_GET_CLASS (source_view))
+        ->get_selection_for_file_transfer (source_view);
+    gboolean has_stale_row = FALSE;
+    for (GList *l = stale_rows; l != NULL; l = l->next) {
+        g_autoptr (GFile) location = nemo_file_get_location (l->data);
+        g_autoptr (GFile) parent = g_file_get_parent (location);
+        has_stale_row |= nemo_file_is_gone (l->data) || !g_file_equal (parent, origin);
+    }
+    g_assert_true (has_stale_row);
+    nemo_file_list_free (stale_rows);
+    GList *remaining = nemo_view_get_selection_for_file_transfer (source_view);
+    for (GList *l = remaining; l; l = l->next) {
+        g_autoptr (GFile) location = nemo_file_get_location (l->data);
+        g_autoptr (GFile) parent = g_file_get_parent (location);
+        g_assert_true (g_file_equal (parent, origin));
+        g_assert_true (g_file_query_exists (location, NULL));
+    }
+    nemo_file_list_free (remaining);
+    nemo_view_unfreeze_updates (source_view);
     g_source_remove (response);
     NemoProgressResult result;
     g_assert_true (nemo_progress_info_get_result (progress, &result));
@@ -339,7 +359,7 @@ test_move_feedback (gconstpointer data)
         g_object_unref (sources[i]);
         g_object_unref (destinations[i]);
     }
-    GList *remaining = nemo_view_get_selection_for_file_transfer (source_view);
+    remaining = nemo_view_get_selection_for_file_transfer (source_view);
     for (GList *l = remaining; l; l = l->next) {
         g_autoptr (GFile) location = nemo_file_get_location (l->data);
         g_autoptr (GFile) parent = g_file_get_parent (location);
