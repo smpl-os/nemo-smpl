@@ -96,6 +96,7 @@ src/nemo-progress-ui-handler.c
 src/nemo-properties-window.c
 src/nemo-document-viewer.c
 src/nemo-quick-preview.c
+src/nemo-media-effects.c
 src/nemo-preview-pane.c
 src/nemo-paged-viewer.c
 src/nemo-query-editor.c

@@ -6,6 +6,25 @@
 #include "../src/nemo-window-bookmarks.h"
 #include "../src/nemo-overview.h"
 #include "../src/nemo-disk-treemap.h"
+#include "../src/nemo-quick-preview.h"
+#ifdef HAVE_GSTREAMER
+#include <gst/gst.h>
+GstElement *__real_gst_element_factory_make (const char *factory, const char *name);
+#define gst_element_factory_make __real_gst_element_factory_make
+#include "preview-media-fixture.h"
+#undef gst_element_factory_make
+
+static GPtrArray *player_pipelines;
+
+GstElement *
+__wrap_gst_element_factory_make (const char *factory, const char *name)
+{
+    GstElement *element = preview_media_factory_make (factory, name);
+    if (element != NULL && player_pipelines != NULL && g_str_equal (factory, "playbin"))
+        g_ptr_array_add (player_pipelines, gst_object_ref (element));
+    return element;
+}
+#endif
 #include <libnemo-private/nemo-query.h>
 #include <libxapp/xapp-favorites.h>
 #include <gdk/gdkx.h>
@@ -522,6 +541,107 @@ test_current_folder_shortcuts (void)
     fixture_clear (&fixture);
 }
 
+#ifdef HAVE_GSTREAMER
+static gboolean
+pipeline_playing (guint index)
+{
+    if (player_pipelines->len <= index)
+        return FALSE;
+    GstState state;
+    gst_element_get_state (g_ptr_array_index (player_pipelines, index), &state, NULL, 0);
+    return state == GST_STATE_PLAYING;
+}
+
+static GList *
+preview_windows (void)
+{
+    GList *windows = gtk_window_list_toplevels (), *previews = NULL;
+    for (GList *l = windows; l != NULL; l = l->next)
+        if (NEMO_IS_QUICK_PREVIEW (l->data) && gtk_widget_get_visible (l->data))
+            previews = g_list_prepend (previews, l->data);
+    g_list_free (windows);
+    return previews;
+}
+
+static void
+activate_f3 (Fixture *fixture, GFile *location)
+{
+    NemoFile *file = nemo_file_get (location);
+    GList selection = { .data = file };
+    nemo_view_set_selection (fixture->slot->content_view, &selection);
+    nemo_view_grab_focus (fixture->slot->content_view);
+    g_assert_true (gtk_accel_groups_activate (G_OBJECT (fixture->window), GDK_KEY_F3, 0));
+    nemo_file_unref (file);
+}
+
+static void
+test_detached_media_players (void)
+{
+    gst_init (NULL, NULL);
+    Fixture fixture = fixture_new ();
+    g_autofree char *encoded = preview_media_encode_fixture (
+        "audiotestsrc num-buffers=200 samplesperbuffer=4800 ! audio/x-raw,rate=48000 ! "
+        "wavenc ! filesink name=output", "wav");
+    g_autofree char *directory = g_file_get_path (fixture.containing);
+    g_autofree char *first_path = g_build_filename (directory, "a.wav", NULL);
+    g_autofree char *second_path = g_build_filename (directory, "b.wav", NULL);
+    g_assert_cmpint (g_rename (encoded, first_path), ==, 0);
+    GFile *first = g_file_new_for_path (first_path);
+    GFile *second = g_file_new_for_path (second_path);
+    g_assert_true (g_file_copy (first, second, G_FILE_COPY_NONE, NULL, NULL, NULL, NULL));
+    nemo_window_slot_open_location (fixture.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    player_pipelines = g_ptr_array_new_with_free_func ((GDestroyNotify) gst_object_unref);
+    activate_f3 (&fixture, first);
+    WAIT_FOR (pipeline_playing (0));
+    activate_f3 (&fixture, second);
+    WAIT_FOR (pipeline_playing (1));
+    g_assert_cmpuint (player_pipelines->len, ==, 2);
+    GList *players = preview_windows ();
+    g_assert_cmpuint (g_list_length (players), ==, 2);
+    for (GList *l = players; l != NULL; l = l->next) {
+        g_assert_null (gtk_window_get_transient_for (l->data));
+        g_assert_false (gtk_window_get_skip_taskbar_hint (l->data));
+        g_assert_cmpint (gtk_window_get_type_hint (l->data), ==, GDK_WINDOW_TYPE_HINT_NORMAL);
+        g_assert_cmpfloat (gtk_widget_get_opacity (l->data), ==, 1);
+    }
+    activate_f3 (&fixture, fixture.item);
+    NemoQuickPreview *document = nemo_quick_preview_get_instance ();
+    WAIT_FOR (gtk_widget_get_visible (GTK_WIDGET (document)));
+    g_assert_null (g_list_find (players, document));
+    g_assert_true (pipeline_playing (0));
+    g_assert_true (pipeline_playing (1));
+    gint64 duration;
+    GstElement *first_pipeline = g_ptr_array_index (player_pipelines, 0);
+    g_assert_true (gst_element_query_duration (first_pipeline, GST_FORMAT_TIME, &duration));
+    g_assert_true (gst_element_seek_simple (first_pipeline, GST_FORMAT_TIME,
+        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, duration - GST_SECOND / 5));
+    WAIT_FOR (pipeline_playing (2));
+    g_autofree char *uri = NULL;
+    g_autofree char *expected = g_file_get_uri (second);
+    g_object_get (g_ptr_array_index (player_pipelines, 2), "uri", &uri, NULL);
+    g_assert_cmpstr (uri, ==, expected);
+    g_assert_true (gtk_widget_get_visible (GTK_WIDGET (document)));
+    gtk_widget_destroy (GTK_WIDGET (fixture.window));
+    g_assert_null (gtk_application_get_windows (GTK_APPLICATION (application)));
+    for (GList *l = players; l != NULL; l = l->next)
+        g_assert_true (gtk_widget_get_visible (l->data));
+    g_assert_true (pipeline_playing (1));
+    g_assert_true (pipeline_playing (2));
+    for (GList *l = players; l != NULL; l = l->next)
+        gtk_widget_destroy (l->data);
+    g_list_free (players);
+    nemo_quick_preview_dismiss (document);
+    g_ptr_array_unref (player_pipelines);
+    player_pipelines = NULL;
+    g_assert_true (g_file_delete (first, NULL, NULL));
+    g_assert_true (g_file_delete (second, NULL, NULL));
+    g_object_unref (first);
+    g_object_unref (second);
+    fixture_clear (&fixture);
+}
+#endif
+
 typedef struct { const char *path; GTestFunc run; } FolderCase;
 
 static void
@@ -610,6 +730,9 @@ main (int argc, char **argv)
         { "/folders/search-origin", test_search_origin_saved },
         { "/folders/breadcrumb-targets", test_breadcrumb_targets },
         { "/folders/current-folder-shortcuts", test_current_folder_shortcuts },
+#ifdef HAVE_GSTREAMER
+        { "/folders/detached-f3-media-players", test_detached_media_players },
+#endif
     };
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
         g_test_add_data_func (cases[i].path, &cases[i], run_case);

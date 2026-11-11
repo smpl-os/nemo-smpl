@@ -45,7 +45,11 @@ Double Commander-style instant file viewer:
 - **Filename footer**: the current filename stays visible at the bottom, including fullscreen
 - **File information (I)**: toggle file and available camera metadata, with an OpenStreetMap location map when GPS coordinates exist (uncached tiles require network access)
 - **Media information**: original image/video dimensions and aspect ratio; audio/video duration, codecs, stream bit rates, average overall bit rate, frame rate, sample rate and channels when available. Shared with the preview pane; GPS remains available for geotagged JPEG and supported RAW photos.
-- Escape to dismiss; singleton window reused across invocations
+- Escape to dismiss; documents/images reuse the preview window, while each F3 media activation opens an independent, taskbar-visible player that survives closing the file-manager window
+- **Media playlist**: Ctrl+L toggles current-directory audio/video tracks; previous/next buttons and Ctrl+Left/Right, audible autoplay, automatic next track, and Delete-to-Trash using the existing confirmation/error workflow
+- **Audiobook speeds**: 0.5x through 3x, including 2x and 3x, with pitch preservation; each player retains its rate across tracks and seeks
+- **Music visualization**: smooth native Cairo rings driven by GStreamer spectrum data, no flashing, respects reduced animation; optional quiet 200/240 Hz binaural tones off by default, without medical claims
+- **Player display**: fullscreen with hover transport; Escape exits fullscreen first. Native-alpha backgrounds and letterboxing preserve opaque foregrounds, without whole-window opacity
 - Split view moved to Ctrl+F3
 - File-pane and right-preview dividers use a theme-aware 1-pixel line with a wider invisible resize target
 - Modular architecture: `NemoImageViewer`, `NemoPreviewDetails`, `NemoPagedViewer`, `NemoDocumentViewer`, `NemoPreviewUtils` shared between sidebar pane and quick preview

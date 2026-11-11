@@ -1165,6 +1165,10 @@
       <default>'&lt;Control&gt;Right'</default>
       <summary>Next file in Quick Preview</summary>
     </key>
+    <key name="quick-preview-playlist" type="s">
+      <default>'&lt;Control&gt;l'</default>
+      <summary>Show or hide the media player's directory playlist</summary>
+    </key>
 
     <key name="preview-scroll-up" type="s">
       <default>'&lt;Alt&gt;Page_Up'</default>

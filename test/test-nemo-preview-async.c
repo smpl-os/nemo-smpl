@@ -1570,6 +1570,301 @@ test_quick_delete_real_trash (void)
 	g_free (directory);
 }
 
+#ifdef HAVE_GSTREAMER
+static GFile *
+player_track_fixture (const char *directory, const char *name)
+{
+	g_autofree char *encoded = preview_media_encode_fixture (
+		"audiotestsrc num-buffers=200 samplesperbuffer=4800 freq=440 ! "
+		"audio/x-raw,rate=48000 ! wavenc ! filesink name=output", "wav");
+	g_autofree char *path = g_build_filename (directory, name, NULL);
+	g_assert_cmpint (g_rename (encoded, path), ==, 0);
+	return g_file_new_for_path (path);
+}
+
+static void
+test_player_transport (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-XXXXXX", NULL);
+	GFile *first = player_track_fixture (directory, "a.wav");
+	GFile *second = player_track_fixture (directory, "b.wav");
+	GFile *image = write_image (directory, "c.png", 0xff0000ff);
+	NemoQuickPreview *player = g_object_ref_sink (nemo_quick_preview_new_player ());
+	nemo_quick_preview_show_file (player, first, NULL);
+	WAIT_UNTIL (player->media_ready && player->video_playing && player->dir_files != NULL &&
+		    player->playlist_fill_id == 0);
+	g_assert_cmpuint (player->dir_files->len, ==, 2);
+	g_assert_cmpint (gtk_tree_model_iter_n_children (GTK_TREE_MODEL (player->playlist_model), NULL), ==, 2);
+	g_assert_false (player->video_muted);
+	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->binaural_button)));
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "visualizer");
+	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_l, .state = GDK_CONTROL_MASK };
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	g_assert_true (gtk_widget_get_visible (player->playlist_scroll));
+	play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
+	g_assert_false (player->video_playing);
+	for (gint speed = 5; speed <= 6; speed++) {
+		gtk_combo_box_set_active (GTK_COMBO_BOX (player->speed_combo), speed);
+		g_assert_cmpfloat (player->playback_rate, ==, speed == 5 ? 2 : 3);
+		iterate_for (100);
+		g_assert_false (player->video_playing);
+		play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
+		iterate_for (200);
+		gint64 before, after;
+		g_assert_true (gst_element_query_position (player->pipeline, GST_FORMAT_TIME, &before));
+		gint64 start = g_get_monotonic_time ();
+		iterate_for (250);
+		g_assert_true (gst_element_query_position (player->pipeline, GST_FORMAT_TIME, &after));
+		double measured = (after - before) / ((g_get_monotonic_time () - start) * 1000.0);
+		g_assert_cmpfloat (fabs (measured - player->playback_rate), <, 0.35);
+		play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
+	}
+	g_signal_emit_by_name (player->next_button, "clicked");
+	WAIT_UNTIL (player->media_ready && player->video_playing && g_file_equal (player->current_file, second));
+	g_assert_cmpfloat (player->playback_rate, ==, 3);
+	g_signal_emit_by_name (player->prev_button, "clicked");
+	WAIT_UNTIL (player->media_ready && g_file_equal (player->current_file, first));
+	key.keyval = GDK_KEY_Delete;
+	key.state = 0;
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	g_assert_true (g_file_equal (delete_target, first));
+	complete_preview_delete (TRUE, FALSE);
+	g_assert_true (g_file_equal (player->current_file, first));
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	complete_preview_delete (FALSE, TRUE);
+	WAIT_UNTIL (player->delete_request == NULL && player->media_ready &&
+		    g_file_equal (player->current_file, second) && player->playlist_fill_id == 0);
+	g_assert_cmpuint (player->dir_files->len, ==, 1);
+	g_assert_cmpint (gtk_tree_model_iter_n_children (GTK_TREE_MODEL (player->playlist_model), NULL), ==, 1);
+	g_assert_true (g_file_query_exists (image, NULL));
+	g_assert_cmpfloat (gtk_widget_get_opacity (GTK_WIDGET (player)), ==, 1);
+	gint width = gtk_widget_get_allocated_width (player->visualizer);
+	gint height = gtk_widget_get_allocated_height (player->visualizer);
+	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
+	cairo_t *cr = cairo_create (surface);
+	gtk_widget_draw (player->visualizer, cr);
+	cairo_destroy (cr);
+	cairo_surface_flush (surface);
+	guint32 *pixels = (guint32 *) cairo_image_surface_get_data (surface);
+	g_assert_cmphex (pixels[0] >> 24, ==, 0);
+	guint max_alpha = 0;
+	gint stride = cairo_image_surface_get_stride (surface) / 4;
+	for (gint y = 0; y < height; y++)
+		for (gint x = 0; x < width; x++)
+			max_alpha = MAX (max_alpha, pixels[y * stride + x] >> 24);
+	g_assert_cmpuint (max_alpha, ==, 255);
+	cairo_surface_destroy (surface);
+	GdkEventWindowState fullscreen = { .new_window_state = GDK_WINDOW_STATE_FULLSCREEN };
+	preview_window_state (GTK_WIDGET (player), &fullscreen, NULL);
+	g_assert_true (gtk_widget_get_parent (player->transport_revealer) == player->media_overlay);
+	key.keyval = GDK_KEY_Escape;
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	g_assert_false (player->destroyed);
+	fullscreen.new_window_state = 0;
+	preview_window_state (GTK_WIDGET (player), &fullscreen, NULL);
+	gint64 duration;
+	g_assert_true (gst_element_query_duration (player->pipeline, GST_FORMAT_TIME, &duration));
+	g_assert_true (media_seek_with_rate (player, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+					   duration - GST_SECOND / 5));
+	WAIT_UNTIL (player->player_finished && player->advance_id == 0);
+	g_assert_false (player->video_playing);
+	g_assert_true (g_file_equal (player->current_file, second));
+	play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
+	g_assert_true (player->video_playing);
+	g_assert_false (player->player_finished);
+	key.keyval = GDK_KEY_Delete;
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	complete_preview_delete (FALSE, TRUE);
+	WAIT_UNTIL (player->destroyed);
+	gtk_widget_destroy (GTK_WIDGET (player));
+	g_object_unref (player);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	g_object_unref (second);
+	remove_fixture (image);
+	g_object_unref (first);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
+test_player_voice_pitch (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-pitch-XXXXXX", NULL);
+	GFile *file = player_track_fixture (directory, "voice.wav");
+	g_autofree char *uri = g_file_get_uri (file);
+	for (guint rate = 2; rate <= 3; rate++) {
+		GError *error = NULL;
+		GstElement *pipeline = gst_element_factory_make ("playbin", NULL);
+		GstElement *filter = nemo_media_audio_filter_new (&error);
+		GstElement *sink = gst_element_factory_make ("appsink", NULL);
+		g_assert_no_error (error);
+		gst_object_ref_sink (sink);
+		GstCaps *caps = gst_caps_new_simple ("audio/x-raw", "channels", G_TYPE_INT, 2,
+			"rate", G_TYPE_INT, 48000, "format", G_TYPE_STRING,
+			G_BYTE_ORDER == G_LITTLE_ENDIAN ? "F32LE" : "F32BE", NULL);
+		g_object_set (sink, "caps", caps, NULL);
+		gst_caps_unref (caps);
+		g_object_set (pipeline, "uri", uri, "audio-filter", filter, "audio-sink", sink, NULL);
+		g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PAUSED), !=, GST_STATE_CHANGE_FAILURE);
+		g_assert_cmpint (gst_element_get_state (pipeline, NULL, NULL, 5 * GST_SECOND), ==, GST_STATE_CHANGE_SUCCESS);
+		g_assert_true (gst_element_seek (pipeline, rate, GST_FORMAT_TIME,
+			GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+			GST_SEEK_TYPE_SET, 0, GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE));
+		g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
+		guint frames = 0, crossings = 0;
+		float previous = 0;
+		while (frames < 48000) {
+			GstSample *sample = gst_app_sink_try_pull_sample (GST_APP_SINK (sink), 5 * GST_SECOND);
+			g_assert_nonnull (sample);
+			GstMapInfo map;
+			g_assert_true (gst_buffer_map (gst_sample_get_buffer (sample), &map, GST_MAP_READ));
+			float *values = (float *) map.data;
+			for (guint i = 0; i < map.size / sizeof (float); i += 2) {
+				if (values[i] > 0 && previous <= 0)
+					crossings++;
+				previous = values[i];
+				frames++;
+			}
+			gst_buffer_unmap (gst_sample_get_buffer (sample), &map);
+			gst_sample_unref (sample);
+		}
+		double frequency = crossings * 48000.0 / frames;
+		g_assert_cmpfloat (fabs (frequency - 440), <, 8);
+		gst_element_set_state (pipeline, GST_STATE_NULL);
+		gst_object_unref (pipeline);
+		gst_object_unref (sink);
+		gst_object_unref (filter);
+	}
+	remove_fixture (file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
+test_player_error_recovery (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-errors-XXXXXX", NULL);
+	GFile *valid = player_track_fixture (directory, "a.wav");
+	g_autofree char *broken_path = g_build_filename (directory, "broken.wav", NULL);
+	g_assert_true (g_file_set_contents (broken_path, "not audio", -1, NULL));
+	GFile *broken = g_file_new_for_path (broken_path);
+	NemoQuickPreview *player = g_object_ref_sink (nemo_quick_preview_new_player ());
+	nemo_quick_preview_show_file (player, broken, NULL);
+	WAIT_UNTIL (player->mode == PREVIEW_MEDIA && player->pipeline == NULL &&
+		    player->dir_files != NULL && player->playlist_fill_id == 0);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->stack)), ==, "status");
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->playlist_button), TRUE);
+	WAIT_UNTIL (gtk_widget_get_mapped (player->playlist_view));
+	GtkTreePath *path = gtk_tree_path_new_from_indices (0, -1);
+	player_row_activated (GTK_TREE_VIEW (player->playlist_view), path, NULL, player);
+	gtk_tree_path_free (path);
+	WAIT_UNTIL (player->media_ready && player->video_playing);
+	g_assert_true (g_file_equal (player->current_file, valid));
+	g_autofree char *encoded = preview_media_fixture (0, 0);
+	g_autofree char *webm_path = g_build_filename (directory, "audio-only.webm", NULL);
+	g_assert_cmpint (g_rename (encoded, webm_path), ==, 0);
+	GFile *webm = g_file_new_for_path (webm_path);
+	nemo_quick_preview_show_file (player, webm, NULL);
+	WAIT_UNTIL (player->media_ready);
+	g_assert_true (player->media_is_audio);
+	g_assert_nonnull (player->pipeline);
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "visualizer");
+	gtk_widget_destroy (GTK_WIDGET (player));
+	g_object_unref (player);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (valid);
+	remove_fixture (broken);
+	remove_fixture (webm);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
+test_player_independent_windows (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-windows-XXXXXX", NULL);
+	GFile *file = player_track_fixture (directory, "track.wav");
+	NemoQuickPreview *players[6];
+	for (guint i = 0; i < G_N_ELEMENTS (players); i++) {
+		players[i] = g_object_ref_sink (nemo_quick_preview_new_player ());
+		nemo_quick_preview_show_file (players[i], file, NULL);
+		WAIT_UNTIL (players[i]->media_ready && players[i]->video_playing);
+	}
+	g_assert_cmpint (g_atomic_int_get (&media_pipeline_count), ==, G_N_ELEMENTS (players));
+	for (guint i = 0; i < G_N_ELEMENTS (players); i++) {
+		for (guint j = i + 1; j < G_N_ELEMENTS (players); j++) {
+			g_assert_true (players[j]->video_playing);
+			g_assert_nonnull (players[j]->pipeline);
+			g_assert_true (players[i]->pipeline != players[j]->pipeline);
+		}
+		gtk_widget_destroy (GTK_WIDGET (players[i]));
+		g_object_unref (players[i]);
+	}
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	g_assert_cmpint (g_atomic_int_get (&media_transition_count), ==, 0);
+	remove_fixture (file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
+test_player_audio_effects (void)
+{
+	for (guint enabled = 0; enabled <= 1; enabled++) {
+		GError *error = NULL;
+		GstElement *pipeline = gst_pipeline_new (NULL);
+		GstElement *source = gst_element_factory_make ("audiotestsrc", NULL);
+		GstElement *capsfilter = gst_element_factory_make ("capsfilter", NULL);
+		GstElement *filter = nemo_media_audio_filter_new (&error);
+		GstElement *sink = gst_element_factory_make ("appsink", NULL);
+		g_assert_no_error (error);
+		g_assert_nonnull (filter);
+		GstCaps *caps = gst_caps_from_string ("audio/x-raw,rate=48000,channels=2");
+		g_object_set (capsfilter, "caps", caps, NULL);
+		gst_caps_unref (caps);
+		g_object_set (source, "num-buffers", 100, "samplesperbuffer", 480, NULL);
+		gst_util_set_object_arg (G_OBJECT (source), "wave", "silence");
+		nemo_media_audio_set_binaural (filter, enabled);
+		gst_bin_add_many (GST_BIN (pipeline), source, capsfilter, filter, sink, NULL);
+		g_assert_true (gst_element_link_many (source, capsfilter, filter, sink, NULL));
+		g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
+		GArray *samples = g_array_new (FALSE, FALSE, sizeof (float));
+		for (;;) {
+			GstSample *sample = gst_app_sink_try_pull_sample (GST_APP_SINK (sink), 5 * GST_SECOND);
+			if (sample == NULL) {
+				g_assert_true (gst_app_sink_is_eos (GST_APP_SINK (sink)));
+				break;
+			}
+			GstMapInfo map;
+			g_assert_true (gst_buffer_map (gst_sample_get_buffer (sample), &map, GST_MAP_READ));
+			g_array_append_vals (samples, map.data, map.size / sizeof (float));
+			gst_buffer_unmap (gst_sample_get_buffer (sample), &map);
+			gst_sample_unref (sample);
+		}
+		g_assert_cmpuint (samples->len, ==, 96000);
+		guint crossings[2] = { 0, 0 };
+		double squares[2] = { 0, 0 };
+		for (guint i = 48000; i < samples->len; i++) {
+			float value = g_array_index (samples, float, i);
+			g_assert_true (isfinite (value));
+			g_assert_cmpfloat (fabs (value), <=, 1);
+			squares[i % 2] += value * value;
+			if (value > 0 && g_array_index (samples, float, i - 2) <= 0)
+				crossings[i % 2]++;
+		}
+		for (guint channel = 0; channel < 2; channel++) {
+			double rms = sqrt (squares[channel] / 24000);
+			if (enabled) {
+				g_assert_cmpfloat (rms, >, 0.0069);
+				g_assert_cmpfloat (rms, <, 0.0072);
+				g_assert_cmpint (abs ((gint) crossings[channel] * 2 - (channel == 0 ? 200 : 240)), <=, 2);
+			} else
+				g_assert_cmpfloat (rms, ==, 0);
+		}
+		g_array_unref (samples);
+		gst_element_set_state (pipeline, GST_STATE_NULL);
+		gst_object_unref (pipeline);
+		gst_object_unref (filter);
+	}
+}
+#endif
+
 int
 main (int argc, char **argv)
 {
@@ -1589,6 +1884,11 @@ main (int argc, char **argv)
 	g_assert_cmpstr (gdk_display_get_name (gdk_display_get_default ()), ==, g_getenv ("DISPLAY"));
 	g_test_message ("GTK display: %s", gdk_display_get_name (gdk_display_get_default ()));
 #ifdef HAVE_GSTREAMER
+	g_test_add_func ("/preview/player/transport-speed-playlist-delete", test_player_transport);
+	g_test_add_func ("/preview/player/stereo-tones-default-off", test_player_audio_effects);
+	g_test_add_func ("/preview/player/preserve-voice-pitch-2x-3x", test_player_voice_pitch);
+	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);
+	g_test_add_func ("/preview/player/six-independent-windows", test_player_independent_windows);
 	gst_init (&argc, &argv);
 #endif
 	main_thread = g_thread_self ();

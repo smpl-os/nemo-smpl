@@ -51,7 +51,7 @@ preview_media_encode_fixture (const char *description, const char *suffix)
 	return path;
 }
 
-static char *
+static G_GNUC_UNUSED char *
 preview_media_fixture (int width, int height)
 {
 	g_autofree char *description = width == 0 ? g_strdup (
@@ -79,7 +79,7 @@ preview_decoder_restore (gpointer data)
 	g_free (saved);
 }
 
-static GPtrArray *
+static G_GNUC_UNUSED GPtrArray *
 preview_disable_video_decoders (void)
 {
 	GList *factories = gst_element_factory_list_get_elements (

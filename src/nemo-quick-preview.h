@@ -22,6 +22,9 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (NemoQuickPreview, nemo_quick_preview, NEMO, QUICK_PREVIEW, GtkWindow)
 
 NemoQuickPreview *nemo_quick_preview_get_instance (void);
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+NemoQuickPreview *nemo_quick_preview_new_player (void);
+#endif
 void              nemo_quick_preview_show_file    (NemoQuickPreview *self,
                                                    GFile            *file,
                                                    GtkWindow        *parent);

@@ -91,6 +91,7 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 #ifdef NEMO_SMPL
 	{ "quick-preview-previous-file", NULL, N_("Previous File in Quick Preview"), N_("Quick Preview"), "<Control>Left", NULL, NULL },
 	{ "quick-preview-next-file", NULL, N_("Next File in Quick Preview"), N_("Quick Preview"), "<Control>Right", NULL, NULL },
+	{ "quick-preview-playlist", NULL, N_("Toggle Media Player Playlist"), N_("Quick Preview"), "<Control>l", NULL, NULL },
 	{ "type-jump-next", NULL, N_("Next Matching Filename"), N_("Type to Jump"), "Down", NULL, NULL },
 	{ "type-jump-previous", NULL, N_("Previous Matching Filename"), N_("Type to Jump"), "Up", NULL, NULL },
 #endif

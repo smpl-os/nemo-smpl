@@ -47,6 +47,9 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/app/gstappsink.h>
+#ifdef NEMO_SMPL
+#include "nemo-media-effects.h"
+#endif
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -119,6 +122,24 @@ struct _NemoQuickPreview {
 	guint        media_load_timeout_id;
 	GFile       *media_file;
 	gint64       media_resume_position;
+	GtkWidget   *player_display;
+	GtkWidget   *visualizer;
+	GtkWidget   *playlist_scroll;
+	GtkWidget   *playlist_view;
+	GtkListStore *playlist_model;
+	GtkWidget   *speed_combo;
+	GtkWidget   *binaural_button;
+	GtkWidget   *playlist_button;
+	GtkWidget   *visuals_button;
+	GstElement  *audio_filter;
+	guint        playlist_fill_id;
+	guint        playlist_fill_index;
+	guint        advance_id;
+	gboolean     eos_pending;
+	gboolean     player_finished;
+	gboolean     rate_applied;
+	gboolean     opening_track;
+	double       playback_rate;
 #endif
 
 	/* Frame rendering (appsink → cairo) */
@@ -166,6 +187,8 @@ struct _NemoQuickPreview {
 	GCancellable *navigation_cancel;
 	PreviewRequest *delete_request;
 	gboolean     destroyed;
+	gboolean     player_mode;
+	GApplication *player_application;
 #endif
 };
 
@@ -226,6 +249,7 @@ image_load_failed (NemoImageViewer *viewer, const char *message,
 struct _PreviewRequest {
 	GWeakRef preview;
 	GFile *file;
+	gboolean media_only;
 };
 
 static PreviewRequest *
@@ -234,6 +258,7 @@ preview_request_new (NemoQuickPreview *self, GFile *file)
 	PreviewRequest *request = g_new0 (PreviewRequest, 1);
 	g_weak_ref_init (&request->preview, self);
 	request->file = g_object_ref (file);
+	request->media_only = self->player_mode;
 	return request;
 }
 
@@ -310,10 +335,20 @@ navigation_shortcuts_changed (GSettings *settings, const char *key, NemoQuickPre
 {
 	if (self->destroyed)
 		return;
-	GtkWidget *buttons[] = { self->prev_button, self->next_button };
-	const char *keys[] = { "quick-preview-previous-file", "quick-preview-next-file" };
-	const char *descriptions[] = { _("Previous file"), _("Next file") };
+	GtkWidget *buttons[] = { self->prev_button, self->next_button,
+#ifdef HAVE_GSTREAMER
+		self->playlist_button
+#endif
+	};
+	const char *keys[] = { "quick-preview-previous-file", "quick-preview-next-file", "quick-preview-playlist" };
+	const char *descriptions[] = {
+		self->player_mode ? _("Previous track") : _("Previous file"),
+		self->player_mode ? _("Next track") : _("Next file"),
+		_("Show directory playlist")
+	};
 	for (guint i = 0; i < G_N_ELEMENTS (buttons); i++) {
+		if (buttons[i] == NULL)
+			continue;
 		g_autofree char *value = g_settings_get_string (settings, keys[i]);
 		guint keyval;
 		GdkModifierType modifiers;
@@ -466,6 +501,7 @@ static void     play_pause_clicked_cb  (GtkButton *btn, gpointer data);
 static void     mute_clicked_cb        (GtkButton *btn, gpointer data);
 static gboolean seek_press_cb          (GtkWidget *widget, GdkEventButton *event, gpointer data);
 static gboolean seek_release_cb        (GtkWidget *widget, GdkEventButton *event, gpointer data);
+static gboolean media_seek_with_rate   (NemoQuickPreview *self, GstSeekFlags flags, gint64 position);
 
 static void
 media_controls_layout (NemoQuickPreview *self)
@@ -554,6 +590,150 @@ static void     load_file_content      (NemoQuickPreview *self, GFile *file);
 static void     navigate_to_offset     (NemoQuickPreview *self, gint offset);
 static void     update_navigation_ui   (NemoQuickPreview *self);
 
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+static void
+player_sync_selection (NemoQuickPreview *self)
+{
+	if (!self->player_mode || self->current_index < 0)
+		return;
+	GtkTreePath *path = gtk_tree_path_new_from_indices (self->current_index, -1);
+	gtk_tree_selection_select_path (gtk_tree_view_get_selection (GTK_TREE_VIEW (self->playlist_view)), path);
+	gtk_tree_view_set_cursor (GTK_TREE_VIEW (self->playlist_view), path, NULL, FALSE);
+	gtk_tree_path_free (path);
+}
+
+static gboolean
+player_fill_playlist (gpointer data)
+{
+	NemoQuickPreview *self = data;
+	guint end = MIN (self->playlist_fill_index + 200, self->dir_files->len);
+	for (; self->playlist_fill_index < end; self->playlist_fill_index++) {
+		GFile *file = g_ptr_array_index (self->dir_files, self->playlist_fill_index);
+		g_autofree char *basename = g_file_get_basename (file);
+		g_autofree char *name = g_filename_display_name (basename);
+		GtkTreeIter iter;
+		gtk_list_store_insert_with_values (self->playlist_model, &iter, -1, 0, name, -1);
+	}
+	if (self->playlist_fill_index < self->dir_files->len)
+		return G_SOURCE_CONTINUE;
+	self->playlist_fill_id = 0;
+	player_sync_selection (self);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+player_rebuild_playlist (NemoQuickPreview *self)
+{
+	if (!self->player_mode)
+		return;
+	if (self->playlist_fill_id != 0) {
+		g_source_remove (self->playlist_fill_id);
+		self->playlist_fill_id = 0;
+	}
+	gtk_list_store_clear (self->playlist_model);
+	self->playlist_fill_index = 0;
+	if (self->dir_files != NULL)
+		self->playlist_fill_id = g_idle_add (player_fill_playlist, self);
+}
+
+static void
+player_set_playing (NemoQuickPreview *self, gboolean playing)
+{
+	if (!nemo_preview_media_set_state_async (self->pipeline,
+		playing ? GST_STATE_PLAYING : GST_STATE_PAUSED)) {
+		preview_set_status (self, _("The media state worker is busy. Try again shortly."));
+		media_stop (self);
+		return;
+	}
+	self->video_playing = playing;
+	nemo_media_visualizer_set_playing (NEMO_MEDIA_VISUALIZER (self->visualizer), playing);
+	gtk_button_set_image (GTK_BUTTON (self->play_btn),
+		gtk_image_new_from_icon_name (playing ? "media-playback-pause-symbolic" :
+			"media-playback-start-symbolic", GTK_ICON_SIZE_SMALL_TOOLBAR));
+}
+
+static gboolean
+player_advance (gpointer data)
+{
+	NemoQuickPreview *self = data;
+	self->advance_id = 0;
+	if (self->delete_request != NULL)
+		return G_SOURCE_REMOVE;
+	self->eos_pending = FALSE;
+	if (!self->destroyed && self->delete_request == NULL && self->dir_files != NULL &&
+	    self->current_index + 1 < (gint) self->dir_files->len)
+		navigate_to_offset (self, 1);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+player_schedule_next (NemoQuickPreview *self)
+{
+	if (self->player_mode && self->eos_pending && self->advance_id == 0 &&
+	    self->dir_files != NULL && self->delete_request == NULL)
+		self->advance_id = g_idle_add (player_advance, self);
+}
+
+static void
+player_playlist_toggled (GtkToggleButton *button, NemoQuickPreview *self)
+{
+	gtk_widget_set_visible (self->playlist_scroll, gtk_toggle_button_get_active (button));
+}
+
+static void
+player_row_activated (GtkTreeView *view, GtkTreePath *path,
+		      GtkTreeViewColumn *column, NemoQuickPreview *self)
+{
+	gint *indices = gtk_tree_path_get_indices (path);
+	if (indices != NULL)
+		navigate_to_offset (self, indices[0] - self->current_index);
+}
+
+static const double player_rates[] = { 0.5, 0.75, 1, 1.25, 1.5, 2, 3 };
+
+static void
+player_speed_changed (GtkComboBox *combo, NemoQuickPreview *self)
+{
+	gint index = gtk_combo_box_get_active (combo);
+	if (index < 0 || index >= (gint) G_N_ELEMENTS (player_rates))
+		return;
+	double previous = self->playback_rate;
+	self->playback_rate = player_rates[index];
+	self->rate_applied = FALSE;
+	if (self->pipeline == NULL || !self->media_ready)
+		return;
+	gint64 position;
+	if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &position) &&
+	    media_seek_with_rate (self, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, position)) {
+		self->rate_applied = TRUE;
+		return;
+	}
+	self->playback_rate = previous;
+	g_signal_handlers_block_by_func (combo, player_speed_changed, self);
+	for (guint i = 0; i < G_N_ELEMENTS (player_rates); i++)
+		if (player_rates[i] == previous)
+			gtk_combo_box_set_active (combo, i);
+	g_signal_handlers_unblock_by_func (combo, player_speed_changed, self);
+	gtk_label_set_text (GTK_LABEL (self->counter_label), _("This file does not support speed changes."));
+	g_debug ("Media player: speed change failed");
+}
+
+static void
+player_binaural_toggled (GtkToggleButton *button, NemoQuickPreview *self)
+{
+	if (self->audio_filter != NULL)
+		nemo_media_audio_set_binaural (self->audio_filter, gtk_toggle_button_get_active (button));
+}
+
+static void
+player_visuals_toggled (GtkToggleButton *button, NemoQuickPreview *self)
+{
+	gtk_widget_set_visible (self->visuals_button, !self->media_is_audio);
+	gtk_stack_set_visible_child_name (GTK_STACK (self->player_display),
+		self->media_is_audio || gtk_toggle_button_get_active (button) ? "visualizer" : "video");
+}
+#endif
+
 #ifdef NEMO_SMPL
 static void
 preview_deleted_file_checked (GObject *source, GAsyncResult *result, gpointer data)
@@ -579,6 +759,10 @@ preview_deleted_file_checked (GObject *source, GAsyncResult *result, gpointer da
 			if (self->dir_files == NULL || self->dir_files->len == 0) {
 				nemo_quick_preview_dismiss (self);
 			} else {
+#ifdef HAVE_GSTREAMER
+				player_rebuild_playlist (self);
+				self->opening_track = FALSE;
+#endif
 				GFile *next = g_ptr_array_index (self->dir_files, self->current_index);
 				g_set_object (&self->current_file, next);
 				load_file_content (self, next);
@@ -675,6 +859,14 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 
 #ifdef NEMO_SMPL
 	gboolean editing = GTK_IS_EDITABLE (gtk_window_get_focus (GTK_WINDOW (self)));
+#ifdef HAVE_GSTREAMER
+	if (self->player_mode && !editing && key_matches (event, "quick-preview-playlist")) {
+		GtkWidget *button = self->playlist_button;
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (button),
+			!gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (button)));
+		return GDK_EVENT_STOP;
+	}
+#endif
 	if (!editing && key_matches (event, "quick-preview-previous-file")) {
 		navigate_to_offset (self, -1);
 		return GDK_EVENT_STOP;
@@ -707,6 +899,12 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 
 	switch (event->keyval) {
 	case GDK_KEY_Escape:
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+		if (self->player_mode && self->fullscreen) {
+			gtk_window_unfullscreen (GTK_WINDOW (self));
+			return GDK_EVENT_STOP;
+		}
+#endif
 		if (gtk_search_bar_get_search_mode (GTK_SEARCH_BAR (self->search_bar))) {
 			gtk_search_bar_set_search_mode (
 				GTK_SEARCH_BAR (self->search_bar), FALSE);
@@ -746,8 +944,7 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 					if (new_pos < 0)
 						new_pos = 0;
 				}
-				gst_element_seek_simple (self->pipeline,
-					GST_FORMAT_TIME,
+				media_seek_with_rate (self,
 					GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
 					new_pos);
 			}
@@ -819,7 +1016,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			if (state == GST_STATE_PLAYING) {
 #ifdef NEMO_SMPL
 				self->video_playing = FALSE;
-				nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED);
+				if (self->player_mode)
+					player_set_playing (self, FALSE);
+				else
+					nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED);
 #else
 				gst_element_set_state (self->pipeline, GST_STATE_PAUSED);
 #endif
@@ -834,8 +1034,7 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			                                GST_FORMAT_TIME, &pos)) {
 				gint64 new_pos = forward ? pos + step : pos - step;
 				if (new_pos < 0) new_pos = 0;
-				gst_element_seek_simple (self->pipeline,
-					GST_FORMAT_TIME,
+				media_seek_with_rate (self,
 					GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
 					new_pos);
 			}
@@ -858,6 +1057,16 @@ on_delete_event (GtkWidget *widget, GdkEvent *event, gpointer data)
 {
 	nemo_quick_preview_dismiss (NEMO_QUICK_PREVIEW (widget));
 	return GDK_EVENT_STOP;   /* prevent destruction */
+}
+
+static void
+toggle_fullscreen (GtkButton *button, NemoQuickPreview *self)
+{
+	GdkWindow *window = gtk_widget_get_window (GTK_WIDGET (self));
+	if (window != NULL && (gdk_window_get_state (window) & GDK_WINDOW_STATE_FULLSCREEN))
+		gtk_window_unfullscreen (GTK_WINDOW (self));
+	else
+		gtk_window_fullscreen (GTK_WINDOW (self));
 }
 
 /* ------------------------------------------------------------------ */
@@ -918,6 +1127,10 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 #endif
 	self->mode = PREVIEW_NONE;
 	self->parent_window = NULL;
+	if (self->player_application != NULL) {
+		g_application_release (self->player_application);
+		g_clear_object (&self->player_application);
+	}
 	self->current_file = NULL;
 	self->current_dir = NULL;
 	self->dir_files = NULL;
@@ -989,6 +1202,8 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 	                         G_CALLBACK (navigation_shortcuts_changed), self, 0);
 	g_signal_connect_object (nemo_keybinding_settings, "changed::quick-preview-next-file",
 	                         G_CALLBACK (navigation_shortcuts_changed), self, 0);
+	g_signal_connect_object (nemo_keybinding_settings, "changed::quick-preview-playlist",
+	                         G_CALLBACK (navigation_shortcuts_changed), self, 0);
 	navigation_shortcuts_changed (nemo_keybinding_settings, NULL, self);
 #endif
 
@@ -997,8 +1212,7 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 		GtkWidget *fs_button = gtk_button_new_from_icon_name (
 			"view-fullscreen-symbolic", GTK_ICON_SIZE_BUTTON);
 		gtk_widget_set_tooltip_text (fs_button, _("Toggle fullscreen (F)"));
-		g_signal_connect_swapped (fs_button, "clicked",
-			G_CALLBACK (gtk_window_fullscreen), self);
+		g_signal_connect (fs_button, "clicked", G_CALLBACK (toggle_fullscreen), self);
 		gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), fs_button);
 	}
 
@@ -1345,6 +1559,101 @@ nemo_quick_preview_get_instance (void)
 	return _instance;
 }
 
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+NemoQuickPreview *
+nemo_quick_preview_new_player (void)
+{
+	NemoQuickPreview *self = g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL);
+	self->player_mode = TRUE;
+	self->opening_track = TRUE;
+	self->playback_rate = 1;
+	self->video_muted = FALSE;
+	gtk_window_set_type_hint (GTK_WINDOW (self), GDK_WINDOW_TYPE_HINT_NORMAL);
+	gtk_window_set_skip_taskbar_hint (GTK_WINDOW (self), FALSE);
+	gtk_window_set_position (GTK_WINDOW (self), GTK_WIN_POS_CENTER);
+	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar), _("Nemo Media Player"));
+
+	self->playlist_button = gtk_toggle_button_new ();
+	gtk_button_set_image (GTK_BUTTON (self->playlist_button),
+		gtk_image_new_from_icon_name ("view-list-symbolic", GTK_ICON_SIZE_BUTTON));
+	gtk_widget_set_tooltip_text (self->playlist_button, _("Show directory playlist (Ctrl+L)"));
+	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->playlist_button);
+	g_signal_connect (self->playlist_button, "toggled", G_CALLBACK (player_playlist_toggled), self);
+
+	self->visuals_button = gtk_toggle_button_new_with_label (_("Visuals"));
+	gtk_widget_set_no_show_all (self->visuals_button, TRUE);
+	gtk_widget_set_tooltip_text (self->visuals_button, _("Show smooth music visualization instead of video"));
+	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->visuals_button);
+	g_signal_connect (self->visuals_button, "toggled", G_CALLBACK (player_visuals_toggled), self);
+
+	self->player_display = gtk_stack_new ();
+	gtk_stack_set_transition_type (GTK_STACK (self->player_display), GTK_STACK_TRANSITION_TYPE_NONE);
+	g_object_ref (self->video_area);
+	gtk_container_remove (GTK_CONTAINER (self->media_overlay), self->video_area);
+	gtk_stack_add_named (GTK_STACK (self->player_display), self->video_area, "video");
+	g_object_unref (self->video_area);
+	self->visualizer = nemo_media_visualizer_new ();
+	gtk_stack_add_named (GTK_STACK (self->player_display), self->visualizer, "visualizer");
+	gtk_container_add (GTK_CONTAINER (self->media_overlay), self->player_display);
+
+	GtkWidget *body = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
+	GtkWidget *content_box = gtk_widget_get_parent (self->stack);
+	g_object_ref (self->stack);
+	gtk_container_remove (GTK_CONTAINER (content_box), self->stack);
+	gtk_paned_pack1 (GTK_PANED (body), self->stack, TRUE, FALSE);
+	g_object_unref (self->stack);
+	gtk_box_pack_start (GTK_BOX (content_box), body, TRUE, TRUE, 0);
+	self->playlist_model = gtk_list_store_new (1, G_TYPE_STRING);
+	self->playlist_view = gtk_tree_view_new_with_model (GTK_TREE_MODEL (self->playlist_model));
+	g_object_unref (self->playlist_model);
+	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (self->playlist_view), FALSE);
+	GtkCellRenderer *renderer = gtk_cell_renderer_text_new ();
+	g_object_set (renderer, "ellipsize", PANGO_ELLIPSIZE_MIDDLE, NULL);
+	gtk_tree_view_append_column (GTK_TREE_VIEW (self->playlist_view),
+		gtk_tree_view_column_new_with_attributes (_("Track"), renderer, "text", 0, NULL));
+	atk_object_set_name (gtk_widget_get_accessible (self->playlist_view), _("Directory playlist"));
+	g_signal_connect (self->playlist_view, "row-activated", G_CALLBACK (player_row_activated), self);
+	self->playlist_scroll = gtk_scrolled_window_new (NULL, NULL);
+	gtk_widget_set_size_request (self->playlist_scroll, 220, -1);
+	gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (self->playlist_scroll),
+		GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_container_add (GTK_CONTAINER (self->playlist_scroll), self->playlist_view);
+	gtk_paned_pack2 (GTK_PANED (body), self->playlist_scroll, FALSE, FALSE);
+	gtk_widget_show_all (self->playlist_scroll);
+	gtk_widget_set_no_show_all (self->playlist_scroll, TRUE);
+	gtk_widget_hide (self->playlist_scroll);
+
+	GtkWidget *controls = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_halign (controls, GTK_ALIGN_CENTER);
+	GtkWidget *transport = gtk_bin_get_child (GTK_BIN (gtk_bin_get_child (GTK_BIN (self->transport_revealer))));
+	gtk_box_pack_end (GTK_BOX (transport), controls, FALSE, FALSE, 4);
+	GtkWidget *navigation[] = { self->prev_button, self->next_button };
+	for (guint i = 0; i < G_N_ELEMENTS (navigation); i++) {
+		g_object_ref (navigation[i]);
+		gtk_container_remove (GTK_CONTAINER (self->header_bar), navigation[i]);
+		gtk_box_pack_start (GTK_BOX (controls), navigation[i], FALSE, FALSE, 0);
+		g_object_unref (navigation[i]);
+	}
+	navigation_shortcuts_changed (nemo_keybinding_settings, NULL, self);
+	self->speed_combo = gtk_combo_box_text_new ();
+	const char *rates[] = { "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x", "3x" };
+	for (guint i = 0; i < G_N_ELEMENTS (rates); i++)
+		gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->speed_combo), rates[i]);
+	gtk_combo_box_set_active (GTK_COMBO_BOX (self->speed_combo), 2);
+	gtk_widget_set_tooltip_text (self->speed_combo, _("Playback speed (preserves voice pitch)"));
+	atk_object_set_name (gtk_widget_get_accessible (self->speed_combo), _("Playback speed"));
+	g_signal_connect (self->speed_combo, "changed", G_CALLBACK (player_speed_changed), self);
+	gtk_box_pack_start (GTK_BOX (controls), self->speed_combo, FALSE, FALSE, 0);
+	self->binaural_button = gtk_check_button_new_with_label (_("Binaural tones"));
+	gtk_widget_set_tooltip_text (self->binaural_button,
+		_("Optional quiet 200/240 Hz stereo tones (40 Hz difference). Use stereo headphones at low volume. "
+		  "Not a medical treatment; no flashing visuals."));
+	g_signal_connect (self->binaural_button, "toggled", G_CALLBACK (player_binaural_toggled), self);
+	gtk_box_pack_start (GTK_BOX (controls), self->binaural_button, FALSE, FALSE, 0);
+	return self;
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Clear / reset current content                                      */
 /* ------------------------------------------------------------------ */
@@ -1386,6 +1695,14 @@ static void
 navigation_clear (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
+#ifdef HAVE_GSTREAMER
+	if (self->playlist_fill_id != 0) {
+		g_source_remove (self->playlist_fill_id);
+		self->playlist_fill_id = 0;
+	}
+	if (self->player_mode && !self->destroyed)
+		gtk_list_store_clear (self->playlist_model);
+#endif
 	cancel_request (&self->navigation_cancel);
 	self->delete_request = NULL;
 #endif
@@ -1405,7 +1722,11 @@ compare_files_by_name (gconstpointer a, gconstpointer b)
 
 	na = g_file_get_basename (fa);
 	nb = g_file_get_basename (fb);
-	result = g_utf8_collate (na, nb);
+	g_autofree char *display_a = g_filename_display_name (na);
+	g_autofree char *display_b = g_filename_display_name (nb);
+	result = g_utf8_collate (display_a, display_b);
+	if (result == 0)
+		result = strcmp (na, nb);
 	g_free (na);
 	g_free (nb);
 
@@ -1437,11 +1758,16 @@ directory_list_thread (GTask *task, gpointer source, gpointer task_data,
 	if (parent != NULL) {
 		enumerator = g_file_enumerate_children (parent,
 			G_FILE_ATTRIBUTE_STANDARD_NAME ","
-			G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN,
+			G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN ","
+			G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+			G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE,
 			G_FILE_QUERY_INFO_NONE, cancellable, &error);
 		if (enumerator != NULL) {
 			while ((info = g_file_enumerator_next_file (enumerator, cancellable, &error)) != NULL) {
-				if (!preview_file_info_is_hidden (info)) {
+				if ((!preview_file_info_is_hidden (info) || request->media_only) &&
+				    (!request->media_only ||
+				     (g_file_info_get_file_type (info) != G_FILE_TYPE_DIRECTORY &&
+				      nemo_preview_mime_is_media (g_file_info_get_content_type (info))))) {
 					GFile *child = g_file_get_child (parent, g_file_info_get_name (info));
 					found |= g_file_equal (child, request->file);
 					g_ptr_array_add (files, child);
@@ -1493,6 +1819,9 @@ directory_list_ready (GObject *source, GAsyncResult *result, gpointer data)
 			g_debug ("Quick preview navigation: %s", error->message);
 		}
 		update_navigation_ui (self);
+#ifdef HAVE_GSTREAMER
+		player_rebuild_playlist (self);
+#endif
 		if (error != NULL)
 			gtk_label_set_text (GTK_LABEL (self->counter_label), _("Navigation unavailable"));
 	}
@@ -1622,6 +1951,12 @@ update_navigation_ui (NemoQuickPreview *self)
 	                         (gint) self->dir_files->len);
 	gtk_label_set_text (GTK_LABEL (self->counter_label), text);
 	g_free (text);
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+	if (self->player_mode) {
+		player_sync_selection (self);
+		player_schedule_next (self);
+	}
+#endif
 }
 
 static void
@@ -1634,6 +1969,12 @@ show_file_content (NemoQuickPreview *self, GFile *file, GFileInfo *info)
 
 	content_type = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
 	display_name = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME);
+#ifdef NEMO_SMPL
+	if (self->player_mode && !nemo_preview_mime_is_media (content_type)) {
+		preview_set_status (self, _("The selected file is not playable media."));
+		return;
+	}
+#endif
 
 	/* Title = filename */
 	gtk_header_bar_set_title (GTK_HEADER_BAR (self->header_bar),
@@ -1800,6 +2141,10 @@ navigate_to_offset (NemoQuickPreview *self, gint offset)
 		return;
 
 	self->current_index = new_index;
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+	if (self->player_mode)
+		self->opening_track = FALSE;
+#endif
 	file = g_ptr_array_index (self->dir_files, new_index);
 
 	/* Update current_file */
@@ -1898,6 +2243,30 @@ preview_show_image (NemoQuickPreview *self, GFile *file)
 
 #ifdef HAVE_GSTREAMER
 
+static gboolean
+media_seek_with_rate (NemoQuickPreview *self, GstSeekFlags flags, gint64 position)
+{
+#ifdef NEMO_SMPL
+	if (self->player_mode) {
+		gboolean success = gst_element_seek (self->pipeline, self->playback_rate,
+			GST_FORMAT_TIME, flags, GST_SEEK_TYPE_SET, position, GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE);
+		if (success) {
+			self->player_finished = FALSE;
+			self->eos_pending = FALSE;
+			if (self->advance_id != 0) {
+				g_source_remove (self->advance_id);
+				self->advance_id = 0;
+			}
+		} else {
+			gtk_label_set_text (GTK_LABEL (self->counter_label), _("This file does not support seeking at this speed."));
+			g_debug ("Media player: seek failed at rate %.2f", self->playback_rate);
+		}
+		return success;
+	}
+#endif
+	return gst_element_seek_simple (self->pipeline, GST_FORMAT_TIME, flags, position);
+}
+
 #ifdef NEMO_SMPL
 static void
 media_load_complete (NemoQuickPreview *self)
@@ -1934,7 +2303,11 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 	switch (GST_MESSAGE_TYPE (message)) {
 #ifdef NEMO_SMPL
 	case GST_MESSAGE_ELEMENT: {
+		if (self->player_mode)
+			nemo_media_visualizer_handle_message (NEMO_MEDIA_VISUALIZER (self->visualizer), message);
 		g_autofree char *error = nemo_preview_media_missing_plugin (message, self->media_is_audio);
+		if (error == NULL && self->player_mode)
+			error = nemo_preview_media_missing_plugin (message, !self->media_is_audio);
 		if (error != NULL) {
 			preview_set_status (self, error);
 			media_stop (self);
@@ -1947,6 +2320,34 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 		if (GST_MESSAGE_SRC (message) != GST_OBJECT (self->pipeline))
 			break;
 		g_object_get (self->pipeline, "n-video", &video_streams, NULL);
+		if (self->player_mode && !self->media_is_audio && video_streams == 0) {
+			gint audio_streams;
+			g_object_get (self->pipeline, "n-audio", &audio_streams, NULL);
+			if (audio_streams > 0) {
+				self->media_is_audio = TRUE;
+				player_visuals_toggled (GTK_TOGGLE_BUTTON (self->visuals_button), self);
+			}
+		}
+		if (self->player_mode && !self->media_ready &&
+		    (self->media_is_audio || video_streams > 0)) {
+			if (self->media_resume_position > 0 || (!self->rate_applied && self->playback_rate != 1)) {
+				gint64 position = self->media_resume_position, duration;
+				self->media_resume_position = 0;
+				self->rate_applied = TRUE;
+				if (gst_element_query_duration (self->pipeline, GST_FORMAT_TIME, &duration) &&
+				    duration > 0 && position >= duration)
+					position = 0;
+				if (!media_seek_with_rate (self, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, position)) {
+					preview_set_status (self, _("Unable to restore the requested playback position and speed."));
+					media_stop (self);
+				}
+			} else {
+				self->media_ready = TRUE;
+				media_load_complete (self);
+				player_set_playing (self, TRUE);
+			}
+			break;
+		}
 		if (!self->media_is_audio && video_streams == 0) {
 			preview_set_status (self, _("Unable to decode the video stream.\n"
 						   "Check that the required GStreamer video decoder is installed."));
@@ -1972,6 +2373,15 @@ media_bus_callback (GstBus *bus, GstMessage *message, gpointer data)
 	}
 #endif
 	case GST_MESSAGE_EOS:
+#ifdef NEMO_SMPL
+		if (self->player_mode) {
+			self->player_finished = TRUE;
+			self->eos_pending = TRUE;
+			player_set_playing (self, FALSE);
+			player_schedule_next (self);
+			break;
+		}
+#endif
 		/* Loop playback */
 		gst_element_seek_simple (self->pipeline, GST_FORMAT_TIME,
 		                         GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, 0);
@@ -2161,6 +2571,15 @@ play_pause_clicked_cb (GtkButton *btn, gpointer data)
 		return;
 
 #ifdef NEMO_SMPL
+	if (self->player_mode) {
+		if (!self->media_ready)
+			return;
+		if (self->player_finished &&
+		    !media_seek_with_rate (self, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, 0))
+			return;
+		player_set_playing (self, !self->video_playing);
+		return;
+	}
 	state = self->video_playing ? GST_STATE_PLAYING : GST_STATE_PAUSED;
 	self->video_playing = !self->video_playing;
 	nemo_preview_media_set_state_async (self->pipeline,
@@ -2295,8 +2714,7 @@ seek_release_cb (GtkWidget *widget, GdkEventButton *event, gpointer data)
 	fraction = gtk_range_get_value (GTK_RANGE (self->seek_scale));
 	if (gst_element_query_duration (self->pipeline, GST_FORMAT_TIME,
 	                                &dur) && dur > 0) {
-		gst_element_seek_simple (self->pipeline,
-			GST_FORMAT_TIME,
+		media_seek_with_rate (self,
 			GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
 			(gint64)(fraction * dur));
 	}
@@ -2314,9 +2732,14 @@ video_area_draw_cb (GtkWidget *widget,
 
 	gtk_widget_get_allocation (widget, &alloc);
 
-	/* Always paint black background */
-	cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
-	cairo_paint (cr);
+	/* Player letterboxing inherits the native-alpha window background. */
+#ifdef NEMO_SMPL
+	if (!self->player_mode)
+#endif
+	{
+		cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+		cairo_paint (cr);
+	}
 
 	g_mutex_lock (&self->frame_mutex);
 	if (self->frame_surface != NULL && self->video_width > 0 && self->video_height > 0) {
@@ -2373,6 +2796,20 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 		return;
 	}
 
+#ifdef NEMO_SMPL
+	if (self->player_mode) {
+		self->audio_filter = nemo_media_audio_filter_new (&init_error);
+		if (self->audio_filter == NULL) {
+			preview_set_status (self, init_error->message);
+			media_stop (self);
+			return;
+		}
+		nemo_media_audio_set_binaural (self->audio_filter,
+			gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->binaural_button)));
+		g_object_set (self->pipeline, "audio-filter", self->audio_filter, NULL);
+	}
+#endif
+
 	/* Use appsink as video sink — we extract frames and render with Cairo */
 #ifdef NEMO_SMPL
 	appsink = nemo_preview_media_create_sink (&init_error);
@@ -2409,7 +2846,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	self->video_playing = FALSE;
 	self->media_is_audio = is_audio;
 	self->media_file = g_object_ref (file);
-	nemo_media_position_lookup (file, &self->media_resume_position);
+	if (!self->player_mode || self->opening_track)
+		nemo_media_position_lookup (file, &self->media_resume_position);
 	self->media_load_timeout_id = g_timeout_add_seconds (
 		NEMO_PREVIEW_MEDIA_LOAD_SECONDS, media_load_timed_out, self);
 #else
@@ -2433,6 +2871,10 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "media");
 	gtk_widget_show_all (GTK_WIDGET (self));
 	media_controls_layout (self);
+#ifdef NEMO_SMPL
+	if (self->player_mode)
+		player_visuals_toggled (GTK_TOGGLE_BUTTON (self->visuals_button), self);
+#endif
 
 	/* Bus watch for EOS / errors */
 	bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
@@ -2508,7 +2950,7 @@ media_stop (NemoQuickPreview *self)
 	if (self->pipeline != NULL && self->media_ready && self->media_file != NULL) {
 		gint64 position;
 		if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &position)) {
-			nemo_media_position_store (self->media_file, position);
+			nemo_media_position_store (self->media_file, self->player_finished ? 0 : position);
 			nemo_document_position_flush ();
 		} else
 			g_warning ("Unable to read the closing media preview's playback position; "
@@ -2524,6 +2966,16 @@ media_stop (NemoQuickPreview *self)
 	self->media_frames = NULL;
 	self->media_ready = FALSE;
 	self->video_playing = FALSE;
+	self->rate_applied = FALSE;
+	self->eos_pending = FALSE;
+	self->player_finished = FALSE;
+	if (self->advance_id != 0) {
+		g_source_remove (self->advance_id);
+		self->advance_id = 0;
+	}
+	if (self->visualizer != NULL && !self->destroyed)
+		nemo_media_visualizer_set_playing (NEMO_MEDIA_VISUALIZER (self->visualizer), FALSE);
+	g_clear_pointer (&self->audio_filter, gst_object_unref);
 #endif
 	if (self->seek_update_id > 0) {
 		g_source_remove (self->seek_update_id);
@@ -2593,8 +3045,22 @@ nemo_quick_preview_show_file (NemoQuickPreview *self,
 	if (parent != NULL)
 		g_object_add_weak_pointer (G_OBJECT (parent), (gpointer *) &self->parent_window);
 #endif
-	if (parent != NULL)
+	if (parent != NULL
+#ifdef NEMO_SMPL
+	    && !self->player_mode
+#endif
+	   )
 		gtk_window_set_transient_for (GTK_WINDOW (self), parent);
+#ifdef NEMO_SMPL
+	if (self->player_mode && parent != NULL && self->player_application == NULL) {
+		GtkApplication *application = gtk_window_get_application (parent);
+		if (application != NULL) {
+			/* Browser window lists must not contain non-Nemo player windows. */
+			self->player_application = g_object_ref (G_APPLICATION (application));
+			g_application_hold (self->player_application);
+		}
+	}
+#endif
 	gtk_widget_show_all (GTK_WIDGET (self));
 	gtk_window_present (GTK_WINDOW (self));
 
@@ -2628,4 +3094,8 @@ nemo_quick_preview_dismiss (NemoQuickPreview *self)
 					     (gpointer *) &self->parent_window);
 #endif
 	self->parent_window = NULL;
+#ifdef NEMO_SMPL
+	if (self->player_mode)
+		gtk_widget_destroy (GTK_WIDGET (self));
+#endif
 }

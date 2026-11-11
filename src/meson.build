@@ -110,7 +110,7 @@ nemoDesktop_headers = [
 
 
 if smpl_features_enabled and gstreamer_enabled
-  nemoCommon_sources += 'nemo-archive-source.c'
+  nemoCommon_sources += ['nemo-archive-source.c', 'nemo-media-effects.c']
 endif
 if smpl_features_enabled
   nemoCommon_sources += ['nemo-archive-dialog.c', 'nemo-smpl-theme.c']

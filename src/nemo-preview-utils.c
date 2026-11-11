@@ -240,10 +240,11 @@ typedef struct {
 	gboolean finished;
 } MediaState;
 
-/* At most two transitions can block in a backend, with two more pipelines
- * pending. Coalescing avoids a teardown thread/queue entry per keypress. */
+/* Two workers bound blocking backend calls. Throttle new transitions while
+ * four are outstanding, but always accept shutdown of an existing player. */
 static GThreadPool *media_pool;
 static gint media_pipeline_count;
+static gint media_transition_count;
 
 static void
 media_state_free (gpointer data)
@@ -280,6 +281,7 @@ media_state_worker (gpointer data, gpointer unused)
 		if (requested == GST_STATE_NULL) {
 			state->finished = TRUE;
 			state->busy = FALSE;
+			g_atomic_int_add (&media_transition_count, -1);
 			g_mutex_unlock (&state->lock);
 			g_atomic_int_add (&media_pipeline_count, -1);
 			/* The worker owns the last potentially blocking unref. */
@@ -288,6 +290,7 @@ media_state_worker (gpointer data, gpointer unused)
 		}
 		if (state->requested == requested) {
 			state->busy = FALSE;
+			g_atomic_int_add (&media_transition_count, -1);
 			g_mutex_unlock (&state->lock);
 			return;
 		}
@@ -327,7 +330,7 @@ nemo_preview_media_set_state_async (GstElement *pipeline, GstState requested)
 		 * resources to dispose. It needs neither a worker nor a slot. */
 		if (requested == GST_STATE_NULL)
 			return TRUE;
-		if (g_atomic_int_get (&media_pipeline_count) >= 4)
+		if (g_atomic_int_get (&media_transition_count) >= 4)
 			return FALSE;
 		state = g_new0 (MediaState, 1);
 		g_mutex_init (&state->lock);
@@ -342,10 +345,16 @@ nemo_preview_media_set_state_async (GstElement *pipeline, GstState requested)
 		g_mutex_unlock (&state->lock);
 		return requested == GST_STATE_NULL;
 	}
+	if (!state->busy && requested != GST_STATE_NULL &&
+	    g_atomic_int_get (&media_transition_count) >= 4) {
+		g_mutex_unlock (&state->lock);
+		return FALSE;
+	}
 	state->requested = requested;
 	state->stopping = requested == GST_STATE_NULL;
 	if (!state->busy) {
 		state->busy = TRUE;
+		g_atomic_int_inc (&media_transition_count);
 		if (!g_thread_pool_push (media_pool, state, &error)) {
 			g_mutex_unlock (&state->lock);
 			g_debug ("Media preview transition queued without a worker: %s", error->message);

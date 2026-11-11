@@ -196,10 +196,39 @@ resources are released when switching or closing files. Decoders still need
 their own reference-frame memory, so high-resolution video can use substantial
 memory even in a small preview.
 
-F3 remembers an audio/video file's playback position when you close it or switch
-files. Reopening it seeks to that position and stays paused, ready to continue.
-The saved position survives restarting Nemo and is ignored if the file changes
-on disk. The reading/playback-position preference above also controls this.
+F3 on audio/video opens a **new independent Nemo Media Player window** each time,
+with audible autoplay. Players stay open when the file-manager window closes;
+opening a document or image does not interrupt them. **Ctrl+L** (configurable in
+Quick Preview shortcuts) shows the current directory's media-only playlist.
+Double-click a track or use the previous/next buttons or **Ctrl+Left/Right**.
+Playback advances automatically and stops at the end of the playlist; decoder
+errors are shown rather than silently skipping files.
+
+**Delete** sends only the playing track to Trash with Nemo's usual confirmation
+and error handling, just like image previews. Cancelling leaves the track alone;
+successful removal advances to the next track, or the previous one at the end.
+The speed selector offers **0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x and 3x**, preserving
+voice pitch for audiobooks. Speed is retained across tracks and seeks in that
+window. A file that cannot seek/change speed reports the limitation.
+
+The initially selected file resumes its saved position; playlist navigation
+starts each subsequent track at the beginning. Positions survive restarting
+Nemo, are ignored if the file changes, and use the reading/playback-position
+preference above. The existing sidebar preview remains independent and muted.
+
+Audio has an original, smooth, music-reactive ring visualization; **Visuals**
+also switches video to that view. It uses GStreamer's spectrum analysis without
+screen flashing or a separate visualization dependency. Reduced GTK animations
+stop its motion. Optional **Binaural tones**, off by default, mix quiet 200 Hz
+and 240 Hz stereo tones (a 40 Hz difference) after speed correction. Use stereo
+headphones at low volume; this is not a medical treatment and makes no meditation
+or therapeutic efficacy claims. There is no 40 Hz visual strobe.
+
+**F** or the fullscreen button toggles fullscreen; **Escape** exits fullscreen
+before closing the player. Native-alpha themes can make the background and video
+letterboxing translucent on composited desktops without fading text, controls,
+video or visualization foregrounds. Without a compositor the background is
+opaque; whole-window opacity is never reduced.
 
 Video transport shows the absolute, zero-based **Frame** number to the right of
 the timecode. It is calculated from playback time and the video's frame rate;

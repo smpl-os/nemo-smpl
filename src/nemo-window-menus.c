@@ -45,6 +45,7 @@
 #include "nemo-list-view.h"
 #include "nemo-toolbar.h"
 #include "nemo-quick-preview.h"
+#include "nemo-preview-utils.h"
 #include "nemo-keybindings.h"
 
 #include <gtk/gtk.h>
@@ -908,7 +909,13 @@ action_quick_preview_callback (GtkAction *action,
 	file = NEMO_FILE (selection->data);
 	location = nemo_file_get_location (file);
 
+#if defined(NEMO_SMPL) && defined(HAVE_GSTREAMER)
+	g_autofree char *mime = nemo_file_get_mime_type (file);
+	preview = nemo_preview_mime_is_media (mime) ?
+		nemo_quick_preview_new_player () : nemo_quick_preview_get_instance ();
+#else
 	preview = nemo_quick_preview_get_instance ();
+#endif
 	nemo_quick_preview_show_file (preview, location, GTK_WINDOW (window));
 
 	g_object_unref (location);
