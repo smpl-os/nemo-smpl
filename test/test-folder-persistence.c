@@ -619,7 +619,7 @@ test_detached_media_players (void)
     WAIT_FOR (pipeline_playing (2));
     g_autofree char *uri = NULL;
     g_autofree char *expected = g_file_get_uri (second);
-    g_object_get (g_ptr_array_index (player_pipelines, 2), "uri", &uri, NULL);
+    g_object_get (g_ptr_array_index (player_pipelines, 2), "current-uri", &uri, NULL);
     g_assert_cmpstr (uri, ==, expected);
     g_assert_true (gtk_widget_get_visible (GTK_WIDGET (document)));
     gtk_widget_destroy (GTK_WIDGET (fixture.window));
