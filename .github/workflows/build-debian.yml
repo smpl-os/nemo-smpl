@@ -33,13 +33,15 @@ jobs:
           apt-get update -qq
           apt-get install -y --no-install-recommends \
             build-essential devscripts debhelper dh-python equivs \
-            meson ninja-build pkgconf intltool itstool \
+            meson ninja-build pkgconf intltool itstool cmake curl ca-certificates \
             libgtk-3-dev libglib2.0-dev libjson-glib-dev \
             libx11-dev libxapp-dev libcinnamon-desktop-dev \
             libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
+            libepoxy-dev libopengl-dev libgl-dev libegl-dev libgl1-mesa-dri \
             libgstreamer-plugins-base1.0-dev libgsf-1-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            pulseaudio gstreamer1.0-pulseaudio \
             gobject-introspection libgirepository1.0-dev \
             gir1.2-gio-2.0-dev gir1.2-gtk-3.0-dev \
             gtk-doc-tools cinnamon-l10n libgtk-layer-shell-dev \
@@ -49,6 +51,12 @@ jobs:
             dbus-daemon xvfb xauth libarchive-dev libarchive-tools libsqlite3-dev \
             libisofs-dev xorriso \
             libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap
+
+      - name: Build and install pinned projectM 4 dependency packages
+        run: |
+          sh debian/build-projectm-packages.sh projectm-debian
+          dpkg -i projectm-debian/*.deb
+          pkg-config --atleast-version=4.1 projectM-4
 
       - name: Build Debian package
         run: |
@@ -64,12 +72,19 @@ jobs:
           useradd -m builder
           # Keep transfer fixtures on the host filesystem, not container overlayfs.
           BUILD_ROOT=$(mktemp -d "$(dirname "$PWD")/nemo-debian-build.XXXXXX")
-          cp -a . "$BUILD_ROOT/source"
+          mkdir "$BUILD_ROOT/source"
+          tar --exclude=./projectm-debian --exclude=./build -cf - . | tar -xf - -C "$BUILD_ROOT/source"
+          DEBIAN_VERSION=$(dpkg-parsechangelog --show-field Version)
+          DEBEMAIL=smpl-os@users.noreply.github.com DEBFULLNAME=smpl-os \
+            dch --changelog "$BUILD_ROOT/source/debian/changelog" \
+              --newversion "${DEBIAN_VERSION}+smpl${VERSION}" \
+              --distribution stable --force-distribution "smplOS Nemo ${VERSION} release."
           chown -R builder:builder "$BUILD_ROOT"
           runuser -u builder -- sh -c \
             'cd "$1" && dpkg-buildpackage -us -uc -b' sh "$BUILD_ROOT/source"
 
           mkdir -p debian-build
+          cp projectm-debian/*.deb projectm-debian/libprojectM-*.tar.gz debian-build/
           cp "$BUILD_ROOT"/nemo_*_amd64.deb "debian-build/nemo-smpl_${VERSION}_amd64.deb"
           cp "$BUILD_ROOT"/nemo-data_*_all.deb "debian-build/nemo-smpl-data_${VERSION}_all.deb"
           cp "$BUILD_ROOT"/libnemo-extension1_*_amd64.deb \
@@ -80,14 +95,18 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nemo-smpl-debian
-          path: debian-build/*.deb
+          path: |
+            debian-build/*.deb
+            debian-build/libprojectM-*.tar.gz
           retention-days: 14
 
       - name: Add to GitHub Release
         if: inputs.publish-release
         uses: softprops/action-gh-release@v3
         with:
-          files: debian-build/*.deb
+          files: |
+            debian-build/*.deb
+            debian-build/libprojectM-*.tar.gz
           tag_name: v${{ env.VERSION }}
           name: nemo-smpl ${{ env.VERSION }}
           generate_release_notes: true

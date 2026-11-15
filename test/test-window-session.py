@@ -2,9 +2,50 @@
 """Verify saved folders survive a real process exit in a private profile."""
 
 import os
+import ctypes
+import math
 from pathlib import Path
+import shutil
+import struct
 import subprocess
 import sys
+import time
+import wave
+
+
+def send_key(inspector, title, key, env, control=False):
+    xid = int(subprocess.check_output(
+        [inspector, "--window-id", title], env=env, timeout=15))
+    x11 = ctypes.CDLL("libX11.so.6")
+    xtst = ctypes.CDLL("libXtst.so.6")
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XSetInputFocus.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    x11.XStringToKeysym.argtypes = [ctypes.c_char_p]
+    x11.XStringToKeysym.restype = ctypes.c_ulong
+    x11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XKeysymToKeycode.restype = ctypes.c_uint
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    xtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+    display = x11.XOpenDisplay(env["DISPLAY"].encode())
+    if not display:
+        raise RuntimeError("Cannot connect to the isolated X display")
+    try:
+        x11.XSetInputFocus(display, xid, 2, 0)
+        code = x11.XKeysymToKeycode(display, x11.XStringToKeysym(key.encode()))
+        modifier = x11.XKeysymToKeycode(display, x11.XStringToKeysym(b"Control_L"))
+        if not code:
+            raise RuntimeError(f"No keycode for {key}")
+        if control:
+            xtst.XTestFakeKeyEvent(display, modifier, True, 0)
+        xtst.XTestFakeKeyEvent(display, code, True, 0)
+        xtst.XTestFakeKeyEvent(display, code, False, 0)
+        if control:
+            xtst.XTestFakeKeyEvent(display, modifier, False, 0)
+        x11.XSync(display, False)
+    finally:
+        x11.XCloseDisplay(display)
 
 
 def main():
@@ -31,6 +72,7 @@ def main():
     )
     log_path = profile / "window-session.log"
     process = None
+    audio_server = None
     with log_path.open("w+") as log:
         try:
             cases = [
@@ -69,6 +111,108 @@ def main():
                     raise RuntimeError(f"Nemo exited with status {process.returncode}")
                 if expected == unplugged:
                     unplugged.rmdir()
+            if env.get("NEMO_TEST_GSTREAMER") == "1":
+                track = first / "qualification.wav"
+                with wave.open(str(track), "wb") as audio:
+                    audio.setparams((2, 2, 44100, 0, "NONE", "not compressed"))
+                    frames = b"".join(struct.pack(
+                        "<hh", int(20000 * math.sin(2 * math.pi * 440 * i / 44100)),
+                        int(20000 * math.sin(2 * math.pi * 3520 * i / 44100)),
+                    ) for i in range(44100))
+                    audio.writeframes(frames * 30)
+                pulse = os.environ.get("NEMO_TEST_PULSE_EXE") or shutil.which("pulseaudio")
+                if not pulse:
+                    raise RuntimeError("Real F3 qualification requires pulseaudio for a private, clocked null sink")
+                audio_env = env.copy()
+                audio_env["PULSE_RUNTIME_PATH"] = str(profile / "pulse")
+                library_path = os.environ.get("NEMO_TEST_PULSE_LIBRARY_PATH")
+                if library_path:
+                    audio_env["LD_LIBRARY_PATH"] = library_path
+                socket = profile / "pulse" / "native"
+                arguments = [
+                    pulse, "--daemonize=no", "--use-pid-file=no", "--exit-idle-time=-1",
+                    "--realtime=no", "--high-priority=no", "--disable-shm=yes",
+                    "--log-target=stderr", "-n",
+                    "--load=module-null-sink sink_name=nemo-qualification rate=44100",
+                    f"--load=module-native-protocol-unix socket={socket} auth-anonymous=true",
+                ]
+                module_path = os.environ.get("NEMO_TEST_PULSE_MODULE_PATH")
+                if module_path:
+                    arguments.append(f"--dl-search-path={module_path}")
+                audio_server = subprocess.Popen(arguments, env=audio_env, stdout=log, stderr=log)
+                deadline = time.monotonic() + 10
+                while not socket.exists():
+                    if audio_server.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError("Private clocked audio server failed to start")
+                    time.sleep(0.02)
+                alsa = profile / "asound.conf"
+                alsa.write_text("pcm.!default { type null }\n", encoding="ascii")
+                env.update(
+                    ALSA_CONFIG_PATH=str(alsa), PULSE_SERVER=f"unix:{socket}",
+                    PIPEWIRE_REMOTE="nemo-no-audio-server", JACK_DEFAULT_SERVER="nemo-no-jack",
+                    JACK_NO_START_SERVER="1",
+                )
+                modes = ["stereo-spectrum", "spectrogram", "digital-rain"]
+                if env.get("NEMO_TEST_PROJECTM") == "1":
+                    modes.append("aurora-cathedral")
+                media = [(track, mode, mode) for mode in modes]
+                for codec in ("vp8", "vp9", "av1"):
+                    video = first / f"qualification-{codec}.webm"
+                    subprocess.run(
+                        [inspector, "--encode-webm", codec, str(video)],
+                        env=env, check=True, timeout=30,
+                    )
+                    media.append((video, "off", codec))
+                for selected, mode, case in media:
+                    for key, value in (("media-player-volume", "0.23"),
+                                       ("media-player-muted", "true"),
+                                       ("media-player-visual", mode)):
+                        subprocess.run(
+                            ["gsettings", "set", "org.nemo.preferences", key, value],
+                            env=env, check=True, timeout=10,
+                        )
+                    process = subprocess.Popen(
+                        [executable, "--no-desktop", "--select", str(selected)],
+                        env=env, stdout=log, stderr=log,
+                    )
+                    title = f"{first.name} - {first}"
+                    subprocess.run([inspector, "--wait-for-title", title], env=env, check=True, timeout=15)
+                    # Mapping precedes the asynchronous --select directory load.
+                    time.sleep(0.25)
+                    send_key(inspector, title, "F3", env)
+                    player_title = selected.name
+                    subprocess.run([inspector, "--wait-for-title", player_title], env=env, check=True, timeout=15)
+                    image = profile / f"player-native-{case}.png"
+                    deadline = time.monotonic() + 10
+                    while True:
+                        colored, black = map(int, subprocess.check_output(
+                            [inspector, "--capture-window", player_title, str(image)],
+                            env=env, timeout=15,
+                        ).split())
+                        if colored > 30 and black > 100:
+                            break
+                        if time.monotonic() > deadline:
+                            output = os.environ.get("NEMO_TEST_VISUAL_OUTPUT")
+                            if output:
+                                shutil.copyfile(image, Path(output) / image.name)
+                            raise RuntimeError(f"Actual F3 {case} did not render media: {colored=}, {black=}")
+                        time.sleep(0.1)
+                    output = os.environ.get("NEMO_TEST_VISUAL_OUTPUT")
+                    if output:
+                        shutil.copyfile(image, Path(output) / image.name)
+                    if case == "stereo-spectrum":
+                        send_key(inspector, player_title, "l", env, control=True)
+                        time.sleep(0.1)
+                        image = profile / "player-native-playlist.png"
+                        subprocess.run(
+                            [inspector, "--capture-window", player_title, str(image)],
+                            env=env, check=True, timeout=15, stdout=subprocess.DEVNULL,
+                        )
+                        if output:
+                            shutil.copyfile(image, Path(output) / image.name)
+                    send_key(inspector, title, "w", env, control=True)
+                    if process.wait(timeout=10) != 0:
+                        raise RuntimeError("Nemo did not naturally exit after closing the player's owner")
             # Overview bypasses directory loading; it must still release the
             # startup visibility gate and cancel a split pane's pending load.
             for left, right, active in (
@@ -126,14 +270,15 @@ def main():
             print(log_path.read_text(), file=sys.stderr)
             raise
         finally:
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-    print("Folder/Overview restoration, mapped windows and no-arg D-Bus reuse passed.")
+            for child in (process, audio_server):
+                if child is not None and child.poll() is None:
+                    child.terminate()
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait()
+    print("Folder/Overview restoration, D-Bus reuse and configured real-process F3 playback passed.")
     return 0
 
 

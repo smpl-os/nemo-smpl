@@ -640,9 +640,17 @@ prepare_document (const char *kind, const char *input, const char *pdf,
     argv[argc++] = staged_pdf;
     argv[argc++] = source;
     argv[argc] = NULL;
-    converter = g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_NONE, error);
-    if (converter == NULL || !g_subprocess_wait_check (converter, NULL, error))
-        goto out;
+    if (strcmp (kind, "pdf") == 0) {
+        /* Rewriting a PDF through MuPDF's writer rejects valid Type 3 fonts. */
+        g_autoptr(GFile) original = g_file_new_for_path (source);
+        g_autoptr(GFile) copy = g_file_new_for_path (staged_pdf);
+        if (!g_file_copy (original, copy, G_FILE_COPY_OVERWRITE, NULL, NULL, NULL, error))
+            goto out;
+    } else {
+        converter = g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_NONE, error);
+        if (converter == NULL || !g_subprocess_wait_check (converter, NULL, error))
+            goto out;
+    }
     document = open_document (staged_pdf, error);
     if (document == NULL)
         goto out;

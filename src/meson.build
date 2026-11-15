@@ -138,6 +138,7 @@ if gstreamer_enabled
   nemo_deps += gstreamer_video
   nemo_deps += gstreamer_app
   nemo_deps += gstreamer_pbutils
+  nemo_deps += gstreamer_fft
 endif
 
 if projectm_enabled

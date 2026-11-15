@@ -52,6 +52,23 @@ preview_media_encode_fixture (const char *description, const char *suffix)
 }
 
 static G_GNUC_UNUSED char *
+preview_webm_codec_fixture (const char *codec)
+{
+	const char *encoder = g_str_equal (codec, "vp8") ? "vp8enc deadline=1 threads=2" :
+		g_str_equal (codec, "vp9") ? "vp9enc deadline=1 threads=2" :
+		g_str_equal (codec, "av1") ? "av1enc cpu-used=8 threads=2 ! av1parse" : NULL;
+	g_assert_nonnull (encoder);
+	g_autofree char *description = g_strdup_printf (
+		"videotestsrc num-buffers=300 pattern=smpte ! "
+		"video/x-raw,format=I420,width=320,height=180,framerate=30/1 ! "
+		"%s ! queue ! mux. "
+		"audiotestsrc num-buffers=469 ! audio/x-raw,rate=48000,channels=2 ! "
+		"audioconvert ! opusenc ! queue ! mux. "
+		"webmmux name=mux ! filesink name=output", encoder);
+	return preview_media_encode_fixture (description, "webm");
+}
+
+static G_GNUC_UNUSED char *
 preview_media_fixture (int width, int height)
 {
 	g_autofree char *description = width == 0 ? g_strdup (

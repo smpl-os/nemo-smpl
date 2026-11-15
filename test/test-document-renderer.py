@@ -93,7 +93,7 @@ def read_png(path):
 
 
 def make_pdf(path, labels=("FirstSentinel", "MiddleSentinel", "LastSentinel"),
-             width=600, height=800, metadata=None):
+             width=600, height=800, metadata=None, type3=False):
     """Build small original PDF fixtures, including a proper cross-reference table."""
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -109,6 +109,14 @@ def make_pdf(path, labels=("FirstSentinel", "MiddleSentinel", "LastSentinel"),
              f"/Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * index} 0 R >>").encode(),
             f"<< /Length {len(content)} >>\nstream\n".encode() + content + b"endstream",
         ])
+    if type3:
+        objects[2] = (
+            "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] "
+            "/FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 "
+            "/Widths [600] /Encoding << /Type /Encoding /Differences [65 /A] >> "
+            f"/CharProcs << /A {len(objects) + 1} 0 R >> /Resources << >> >>").encode()
+        glyph = b"600 0 0 0 600 700 d1\n0 0 600 700 re f\n"
+        objects.append(f"<< /Length {len(glyph)} >>\nstream\n".encode() + glyph + b"endstream")
     info = ""
     if metadata:
         objects.append(f"<< /Title ({metadata}) /Author (Fixture Author) >>".encode())
@@ -379,11 +387,22 @@ class RendererTests(unittest.TestCase):
                 self.assert_visible(pixels)
                 self.assertEqual(self.search(pdf, "MOBISentinel"), {"found": True, "page": 0})
 
-    def test_pdf_normalization_search_wrap_and_highlight(self):
+    def test_pdf_preservation_search_wrap_and_highlight(self):
         pdf, metadata = self.prepare("pdf")
         self.assertEqual(metadata["page_count"], 3)
-        self.assertNotEqual(pdf.read_bytes(), (self.fixtures / "input.pdf").read_bytes())
+        self.assertEqual(pdf.read_bytes(), (self.fixtures / "input.pdf").read_bytes())
         self.assert_search_and_highlight(pdf)
+
+    def test_pdf_type3_fonts_are_preserved_rendered_and_searchable(self):
+        source = self.work / "type3.pdf"
+        make_pdf(source, labels=("A",), type3=True)
+        original = source.read_bytes()
+        pdf, metadata = self.prepare("pdf", source)
+        self.assertEqual(metadata["page_count"], 1)
+        self.assertEqual(pdf.read_bytes(), original)
+        self.assertEqual(source.read_bytes(), original)
+        self.assert_visible(self.render(pdf)[2], image=True)
+        self.assertEqual(self.search(pdf, "A"), {"found": True, "page": 0})
 
     def test_existing_pdf_search_wrap_and_highlight(self):
         self.assert_search_and_highlight(self.fixtures / "input.pdf")
@@ -565,30 +584,20 @@ class RendererTests(unittest.TestCase):
             converter.write_text(f"#!{sys.executable}\nimport os, sys\n{body}\n", encoding="utf-8")
             converter.chmod(0o700)
             with self.subTest(body=body):
-                self.prepare("pdf", ok=False, env=env)
+                self.prepare("markdown", ok=False, env=env)
         converter.unlink()
-        self.prepare("pdf", ok=False, env=env)
+        self.prepare("markdown", ok=False, env=env)
 
-    def test_metadata_bounds_and_preserving_outputs_on_converter_failure(self):
+    def test_metadata_bounds_and_preserving_outputs_on_invalid_pdf(self):
         source = self.work / "metadata.pdf"
         make_pdf(source, metadata="T" * 8192)
-        stub_dir = self.work / "bin"
-        stub_dir.mkdir(mode=0o700)
-        converter = stub_dir / "mutool"
-        converter.write_text(
-            f"#!{sys.executable}\nimport shutil, sys\n"
-            "shutil.copyfile(sys.argv[-1], sys.argv[sys.argv.index('-o') + 1])\n",
-            encoding="utf-8")
-        converter.chmod(0o700)
-        env = os.environ.copy()
-        env["PATH"] = str(stub_dir)
-        pdf, metadata = self.prepare("pdf", source, env=env)
+        pdf, metadata = self.prepare("pdf", source)
         self.assertEqual(metadata["title"], "T" * 4096)
         self.assertEqual(metadata["author"], "Fixture Author")
         metadata_path = pdf.with_suffix(".json")
         old_pdf, old_metadata = pdf.read_bytes(), metadata_path.read_bytes()
-        converter.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(37)\n", encoding="utf-8")
-        self.run_helper("prepare", "pdf", source, pdf, metadata_path, ok=False, env=env)
+        source.write_bytes(b"Not a PDF")
+        self.run_helper("prepare", "pdf", source, pdf, metadata_path, ok=False)
         self.assertEqual(pdf.read_bytes(), old_pdf)
         self.assertEqual(metadata_path.read_bytes(), old_metadata)
 

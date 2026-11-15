@@ -210,6 +210,13 @@ overview_find_widget (GtkWidget *root, GType type, const char *button_label)
     return found;
 }
 
+static gboolean
+overview_area_drawn (GtkWidget *widget, cairo_t *cr, gpointer data)
+{
+    *(gboolean *) data = TRUE;
+    return FALSE;
+}
+
 static void
 test_overview_heatmap_navigation (void)
 {
@@ -237,12 +244,11 @@ test_overview_heatmap_navigation (void)
     WAIT_FOR (!nemo_disk_treemap_is_loading (map));
     g_assert_true (nemo_disk_treemap_has_result (map));
     WAIT_FOR (gtk_widget_get_mapped (area));
-    cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
-        gtk_widget_get_allocated_width (area), gtk_widget_get_allocated_height (area));
-    cairo_t *cr = cairo_create (surface);
-    gtk_widget_draw (area, cr);
-    cairo_destroy (cr);
-    cairo_surface_destroy (surface);
+    gboolean painted = FALSE;
+    gulong draw = g_signal_connect_after (area, "draw", G_CALLBACK (overview_area_drawn), &painted);
+    gtk_widget_queue_draw (area);
+    WAIT_FOR (painted);
+    g_signal_handler_disconnect (area, draw);
     GdkEvent *event = gdk_event_new (GDK_2BUTTON_PRESS);
     event->button.window = g_object_ref (gtk_widget_get_window (area));
     event->button.button = 1;
@@ -680,7 +686,7 @@ run_case (gconstpointer data)
 }
 
 static int
-wait_for_window_title (const char *expected, guint expected_count)
+wait_for_window_title (const char *expected, guint expected_count, Window *result)
 {
     gtk_init (NULL, NULL);
     GdkDisplay *display = gdk_display_get_default ();
@@ -692,6 +698,7 @@ wait_for_window_title (const char *expected, guint expected_count)
         Window root, parent, *windows = NULL;
         unsigned int count = 0;
         guint found = 0;
+        Window matching = None;
         g_assert_true (XQueryTree (xdisplay, DefaultRootWindow (xdisplay),
                                   &root, &parent, &windows, &count));
         /* Other processes may destroy a window between QueryTree and FetchName. */
@@ -703,7 +710,10 @@ wait_for_window_title (const char *expected, guint expected_count)
                 if (g_str_equal (title, expected) &&
                     XGetWindowAttributes (xdisplay, windows[i], &attributes) &&
                     attributes.map_state == IsViewable)
+                {
                     found++;
+                    matching = windows[i];
+                }
                 g_string_append_printf (observed, "'%s' ", title);
             }
             if (title != NULL)
@@ -712,6 +722,8 @@ wait_for_window_title (const char *expected, guint expected_count)
         gdk_x11_display_error_trap_pop_ignored (display);
         XFree (windows);
         if (found == expected_count) {
+            if (result != NULL)
+                *result = matching;
             g_string_free (observed, TRUE);
             return 0;
         }
@@ -728,10 +740,51 @@ main (int argc, char **argv)
 {
     if (g_strcmp0 (g_getenv ("NEMO_TEST_ISOLATED"), "1") != 0)
         return 77;
+#ifdef HAVE_GSTREAMER
+    if (argc == 4 && g_str_equal (argv[1], "--encode-webm")) {
+        gst_init (NULL, NULL);
+        g_autofree char *path = preview_webm_codec_fixture (argv[2]);
+        g_assert_cmpint (g_rename (path, argv[3]), ==, 0);
+        return 0;
+    }
+#endif
     if ((argc == 3 || argc == 4) && g_str_equal (argv[1], "--wait-for-title")) {
         guint count = argc == 4 ? g_ascii_strtoull (argv[3], NULL, 10) : 1;
         g_assert_cmpuint (count, >, 0);
-        return wait_for_window_title (argv[2], count);
+        return wait_for_window_title (argv[2], count, NULL);
+    }
+    if ((argc == 3 && g_str_equal (argv[1], "--window-id")) ||
+        (argc == 4 && g_str_equal (argv[1], "--capture-window"))) {
+        Window xid;
+        int status = wait_for_window_title (argv[2], 1, &xid);
+        if (status != 0)
+            return status;
+        if (argc == 3) {
+            g_print ("%lu\n", xid);
+            return 0;
+        }
+        GdkWindow *window = gdk_x11_window_foreign_new_for_display (gdk_display_get_default (), xid);
+        gint width = gdk_window_get_width (window), height = gdk_window_get_height (window);
+        GdkPixbuf *shot = gdk_pixbuf_get_from_window (window, 0, 0, width, height);
+        g_assert_nonnull (shot);
+        GError *error = NULL;
+        g_assert_true (gdk_pixbuf_save (shot, argv[3], "png", &error, NULL));
+        g_assert_no_error (error);
+        guint colored = 0, black = 0;
+        gint channels = gdk_pixbuf_get_n_channels (shot), stride = gdk_pixbuf_get_rowstride (shot);
+        const guchar *pixels = gdk_pixbuf_read_pixels (shot);
+        for (gint y = height / 5; y < height * 3 / 4; y++)
+            for (gint x = width / 16; x < width * 15 / 16; x++) {
+                const guchar *p = pixels + y * stride + x * channels;
+                guint high = MAX (p[0], MAX (p[1], p[2]));
+                guint low = MIN (p[0], MIN (p[1], p[2]));
+                colored += high > 100 && low < 80 && high - low > 80;
+                black += high < 12;
+            }
+        g_print ("%u %u\n", colored, black);
+        g_object_unref (shot);
+        g_object_unref (window);
+        return 0;
     }
     gtk_test_init (&argc, &argv, NULL);
     static const FolderCase cases[] = {

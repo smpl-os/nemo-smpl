@@ -11,6 +11,7 @@ CONFIGURE_EXTRA_FLAGS = \
 	-D deprecated_warnings=false \
 	-D gtk_doc=true \
 	-D gtk_layer_shell=true \
+	-D projectm=enabled \
 	-D selinux=false
 
 export DEB_LDFLAGS_MAINT_APPEND = -Wl,-z,defs -Wl,-O1 -Wl,--as-needed

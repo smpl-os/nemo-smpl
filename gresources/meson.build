@@ -7,6 +7,9 @@ gresources = gnome.compile_resources(
 )
 
 if smpl_features_enabled
+  install_data('player-presets/LICENSE', 'player-presets/ORIGINS',
+    install_dir: nemoDataPath / 'player-presets',
+  )
   gresources += gnome.compile_resources(
     'nemo-default-icons', 'nemo-default-icons.gresource.xml',
     source_dir: '.',

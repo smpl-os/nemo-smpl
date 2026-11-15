@@ -1637,12 +1637,19 @@ test_player_transport (void)
 	g_assert_cmpfloat_with_epsilon (volume, 0.25, 0.0001);
 	gtk_range_set_value (GTK_RANGE (player->volume_scale), 24);
 	gtk_widget_grab_focus (player->video_area);
-	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->visuals_button)));
-	g_assert_false (gtk_widget_get_sensitive (player->next_visual_button));
+	g_assert_cmpint (gtk_combo_box_get_active (GTK_COMBO_BOX (player->visuals_combo)), ==, 0);
+	g_assert_true (gtk_widget_get_parent (player->mute_btn) == gtk_widget_get_parent (player->volume_scale));
+	GList *volume_children = gtk_container_get_children (GTK_CONTAINER (gtk_widget_get_parent (player->mute_btn)));
+	GList *mute_child = g_list_find (volume_children, player->mute_btn);
+	g_assert_nonnull (mute_child);
+	g_assert_nonnull (mute_child->next);
+	g_assert_true (mute_child->next->data == player->volume_scale);
+	g_list_free (volume_children);
 	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->binaural_button)));
 	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "audio");
 #ifdef HAVE_PROJECTM
-	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->visuals_button), TRUE);
+	gint chosen = nemo_media_visualizer_get_n_presets () - 1;
+	gtk_combo_box_set_active (GTK_COMBO_BOX (player->visuals_combo), chosen + 2);
 	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (player->visualizer);
 	WAIT_UNTIL (visual->last_pcm > 0 && (visual->frame != NULL || visual->render_error != NULL));
 	g_assert_null (visual->render_error);
@@ -1659,10 +1666,16 @@ test_player_transport (void)
 		g_assert_no_error (error);
 		g_object_unref (shot);
 	}
-	g_assert_true (gtk_widget_get_sensitive (player->next_visual_button));
-	g_signal_emit_by_name (player->next_visual_button, "clicked");
-	g_assert_cmpuint (visual->preset, ==, 1);
-	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->visuals_button), FALSE);
+	g_assert_cmpuint (visual->preset, ==, chosen);
+	g_assert_false (visual->automatic);
+	visual->preset_time = 29.99;
+	iterate_for (150);
+	g_assert_cmpuint (visual->preset, ==, chosen);
+	gtk_combo_box_set_active (GTK_COMBO_BOX (player->visuals_combo), 1);
+	visual->preset_time = 29.99;
+	WAIT_UNTIL (visual->preset != chosen);
+	g_assert_true (visual->automatic);
+	gtk_combo_box_set_active (GTK_COMBO_BOX (player->visuals_combo), 0);
 	WAIT_UNTIL (!visual->rendering);
 	g_assert_cmpuint (visual->tick, ==, 0);
 	gint64 last_pcm = visual->last_pcm;
@@ -1675,6 +1688,26 @@ test_player_transport (void)
 	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_l, .state = GDK_CONTROL_MASK };
 	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
 	g_assert_true (gtk_widget_get_visible (player->playlist_scroll));
+	GtkCssProvider *playlist_css = gtk_css_provider_new ();
+	gtk_css_provider_load_from_resource (playlist_css, "/org/nemo/nemo-style-application.css");
+	gtk_style_context_add_provider_for_screen (gtk_widget_get_screen (GTK_WIDGET (player)),
+		GTK_STYLE_PROVIDER (playlist_css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	GtkStyleContext *playlist_context = gtk_widget_get_style_context (player->playlist_view);
+	GdkRGBA expected_bg, expected_fg;
+	g_assert_true (gtk_style_context_lookup_color (playlist_context, "theme_selected_bg_color", &expected_bg));
+	g_assert_true (gtk_style_context_lookup_color (playlist_context, "theme_selected_fg_color", &expected_fg));
+	GtkStateFlags selection_states[] = { GTK_STATE_FLAG_SELECTED,
+		GTK_STATE_FLAG_SELECTED | GTK_STATE_FLAG_BACKDROP };
+	for (guint i = 0; i < G_N_ELEMENTS (selection_states); i++) {
+		GdkRGBA bg, fg;
+		gtk_style_context_get_background_color (playlist_context, selection_states[i], &bg);
+		gtk_style_context_get_color (playlist_context, selection_states[i], &fg);
+		g_assert_true (gdk_rgba_equal (&bg, &expected_bg));
+		g_assert_true (gdk_rgba_equal (&fg, &expected_fg));
+	}
+	gtk_style_context_remove_provider_for_screen (gtk_widget_get_screen (GTK_WIDGET (player)),
+		GTK_STYLE_PROVIDER (playlist_css));
+	g_object_unref (playlist_css);
 	play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
 	g_assert_false (player->video_playing);
 	for (gint speed = 5; speed <= 6; speed++) {
@@ -1693,13 +1726,19 @@ test_player_transport (void)
 		g_assert_cmpfloat (fabs (measured - player->playback_rate), <, 0.35);
 		play_pause_clicked_cb (GTK_BUTTON (player->play_btn), player);
 	}
+	gtk_combo_box_set_active_id (GTK_COMBO_BOX (player->visuals_combo), "stereo-spectrum");
 	g_signal_emit_by_name (player->next_button, "clicked");
 	WAIT_UNTIL (player->media_ready && player->video_playing && g_file_equal (player->current_file, second));
 	g_object_get (player->pipeline, "volume", &volume, NULL);
 	g_assert_cmpfloat_with_epsilon (volume, 0.24, 0.0001);
 	g_assert_cmpfloat (player->playback_rate, ==, 3);
+	g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, "stereo-spectrum");
+	g_assert_cmpuint (NEMO_MEDIA_VISUALIZER (player->visualizer)->preset, ==, 18);
+	g_assert_false (NEMO_MEDIA_VISUALIZER (player->visualizer)->automatic);
 	g_signal_emit_by_name (player->prev_button, "clicked");
 	WAIT_UNTIL (player->media_ready && g_file_equal (player->current_file, first));
+	g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, "stereo-spectrum");
+	gtk_combo_box_set_active_id (GTK_COMBO_BOX (player->visuals_combo), "off");
 	key.keyval = GDK_KEY_Delete;
 	key.state = 0;
 	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
@@ -1799,7 +1838,6 @@ test_player_voice_pitch (void)
 	g_assert_cmpint (g_rmdir (directory), ==, 0);
 }
 
-#ifdef HAVE_PROJECTM
 static double
 visual_frame_difference (cairo_surface_t *first, cairo_surface_t *second)
 {
@@ -1834,6 +1872,76 @@ visual_save_example (cairo_surface_t *surface, const char *name)
 	cairo_destroy (cr);
 	cairo_surface_destroy (output);
 }
+
+#ifdef HAVE_PROJECTM
+static cairo_surface_t *
+visual_render_test_preset (NemoMediaVisualizer *visual, const char *preset)
+{
+	VisualEngine *gpu = &visual->gpu;
+	g_assert_true (eglBindAPI (EGL_OPENGL_API));
+	g_assert_true (eglMakeCurrent (gpu->display, gpu->surface, gpu->surface, gpu->context));
+	projectm_load_preset_data (gpu->engine, preset, FALSE);
+	g_assert_null (gpu->error);
+	g_assert_true (eglMakeCurrent (gpu->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+	gpu->preset = visual->preset;
+	VisualFrame request = { .preset = visual->preset };
+	memcpy (request.pcm, visual->pcm, sizeof request.pcm);
+	cairo_surface_t *frame = NULL;
+	for (guint i = 0; i < 2; i++) {
+		g_clear_pointer (&frame, cairo_surface_destroy);
+		GTask *task = g_task_new (visual, NULL, NULL, NULL);
+		visual_render_worker (task, visual, &request, NULL);
+		GError *error = NULL;
+		frame = g_task_propagate_pointer (task, &error);
+		g_assert_no_error (error);
+		g_assert_nonnull (frame);
+		g_object_unref (task);
+	}
+	gpu->preset = G_MAXUINT;
+	return frame;
+}
+
+static void
+visual_assert_shader (NemoMediaVisualizer *visual, const char *preset, const char *stage)
+{
+	g_auto (GStrv) lines = g_strsplit (preset, "\n", -1);
+	gint last = -1;
+	for (guint i = 0; lines[i] != NULL; i++)
+		if (g_str_has_prefix (lines[i], stage))
+			last = i;
+	g_assert_cmpint (last, >=, 0);
+	GString *probe = g_string_new (NULL);
+	for (guint i = 0; lines[i] != NULL; i++) {
+		if (g_str_equal (stage, "warp_") && g_str_has_prefix (lines[i], "comp_"))
+			continue;
+		if ((gint) i == last) {
+			char *end = strrchr (lines[i], '}');
+			g_assert_nonnull (end);
+			g_string_append_len (probe, lines[i], end - lines[i]);
+			g_string_append (probe, " ret = float3(1,0,1); ");
+			g_string_append (probe, end);
+		} else {
+			g_string_append (probe, lines[i]);
+		}
+		g_string_append_c (probe, '\n');
+	}
+	g_test_message ("Checking %s shader", stage);
+	cairo_surface_t *frame = visual_render_test_preset (visual, probe->str);
+	g_string_free (probe, TRUE);
+	guint32 *pixels = (guint32 *) cairo_image_surface_get_data (frame);
+	guint magenta = 0, sampled = 0;
+	for (guint y = 16; y < VISUAL_HEIGHT - 16; y += 16)
+		for (guint x = 16; x < VISUAL_WIDTH - 16; x += 16) {
+			guint32 pixel = pixels[y * VISUAL_WIDTH + x];
+			if (((pixel >> 16) & 255) > 200 && (pixel & 255) > 200 &&
+			    ((pixel >> 8) & 255) < 60)
+				magenta++;
+			sampled++;
+		}
+	/* projectM can silently substitute a default shader after compilation errors. */
+	g_assert_cmpuint (magenta, >, sampled * 9 / 10);
+	cairo_surface_destroy (frame);
+}
 #endif
 
 static gboolean
@@ -1850,10 +1958,119 @@ visual_test_bus (GstBus *bus, GstMessage *message, gpointer data)
 }
 
 static void
+test_player_native_visuals (void)
+{
+	GError *error = NULL;
+	GstElement *pipeline = gst_parse_launch (
+		"interleave name=stereo ! audioconvert ! "
+		"audio/x-raw,rate=44100,format=F32LE,channels=2 ! identity name=audio "
+		"audiotestsrc is-live=true freq=440 ! audio/x-raw,rate=44100 ! stereo.sink_0 "
+		"audiotestsrc is-live=true freq=3520 ! audio/x-raw,rate=44100 ! stereo.sink_1", &error);
+	g_assert_no_error (error);
+	GstElement *audio = gst_bin_get_by_name (GST_BIN (pipeline), "audio");
+	GstElement *filter = nemo_media_audio_filter_new (&error);
+	GstElement *sink = gst_element_factory_make ("fakesink", NULL);
+	g_assert_no_error (error);
+	g_assert_nonnull (sink);
+	g_object_set (sink, "sync", TRUE, NULL);
+	gst_bin_add_many (GST_BIN (pipeline), filter, sink, NULL);
+	g_assert_true (gst_element_link_many (audio, filter, sink, NULL));
+	gst_object_unref (audio);
+	nemo_media_audio_set_visuals (filter, TRUE);
+	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (nemo_media_visualizer_new ());
+	nemo_media_visualizer_set_preset (visual, 18);
+	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (visual));
+	gtk_widget_show_all (window);
+#ifndef HAVE_PROJECTM
+	nemo_media_visualizer_set_preset (visual, 0);
+	WAIT_UNTIL (visual->render_error != NULL);
+	nemo_media_visualizer_set_preset (visual, 18);
+#endif
+	GstBus *bus = gst_element_get_bus (pipeline);
+	guint watch = gst_bus_add_watch (bus, visual_test_bus, visual);
+	gst_object_unref (bus);
+	g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
+	nemo_media_visualizer_set_playing (visual, TRUE);
+	WAIT_UNTIL (visual->rendered_frames >= 8 || visual->render_error != NULL);
+	g_assert_null (visual->render_error);
+	g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PAUSED), !=, GST_STATE_CHANGE_FAILURE);
+	GstState state;
+	gst_element_get_state (pipeline, &state, NULL, GST_SECOND);
+	g_assert_cmpint (state, ==, GST_STATE_PAUSED);
+	iterate_for (100);
+	nemo_media_visualizer_set_playing (visual, FALSE);
+	WAIT_UNTIL (!visual->rendering);
+	guint peaks[2] = { 0, 0 };
+	for (guint channel = 0; channel < 2; channel++) {
+		for (guint band = 1; band < SPECTRUM_BANDS; band++)
+			if (visual->native.levels[channel][band] > visual->native.levels[channel][peaks[channel]])
+				peaks[channel] = band;
+		double expected = channel == 0 ? 440 : 3520;
+		g_assert_cmpfloat (fabs (log (spectrum_frequency (peaks[channel]) / expected)), <, 0.1);
+		g_assert_cmpfloat (visual->native.levels[channel][peaks[channel]], >, 0.7);
+	}
+	g_assert_cmpfloat (visual->native.levels[0][peaks[1]], <, 0.2);
+	g_assert_cmpfloat (visual->native.levels[1][peaks[0]], <, 0.2);
+	visual_save_example (visual->frame, "player-stereo-spectrum.png");
+	guint before = visual->rendered_frames;
+	nemo_media_visualizer_set_preset (visual, 19);
+	WAIT_UNTIL (visual->rendered_frames > before && !visual->rendering);
+	g_assert_null (visual->render_error);
+	g_assert_nonnull (visual->native.history);
+	guint column = visual->native.history_write;
+	g_assert_cmpuint (column, >, 0);
+	guint32 *pixels = (guint32 *) cairo_image_surface_get_data (visual->native.history);
+	for (guint channel = 0; channel < 2; channel++)
+		g_assert_cmphex (pixels[(channel * SPECTRUM_BANDS + SPECTRUM_BANDS - 1 - peaks[channel]) *
+			HISTORY_COLUMNS + column - 1], !=, 0xff000000);
+	before = visual->rendered_frames;
+	nemo_media_visualizer_set_playing (visual, TRUE);
+	WAIT_UNTIL (visual->rendered_frames > before + 3);
+	nemo_media_visualizer_set_playing (visual, FALSE);
+	WAIT_UNTIL (!visual->rendering);
+	g_assert_cmpuint (visual->native.history_write, ==, column);
+	g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
+	before = visual->rendered_frames;
+	nemo_media_visualizer_set_playing (visual, TRUE);
+	WAIT_UNTIL (visual->rendered_frames > before + 8);
+	nemo_media_visualizer_set_playing (visual, FALSE);
+	WAIT_UNTIL (!visual->rendering);
+	g_assert_cmpuint (visual->native.history_write, >, column);
+	visual_save_example (visual->frame, "player-spectrogram.png");
+	before = visual->rendered_frames;
+	nemo_media_visualizer_set_preset (visual, 20);
+	WAIT_UNTIL (visual->rendered_frames > before && !visual->rendering);
+	cairo_surface_t *first = cairo_surface_reference (visual->frame);
+	before = visual->rendered_frames;
+	nemo_media_visualizer_set_playing (visual, TRUE);
+	WAIT_UNTIL (visual->rendered_frames > before + 6);
+	nemo_media_visualizer_set_playing (visual, FALSE);
+	WAIT_UNTIL (!visual->rendering);
+	g_assert_cmpfloat (visual_frame_difference (first, visual->frame), >, 0.1);
+	cairo_surface_destroy (first);
+	visual_save_example (visual->frame, "player-digital-rain.png");
+	gst_element_set_state (pipeline, GST_STATE_NULL);
+	iterate_for (50);
+	nemo_media_visualizer_reset (visual);
+	before = visual->rendered_frames;
+	nemo_media_visualizer_set_preset (visual, 19);
+	WAIT_UNTIL (visual->rendered_frames > before && !visual->rendering);
+	for (guint channel = 0; channel < 2; channel++)
+		for (guint band = 0; band < SPECTRUM_BANDS; band++)
+			g_assert_cmpfloat (visual->native.levels[channel][band], ==, 0);
+	g_source_remove (watch);
+	gtk_widget_destroy (window);
+	gst_object_unref (pipeline);
+	gst_object_unref (filter);
+}
+
+static void
 test_player_projectm_visuals (void)
 {
 	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
 	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (nemo_media_visualizer_new ());
+	nemo_media_visualizer_set_preset (visual, 6);
 	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (visual));
 	gtk_window_set_default_size (GTK_WINDOW (window), 960, 540);
 	gtk_widget_show_all (window);
@@ -1897,13 +2114,14 @@ test_player_projectm_visuals (void)
 	visual_save_example (first, "projectm-flow.png");
 	guint before = visual->rendered_frames;
 	nemo_media_visualizer_next (visual);
-	g_assert_cmpuint (visual->preset, ==, 1);
+	g_assert_cmpuint (visual->preset, ==, 7);
 	iterate_for (2000);
 	WAIT_UNTIL (visual->rendered_frames > before + 110 || visual->render_error != NULL);
 	g_assert_null (visual->render_error);
 	g_assert_cmpfloat (visual_frame_difference (first, visual->frame), >, 3);
 	visual_save_example (visual->frame, "projectm-lattice.png");
 	cairo_surface_destroy (first);
+	nemo_media_visualizer_set_preset (visual, -1);
 	visual->preset_time = 29.99;
 	before = visual->preset;
 	WAIT_UNTIL (visual->preset != before);
@@ -1914,8 +2132,8 @@ test_player_projectm_visuals (void)
 	nemo_media_visualizer_set_playing (visual, FALSE);
 	WAIT_UNTIL (!visual->rendering);
 #ifdef HAVE_PROJECTM
-	projectm_set_soft_cut_duration (visual->gpu.engine, 0.01);
-	for (guint preset = 0; preset < 12; preset++) {
+	projectm_set_soft_cut_duration (visual->gpu.engine, 0);
+	for (guint preset = 0; preset < nemo_media_visualizer_get_n_presets (); preset++) {
 		VisualFrame request = { .preset = preset };
 		memcpy (request.pcm, visual->pcm, sizeof request.pcm);
 		GTask *task = g_task_new (visual, NULL, NULL, NULL);
@@ -1926,7 +2144,22 @@ test_player_projectm_visuals (void)
 		g_assert_nonnull (frame);
 		cairo_surface_destroy (frame);
 		g_object_unref (task);
+		if (visual_presets[preset].resource != NULL) {
+			g_test_message ("Checking actual warp/comp shaders: %s", visual_presets[preset].name);
+			g_autofree char *data = visual_preset (preset, &render_error);
+			g_assert_no_error (render_error);
+			visual_assert_shader (visual, data, "warp_");
+			visual_assert_shader (visual, data, "comp_");
+		}
 	}
+	cairo_surface_t *black_test = visual_render_test_preset (visual,
+		"[preset00]\nMILKDROP_PRESET_VERSION=201\nPSVERSION_COMP=2\n"
+		"fGammaAdj=1\nfWaveAlpha=0\nfVideoEchoAlpha=0\n"
+		"comp_1=`shader_body { ret = uv.x < 0.5 ? float3(0.03,0.03,0.03) : float3(1,1,1); }\n");
+	guint32 *black_pixels = (guint32 *) cairo_image_surface_get_data (black_test);
+	g_assert_cmphex (black_pixels[(VISUAL_HEIGHT / 2) * VISUAL_WIDTH + VISUAL_WIDTH / 4], ==, 0xff000000);
+	g_assert_cmphex (black_pixels[(VISUAL_HEIGHT / 2) * VISUAL_WIDTH + 3 * VISUAL_WIDTH / 4], ==, 0xffffffff);
+	cairo_surface_destroy (black_test);
 	projectm_set_soft_cut_duration (visual->gpu.engine, 4);
 #endif
 	g_assert_cmpuint (visual->tick, ==, 0);
@@ -1957,6 +2190,142 @@ test_player_projectm_visuals (void)
 	gst_element_set_state (pipeline, GST_STATE_NULL);
 	gst_object_unref (pipeline);
 	gst_object_unref (filter);
+}
+
+static void
+test_player_preferences_restart (void)
+{
+	const char *stage = g_getenv ("NEMO_TEST_PLAYER_PREFERENCES_STAGE");
+	if (stage == NULL) {
+		const char *choices[] = { "stereo-spectrum", "automatic", "off" };
+		for (guint choice = 0; choice < G_N_ELEMENTS (choices); choice++)
+			for (guint step = 0; step < 2; step++) {
+				GSubprocessLauncher *launcher = g_subprocess_launcher_new (
+					G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE);
+				g_subprocess_launcher_setenv (launcher, "NEMO_TEST_PLAYER_PREFERENCES_STAGE",
+					step == 0 ? "write" : "read", TRUE);
+				g_subprocess_launcher_setenv (launcher, "NEMO_TEST_PLAYER_PREFERENCES_VISUAL", choices[choice], TRUE);
+				GError *error = NULL;
+				GSubprocess *child = g_subprocess_launcher_spawn (launcher, &error, test_program,
+					"-p", "/preview/player/preferences-process-restart", "--GTestSubprocess", NULL);
+				g_assert_no_error (error);
+				g_object_unref (launcher);
+				g_autofree char *output = NULL;
+				g_autofree char *diagnostic = NULL;
+				g_assert_true (g_subprocess_communicate_utf8 (child, NULL, NULL, &output, &diagnostic, &error));
+				g_assert_no_error (error);
+				if (!g_subprocess_get_successful (child))
+					g_error ("Player preference %s/%s: %s\n%s", choices[choice],
+						step == 0 ? "write" : "read", output, diagnostic);
+				g_object_unref (child);
+			}
+		return;
+	}
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-preferences-XXXXXX", NULL);
+	GFile *file = player_track_fixture (directory, "preferences.wav");
+	NemoQuickPreview *player = g_object_ref_sink (nemo_quick_preview_new_player ());
+	const char *choice = g_getenv ("NEMO_TEST_PLAYER_PREFERENCES_VISUAL");
+	if (g_str_equal (stage, "read")) {
+		g_assert_cmpfloat_with_epsilon (gtk_range_get_value (GTK_RANGE (player->volume_scale)), 23, 0.0001);
+		g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, choice);
+		g_assert_true (player->video_muted);
+	}
+	nemo_quick_preview_show_file (player, file, NULL);
+	WAIT_UNTIL (player->media_ready && player->video_playing);
+	if (g_str_equal (stage, "write")) {
+		gtk_range_set_value (GTK_RANGE (player->volume_scale), 23);
+		if (!player->video_muted)
+			mute_clicked_cb (GTK_BUTTON (player->mute_btn), player);
+		g_assert_true (gtk_combo_box_set_active_id (GTK_COMBO_BOX (player->visuals_combo), choice));
+	} else {
+		double volume;
+		gboolean muted;
+		g_object_get (player->pipeline, "volume", &volume, "mute", &muted, NULL);
+		g_assert_cmpfloat_with_epsilon (volume, 0.23, 0.0001);
+		g_assert_true (muted);
+		NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (player->visualizer);
+		if (g_str_equal (choice, "stereo-spectrum")) {
+			WAIT_UNTIL (visual->frame != NULL || visual->render_error != NULL);
+			g_assert_null (visual->render_error);
+			g_assert_false (visual->automatic);
+			g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "visualizer");
+		} else if (g_str_equal (choice, "automatic")) {
+			g_assert_true (visual->automatic);
+		} else {
+			g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "audio");
+			g_assert_cmpuint (visual->tick, ==, 0);
+		}
+		NemoQuickPreview *other = g_object_ref_sink (nemo_quick_preview_new_player ());
+		gtk_range_set_value (GTK_RANGE (other->volume_scale), 41);
+		gtk_combo_box_set_active_id (GTK_COMBO_BOX (other->visuals_combo), "off");
+		g_assert_cmpfloat_with_epsilon (player->player_volume, 0.23, 0.0001);
+		g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, choice);
+		gtk_widget_destroy (GTK_WIDGET (other));
+		g_object_unref (other);
+	}
+	gpointer weak = player;
+	gpointer weak_visual = player->visualizer;
+	g_object_add_weak_pointer (G_OBJECT (player), &weak);
+	g_object_add_weak_pointer (G_OBJECT (player->visualizer), &weak_visual);
+	gtk_widget_destroy (GTK_WIDGET (player));
+	g_object_unref (player);
+	WAIT_UNTIL (weak == NULL && weak_visual == NULL);
+	remove_fixture (file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+typedef struct {
+	NemoMediaVisualizer *visual;
+	gboolean explicit_quit;
+} VisualizerExitTest;
+
+static void
+visualizer_finalized_on_main (gpointer data, GObject *object)
+{
+	g_assert_true (g_thread_self () == main_thread);
+}
+
+static void
+visualizer_exit_activate (GtkApplication *application, gpointer data)
+{
+	VisualizerExitTest *test = data;
+	GtkWidget *window = gtk_application_window_new (application);
+	test->visual = NEMO_MEDIA_VISUALIZER (nemo_media_visualizer_new ());
+	g_object_add_weak_pointer (G_OBJECT (test->visual), (gpointer *) &test->visual);
+	g_object_weak_ref (G_OBJECT (test->visual), visualizer_finalized_on_main, NULL);
+#ifndef HAVE_PROJECTM
+	nemo_media_visualizer_set_preset (test->visual, 18);
+#endif
+	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (test->visual));
+	gtk_widget_show_all (window);
+	visual_request_frame (test->visual);
+	g_assert_true (test->visual->rendering);
+	gtk_window_close (GTK_WINDOW (window));
+	if (test->explicit_quit)
+		g_application_quit (G_APPLICATION (application));
+}
+
+static void
+test_visualizer_application_exit (gconstpointer data)
+{
+	if (!g_test_subprocess ()) {
+		g_test_trap_subprocess (NULL, 15 * G_USEC_PER_SEC, 0);
+		g_test_trap_assert_passed ();
+		return;
+	}
+	GtkApplication *application = gtk_application_new (
+		"org.Nemo.VisualizerExitTest", G_APPLICATION_NON_UNIQUE);
+	VisualizerExitTest test = { .explicit_quit = GPOINTER_TO_INT (data) };
+	g_signal_connect (application, "activate", G_CALLBACK (visualizer_exit_activate), &test);
+	char *argv[] = { "nemo-visualizer-exit", NULL };
+	g_assert_cmpint (g_application_run (G_APPLICATION (application), 1, argv), ==, 0);
+	if (test.explicit_quit) {
+		g_assert_null (visual_pool);
+		WAIT_UNTIL (test.visual == NULL);
+	} else {
+		g_assert_null (test.visual);
+	}
+	g_object_unref (application);
 }
 
 static void
@@ -2109,16 +2478,17 @@ test_player_independent_windows (void)
 		nemo_quick_preview_show_file (players[i], file, NULL);
 		WAIT_UNTIL (players[i]->media_ready && players[i]->video_playing);
 	}
+	double initial_volume = players[1]->player_volume;
 	gtk_range_set_value (GTK_RANGE (players[0]->volume_scale), 18);
 	for (guint i = 0; i < G_N_ELEMENTS (players); i++) {
 		double volume;
 		g_object_get (players[i]->pipeline, "volume", &volume, NULL);
-		g_assert_cmpfloat_with_epsilon (volume, i == 0 ? 0.18 : 1, 0.0001);
+		g_assert_cmpfloat_with_epsilon (volume, i == 0 ? 0.18 : initial_volume, 0.0001);
 	}
 	g_assert_cmpint (g_atomic_int_get (&media_pipeline_count), ==, G_N_ELEMENTS (players));
 #ifdef HAVE_PROJECTM
 	for (guint i = 0; i < 2; i++)
-		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (players[i]->visuals_button), TRUE);
+		gtk_combo_box_set_active (GTK_COMBO_BOX (players[i]->visuals_combo), 8);
 	NemoMediaVisualizer *second_visual = NEMO_MEDIA_VISUALIZER (players[1]->visualizer);
 	WAIT_UNTIL (NEMO_MEDIA_VISUALIZER (players[0]->visualizer)->frame != NULL &&
 		second_visual->frame != NULL);
@@ -2219,7 +2589,8 @@ main (int argc, char **argv)
 	g_unsetenv ("AT_SPI_BUS_ADDRESS");
 	g_unsetenv ("DBUS_STARTER_ADDRESS");
 	g_setenv ("GIO_USE_VFS", "local", TRUE);
-	g_setenv ("GSETTINGS_BACKEND", "memory", TRUE);
+	g_setenv ("GSETTINGS_BACKEND",
+		g_getenv ("NEMO_TEST_PLAYER_PREFERENCES_STAGE") != NULL ? "keyfile" : "memory", TRUE);
 	g_setenv ("NO_AT_BRIDGE", "1", TRUE);
 	test_program = argv[0];
 	gtk_test_init (&argc, &argv, NULL);
@@ -2230,7 +2601,13 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/player/stereo-tones-default-off", test_player_audio_effects);
 	g_test_add_func ("/preview/player/preserve-voice-pitch-2x-3x", test_player_voice_pitch);
 	g_test_add_func ("/preview/player/projectm-audio-lifecycle", test_player_projectm_visuals);
+	g_test_add_func ("/preview/player/stereo-spectrum-spectrogram-rain", test_player_native_visuals);
+	g_test_add_func ("/preview/player/preferences-process-restart", test_player_preferences_restart);
 	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);
+	g_test_add_data_func ("/preview/player/visualization-process-exit",
+		GINT_TO_POINTER (FALSE), test_visualizer_application_exit);
+	g_test_add_data_func ("/preview/player/visualization-explicit-quit",
+		GINT_TO_POINTER (TRUE), test_visualizer_application_exit);
 	g_test_add_func ("/preview/player/six-independent-windows", test_player_independent_windows);
 	g_test_add_func ("/preview/player/application-lifetime", test_player_application_lifetime);
 	gst_init (&argc, &argv);

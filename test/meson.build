@@ -160,10 +160,12 @@ if smpl_features_enabled
   test('Nemo session persistence', hardening_python,
     args: hardening_runner + [hardening_python.full_path(), files('test-window-session.py')[0],
                              nemo, folder_persistence_test],
-    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
+    env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir(),
+          'NEMO_TEST_GSTREAMER': gstreamer_enabled ? '1' : '0',
+          'NEMO_TEST_PROJECTM': projectm_enabled ? '1' : '0'},
     depends: copy_integrity_schemas,
     suite: 'hardening',
-    timeout: 90,
+    timeout: 150,
     is_parallel: false,
   )
   ui_regressions = [
@@ -303,7 +305,7 @@ if smpl_features_enabled
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
         '../src/nemo-document-viewer.c',
-      ] + archive_source_test_sources,
+      ] + archive_source_test_sources + gresources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,

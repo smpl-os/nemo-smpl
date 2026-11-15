@@ -45,12 +45,15 @@ the request. Unreadable contents are reported as an incomplete total.
 sudo pacman -S nemo-smpl
 ```
 
-### Debian / Ubuntu
+### Debian / LMDE
 
-Download the `.deb` from [GitHub Releases](https://github.com/KonTy/nemo/releases):
+Download the Nemo packages and matching `libprojectm4` runtime dependency from
+[GitHub Releases](https://github.com/smpl-os/nemo-smpl/releases).
+Published packages target LMDE 7 / Debian 13; older Debian or Ubuntu releases
+may require a source build against their own libraries.
 
 ```bash
-sudo dpkg -i nemo_*.deb
+sudo dpkg -i libprojectm4_*.deb libnemo-extension1_*.deb nemo-smpl-data_*.deb nemo-smpl_*.deb
 sudo apt-get install -f
 ```
 
@@ -155,6 +158,8 @@ original folder/home directory. The selected input is staged privately, with
 size, memory, CPU and time limits. Closing or switching the preview cancels
 the work. An unavailable sandbox or unsupported document produces an error;
 Nemo does not fall back to running the converter unsandboxed.
+Existing PDFs are preserved byte-for-byte before sandboxed Poppler rendering,
+including their embedded Type 3 fonts, instead of being reconverted.
 
 There is **no DRM support**. MOBI support is limited to unencrypted,
 uncompressed/PalmDOC books; HUFF/CDIC, KF8/AZW3, KFX and other unsupported
@@ -189,6 +194,8 @@ F3 and the preview pane use the installed GStreamer decoders, including for
 WebM. Missing video decoders are reported explicitly even when the audio stream
 can play. Loading that does not complete within 30 seconds reports a retryable
 error instead of leaving a black preview indefinitely.
+Release packages include the GStreamer plugin sets needed for VP8, VP9 and AV1
+WebM decoding; corrupt files or unsupported codec variants can still fail.
 
 Video preview frames are limited to 1920×1080 with their aspect ratio preserved;
 the original file is unchanged. Converted-frame buffering is bounded and preview
@@ -214,38 +221,49 @@ The speed selector offers **0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x and 3x**, preservin
 voice pitch for audiobooks. Speed is retained across tracks and seeks in that
 window. A file that cannot seek/change speed reports the limitation.
 
-The **Volume** slider adjusts this player's audio from **0–100%**, without
-changing other players or system volume. Its level is retained across tracks;
-mute/unmute preserves it. Focus the slider (or press **Alt+V**) and use arrow
-keys for fine adjustment. Volume is also available in fullscreen transport.
+The **Volume** slider sits beside the mute icon and adjusts this player's audio
+from **0–100%**, without changing other players or system volume. Volume and mute
+are remembered for new players, including after restarting Nemo; mute/unmute
+preserves the level. Focus the slider (or press **Alt+V**) and use arrow keys for
+fine adjustment. Both controls remain adjacent in fullscreen. Playlist selection
+uses the theme's full selected colors, including while unfocused.
 
 The initially selected file resumes its saved position; playlist navigation
 starts each subsequent track at the beginning. Positions survive restarting
 Nemo, are ignored if the file changes, and use the reading/playback-position
 preference above. The existing sidebar preview remains independent and muted.
 
-**Visuals** enables the real [projectM](https://github.com/projectM-visualizer/projectm)
-MilkDrop-compatible engine, not the previous homemade cloud effects. Visuals
-are **off by default** for audio and video. Original generated MilkDrop presets
-rotate every 30 seconds with blended transitions; **Next visual** selects another.
-Only this player's decoded stereo audio is used: no microphone or desktop audio
-capture, downloaded presets, or network connection.
+The **Visuals** dropdown remembers your choice across tracks, new players and
+Nemo restarts. It initially defaults to **Off**. A named effect stays selected;
+only **Automatic** cycles every 30 seconds. The real
+[projectM](https://github.com/projectM-visualizer/projectm) MilkDrop-compatible
+engine provides twelve original presets and six bundled MIT-licensed modern
+shader presets by Gianluca Boiano (M0Rf30), with license and pinned provenance.
+There are also native **Stereo spectrum** segmented bars, a scrolling
+log-frequency **Spectrogram**, and music-reactive **Digital rain**. The first
+two analyze the left and right channels independently. These effects use an
+opaque black canvas, not the previous homemade clouds or a lifted gray
+background. Only this player's decoded stereo audio is used: no microphone or
+desktop audio capture, runtime downloads, or network connection.
 
 **Photosensitivity warning:** visual effects may flash. Do not enable them if
 sensitive to flashing lights; there are no safety or medical claims. Reduced GTK
 animations stop motion, and paused/hidden views stop requesting frames. Rendering
-uses OpenGL off the UI thread, with two shared workers and a fixed 800x450 canvas
+uses two shared workers off the UI thread and a fixed 800x450 canvas
 scaled to the player, including fullscreen. Text and controls keep their normal
 theme and native background transparency; the visualization itself is opaque.
 An unavailable projectM/OpenGL renderer reports an error without stopping audio.
 
-Building visuals requires projectM **4.1 or newer** (`projectM-4.pc`) and libepoxy;
-use `-Dprojectm=enabled` to require support or `-Dprojectm=disabled` to omit it.
-The default `auto` enables it only when available. projectM is LGPL-2.1-or-later;
-the generated presets are original Nemo source, not unlicensed preset packs.
-Arch/smplOS release packages require projectM support. The current Debian/LMDE
-release builder provides projectM 3 only, so its packages omit visuals while
-retaining playback and volume controls.
+Building the MilkDrop presets requires projectM **4.1 or newer**
+(`projectM-4.pc`) and libepoxy; use `-Dprojectm=enabled` to require support or
+`-Dprojectm=disabled` to omit those presets. Native effects remain available
+without projectM/OpenGL. The default `auto` enables projectM when available.
+projectM is LGPL-2.1-or-later; the generated presets are original Nemo source,
+not unlicensed preset packs. Arch/smplOS and Debian/LMDE release builds require
+projectM support. Since LMDE provides only projectM 3, Debian builds also
+publish separate projectM 4 runtime/development packages and their unmodified,
+checksum-pinned upstream source archive. Install the matching development
+package before building Nemo from source on Debian.
 Optional **Binaural tones**, off by default, mix quiet 200 Hz
 and 240 Hz stereo tones (a 40 Hz difference) after speed correction. Use stereo
 headphones at low volume; this is not a medical treatment and makes no meditation

@@ -3,6 +3,7 @@
 #include "nemo-media-effects.h"
 #include <gst/base/gstbasetransform.h>
 #include <gst/audio/audio-format.h>
+#include <gst/fft/gstfftf32.h>
 #include <glib/gi18n.h>
 #include <math.h>
 #ifdef HAVE_PROJECTM
@@ -13,6 +14,9 @@
 
 #define TONE_LEVEL 0.01
 #define PCM_FRAMES 512
+#define ANALYSIS_FRAMES 2048
+#define SPECTRUM_BANDS 128
+#define HISTORY_COLUMNS 600
 #define VISUAL_WIDTH 800
 #define VISUAL_HEIGHT 450
 
@@ -21,9 +25,11 @@ typedef struct {
 	gint enabled, visuals, rate;
 	guint visual_frames;
 	guint pcm_write, pcm_count;
+	guint analysis_write;
 	gboolean previous_visuals;
 	double resample_position;
 	float visual_pcm[PCM_FRAMES * 2];
+	float analysis_pcm[ANALYSIS_FRAMES * 2];
 	double left_phase, right_phase, gain;
 } NemoBinauralFilter;
 
@@ -49,6 +55,8 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 		self->visual_frames = self->pcm_write = self->pcm_count = 0;
 		self->resample_position = 0;
 		memset (self->visual_pcm, 0, sizeof self->visual_pcm);
+		memset (self->analysis_pcm, 0, sizeof self->analysis_pcm);
+		self->analysis_write = 0;
 	}
 	if (!enabled && self->gain == 0 && !visuals)
 		return GST_FLOW_OK;
@@ -82,10 +90,14 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 			guint a = (guint) floor (pos);
 			guint b = MIN (a + 1, frames - 1);
 			double fraction = pos - a;
-			for (guint channel = 0; channel < 2; channel++)
-				self->visual_pcm[self->pcm_write * 2 + channel] = samples[a * 2 + channel] * (1 - fraction) +
+			for (guint channel = 0; channel < 2; channel++) {
+				float value = samples[a * 2 + channel] * (1 - fraction) +
 					samples[b * 2 + channel] * fraction;
+				self->visual_pcm[self->pcm_write * 2 + channel] = value;
+				self->analysis_pcm[self->analysis_write * 2 + channel] = value;
+			}
 			self->pcm_write = (self->pcm_write + 1) % PCM_FRAMES;
+			self->analysis_write = (self->analysis_write + 1) % ANALYSIS_FRAMES;
 			self->pcm_count = MIN (self->pcm_count + 1, PCM_FRAMES);
 		}
 		self->resample_position = pos - frames;
@@ -100,9 +112,17 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 					((self->pcm_write + i) % PCM_FRAMES) * 2 + channel];
 		GstBuffer *copy = gst_buffer_new_allocate (NULL, sizeof pcm, NULL);
 		gst_buffer_fill (copy, 0, pcm, sizeof pcm);
+		float analysis[ANALYSIS_FRAMES * 2];
+		for (guint i = 0; i < ANALYSIS_FRAMES; i++)
+			for (guint channel = 0; channel < 2; channel++)
+				analysis[i * 2 + channel] = self->analysis_pcm[
+					((self->analysis_write + i) % ANALYSIS_FRAMES) * 2 + channel];
+		GstBuffer *spectrum = gst_buffer_new_allocate (NULL, sizeof analysis, NULL);
+		gst_buffer_fill (spectrum, 0, analysis, sizeof analysis);
 		GstStructure *structure = gst_structure_new ("nemo-music-pcm",
-			"samples", GST_TYPE_BUFFER, copy, NULL);
+			"samples", GST_TYPE_BUFFER, copy, "analysis", GST_TYPE_BUFFER, spectrum, NULL);
 		gst_buffer_unref (copy);
+		gst_buffer_unref (spectrum);
 		gst_element_post_message (GST_ELEMENT (self),
 			gst_message_new_element (GST_OBJECT (self), structure));
 	}
@@ -208,30 +228,298 @@ typedef struct {
 	char *error;
 } VisualEngine;
 
+typedef struct {
+	GstFFTF32 *fft;
+	double levels[2][SPECTRUM_BANDS];
+	cairo_surface_t *history;
+	guint history_write, serial;
+	gint64 last_pcm, last_frame;
+	double rain[50];
+} NativeVisual;
+
 struct _NemoMediaVisualizer {
 	GtkDrawingArea parent;
-	gboolean playing, destroyed, rendering;
+	GApplication *application;
+	gboolean playing, destroyed, rendering, automatic;
 	guint tick, preset, rendered_frames;
 	gint64 last_frame, last_pcm;
 	double preset_time;
 	float pcm[PCM_FRAMES * 2];
+	float analysis_pcm[ANALYSIS_FRAMES * 2];
+	guint reset_serial;
 	GCancellable *render_cancel;
 	cairo_surface_t *frame;
 	VisualEngine gpu;
+	NativeVisual native;
 	char *render_error;
 };
 
 G_DEFINE_TYPE (NemoMediaVisualizer, nemo_media_visualizer, GTK_TYPE_DRAWING_AREA)
 
+static GThreadPool *visual_pool;
+static gboolean visual_shutting_down;
+
 typedef struct {
 	guint preset;
 	float pcm[PCM_FRAMES * 2];
+	float analysis_pcm[ANALYSIS_FRAMES * 2];
+	gint64 pcm_time;
+	guint reset_serial;
 } VisualFrame;
+
+typedef enum {
+	VISUAL_PROJECTM,
+	VISUAL_SPECTRUM,
+	VISUAL_SPECTROGRAM,
+	VISUAL_MATRIX
+} VisualKind;
+
+static const struct {
+	const char *id;
+	const char *name;
+	const char *resource;
+	VisualKind kind;
+} visual_presets[] = {
+	{ "aurora-cathedral", N_("Aurora Cathedral"), "aurora-cathedral.milk", VISUAL_PROJECTM },
+	{ "bioluminescent-abyss", N_("Bioluminescent Abyss"), "bioluminescent-abyss.milk", VISUAL_PROJECTM },
+	{ "liquid-chrome-kaleidoscope", N_("Liquid Chrome Kaleidoscope"), "liquid-chrome-kaleidoscope.milk", VISUAL_PROJECTM },
+	{ "nebula-forge", N_("Nebula Forge"), "nebula-forge.milk", VISUAL_PROJECTM },
+	{ "neon-sacred-geometry", N_("Neon Sacred Geometry"), "neon-sacred-geometry.milk", VISUAL_PROJECTM },
+	{ "tramonto-sul-golfo", N_("Tramonto sul Golfo"), "tramonto-sul-golfo.milk", VISUAL_PROJECTM },
+	{ "spectrum-vortex", N_("Spectrum Vortex"), NULL, VISUAL_PROJECTM },
+	{ "prismatic-lattice", N_("Prismatic Lattice"), NULL, VISUAL_PROJECTM },
+	{ "spiral-bloom", N_("Spiral Bloom"), NULL, VISUAL_PROJECTM },
+	{ "liquid-ribbons", N_("Liquid Ribbons"), NULL, VISUAL_PROJECTM },
+	{ "emerald-vortex", N_("Emerald Vortex"), NULL, VISUAL_PROJECTM },
+	{ "violet-lattice", N_("Violet Lattice"), NULL, VISUAL_PROJECTM },
+	{ "solar-bloom", N_("Solar Bloom"), NULL, VISUAL_PROJECTM },
+	{ "sapphire-ribbons", N_("Sapphire Ribbons"), NULL, VISUAL_PROJECTM },
+	{ "crimson-vortex", N_("Crimson Vortex"), NULL, VISUAL_PROJECTM },
+	{ "amber-lattice", N_("Amber Lattice"), NULL, VISUAL_PROJECTM },
+	{ "midnight-bloom", N_("Midnight Bloom"), NULL, VISUAL_PROJECTM },
+	{ "iridescent-ribbons", N_("Iridescent Ribbons"), NULL, VISUAL_PROJECTM },
+	{ "stereo-spectrum", N_("Stereo spectrum"), NULL, VISUAL_SPECTRUM },
+	{ "spectrogram", N_("Spectrogram"), NULL, VISUAL_SPECTROGRAM },
+	{ "digital-rain", N_("Digital rain"), NULL, VISUAL_MATRIX }
+};
+
+guint
+nemo_media_visualizer_get_n_presets (void)
+{
+	return G_N_ELEMENTS (visual_presets);
+}
+
+const char *
+nemo_media_visualizer_get_preset_id (guint index)
+{
+	g_return_val_if_fail (index < G_N_ELEMENTS (visual_presets), NULL);
+	return visual_presets[index].id;
+}
+
+const char *
+nemo_media_visualizer_get_preset_name (guint index)
+{
+	g_return_val_if_fail (index < G_N_ELEMENTS (visual_presets), NULL);
+	return _(visual_presets[index].name);
+}
+
+static double
+spectrum_frequency (guint band)
+{
+	return 43.0 * pow (20000.0 / 43.0, band / (double) SPECTRUM_BANDS);
+}
+
+static void
+native_label (cairo_t *cr, const char *text, double x, double y)
+{
+	PangoLayout *layout = pango_cairo_create_layout (cr);
+	PangoFontDescription *font = pango_font_description_from_string ("Monospace 10");
+	pango_layout_set_font_description (layout, font);
+	pango_font_description_free (font);
+	pango_layout_set_text (layout, text, -1);
+	cairo_set_source_rgb (cr, 0.65, 0.85, 0.9);
+	cairo_move_to (cr, x, y);
+	pango_cairo_show_layout (cr, layout);
+	g_object_unref (layout);
+}
+
+static guint32
+spectrogram_color (double level)
+{
+	static const guint colors[][3] = {
+		{ 0, 0, 0 }, { 0, 0, 65 }, { 30, 0, 150 }, { 170, 0, 110 },
+		{ 240, 40, 0 }, { 255, 180, 0 }, { 255, 255, 150 }, { 255, 255, 255 }
+	};
+	double position = CLAMP (level, 0, 1) * (G_N_ELEMENTS (colors) - 1);
+	guint low = MIN ((guint) position, G_N_ELEMENTS (colors) - 2);
+	double fraction = position - low;
+	guint rgb[3];
+	for (guint i = 0; i < 3; i++)
+		rgb[i] = colors[low][i] * (1 - fraction) + colors[low + 1][i] * fraction;
+	return 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+}
+
+static cairo_surface_t *
+native_render (NemoMediaVisualizer *self, VisualFrame *request, GError **error)
+{
+	NativeVisual *native = &self->native;
+	VisualKind kind = visual_presets[request->preset].kind;
+	if (native->fft == NULL) {
+		native->fft = gst_fft_f32_new (ANALYSIS_FRAMES, FALSE);
+		if (native->fft == NULL) {
+			g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+				_("Cannot initialize frequency analysis."));
+			return NULL;
+		}
+	}
+	if (native->serial != request->reset_serial) {
+		memset (native->levels, 0, sizeof native->levels);
+		g_clear_pointer (&native->history, cairo_surface_destroy);
+		native->history_write = 0;
+		native->last_pcm = 0;
+		native->serial = request->reset_serial;
+	}
+	gboolean fresh = request->pcm_time != native->last_pcm;
+	if (fresh) {
+		gfloat input[ANALYSIS_FRAMES];
+		GstFFTF32Complex frequency[ANALYSIS_FRAMES / 2 + 1];
+		for (guint channel = 0; channel < 2; channel++) {
+			for (guint i = 0; i < ANALYSIS_FRAMES; i++)
+				input[i] = request->analysis_pcm[i * 2 + channel];
+			gst_fft_f32_window (native->fft, input, GST_FFT_WINDOW_HANN);
+			gst_fft_f32_fft (native->fft, input, frequency);
+			for (guint band = 0; band < SPECTRUM_BANDS; band++) {
+				guint start = MAX (1, (guint) floor (spectrum_frequency (band) * ANALYSIS_FRAMES / 44100));
+				guint end = MIN (ANALYSIS_FRAMES / 2 + 1,
+					MAX (start + 1, (guint) ceil (spectrum_frequency (band + 1) * ANALYSIS_FRAMES / 44100)));
+				double power = 0;
+				for (guint i = start; i < end; i++)
+					power = MAX (power, frequency[i].r * frequency[i].r + frequency[i].i * frequency[i].i);
+				double db = 20 * log10 (MAX (1e-5, 4 * sqrt (power) / ANALYSIS_FRAMES));
+				double level = CLAMP ((db + 80) / 80, 0, 1);
+				double *previous = &native->levels[channel][band];
+				*previous += (level - *previous) * (level > *previous ? 0.8 : 0.2);
+			}
+		}
+		native->last_pcm = request->pcm_time;
+	}
+	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, VISUAL_WIDTH, VISUAL_HEIGHT);
+	if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS) {
+		g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, cairo_status_to_string (cairo_surface_status (surface)));
+		cairo_surface_destroy (surface);
+		return NULL;
+	}
+	cairo_t *cr = cairo_create (surface);
+	cairo_set_source_rgb (cr, 0, 0, 0);
+	cairo_paint (cr);
+	if (kind == VISUAL_SPECTRUM) {
+		for (guint channel = 0; channel < 2; channel++) {
+			double top = channel * VISUAL_HEIGHT / 2.0;
+			native_label (cr, channel == 0 ? _("Left") : _("Right"), 12, top + 8);
+			for (guint band = 0; band < 32; band++) {
+				double level = 0;
+				for (guint i = 0; i < SPECTRUM_BANDS / 32; i++)
+					level = MAX (level, native->levels[channel][band * (SPECTRUM_BANDS / 32) + i]);
+				double width = (VISUAL_WIDTH - 70) / 32.0;
+				for (guint step = 0; step < (guint) (level * 25); step++) {
+					cairo_set_source_rgb (cr, step > 21 ? 1 : 0.02, step > 21 ? 0.65 : 0.65, step > 21 ? 0.1 : 0.9);
+					cairo_rectangle (cr, 52 + band * width, top + 194 - step * 6, width - 3, 4);
+					cairo_fill (cr);
+				}
+			}
+			native_label (cr, "43 Hz", 52, top + 205);
+			native_label (cr, "1 kHz", 410, top + 205);
+			native_label (cr, "20 kHz", 725, top + 205);
+		}
+	} else if (kind == VISUAL_SPECTROGRAM) {
+		gboolean append = fresh || native->history == NULL;
+		if (native->history == NULL) {
+			native->history = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, HISTORY_COLUMNS, SPECTRUM_BANDS * 2);
+			if (cairo_surface_status (native->history) != CAIRO_STATUS_SUCCESS) {
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+					cairo_status_to_string (cairo_surface_status (native->history)));
+				cairo_destroy (cr);
+				cairo_surface_destroy (surface);
+				return NULL;
+			}
+			cairo_t *clear = cairo_create (native->history);
+			cairo_set_source_rgb (clear, 0, 0, 0);
+			cairo_paint (clear);
+			cairo_destroy (clear);
+		}
+		if (append) {
+			cairo_surface_flush (native->history);
+			guint32 *pixels = (guint32 *) cairo_image_surface_get_data (native->history);
+			for (guint channel = 0; channel < 2; channel++)
+				for (guint band = 0; band < SPECTRUM_BANDS; band++)
+					pixels[(channel * SPECTRUM_BANDS + SPECTRUM_BANDS - 1 - band) * HISTORY_COLUMNS +
+						native->history_write] = spectrogram_color (native->levels[channel][band]);
+			native->history_write = (native->history_write + 1) % HISTORY_COLUMNS;
+			cairo_surface_mark_dirty (native->history);
+		}
+		cairo_save (cr);
+		cairo_rectangle (cr, 52, 22, VISUAL_WIDTH - 68, VISUAL_HEIGHT - 48);
+		cairo_clip (cr);
+		cairo_translate (cr, 52, 22);
+		cairo_scale (cr, (VISUAL_WIDTH - 68) / (double) HISTORY_COLUMNS,
+			(VISUAL_HEIGHT - 48) / (double) (SPECTRUM_BANDS * 2));
+		cairo_set_source_surface (cr, native->history, -(double) native->history_write, 0);
+		cairo_paint (cr);
+		cairo_set_source_surface (cr, native->history, HISTORY_COLUMNS - native->history_write, 0);
+		cairo_paint (cr);
+		cairo_restore (cr);
+		native_label (cr, _("Left"), 8, 24);
+		native_label (cr, _("Right"), 8, 225);
+		for (guint channel = 0; channel < 2; channel++) {
+			double top = 22 + channel * (VISUAL_HEIGHT - 48) / 2.0;
+			native_label (cr, "20k", 12, top + 20);
+			native_label (cr, "1k", 12, top + 96);
+			native_label (cr, "43", 12, top + 180);
+		}
+		native_label (cr, _("History"), 52, VISUAL_HEIGHT - 22);
+		native_label (cr, _("Now"), VISUAL_WIDTH - 60, VISUAL_HEIGHT - 22);
+	} else {
+		gint64 now = g_get_monotonic_time ();
+		double dt = native->last_frame == 0 ? 0 : CLAMP ((now - native->last_frame) / 1000000.0, 0, 0.1);
+		native->last_frame = now;
+		cairo_select_font_face (cr, "Monospace", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+		cairo_set_font_size (cr, 14);
+		for (guint column = 0; column < G_N_ELEMENTS (native->rain); column++) {
+			double level = native->levels[column % 2][column * SPECTRUM_BANDS / G_N_ELEMENTS (native->rain)];
+			native->rain[column] += dt * (2 + 9 * level + column % 5);
+			double head = fmod (native->rain[column] + (column * 17) % 39, 39);
+			for (guint tail = 0; tail < 12; tail++) {
+				gint row = (gint) head - tail;
+				if (row < 0 || row > 28)
+					continue;
+				double light = (1 - tail / 12.0) * (0.4 + 0.6 * level);
+				cairo_set_source_rgb (cr, tail == 0 ? 0.6 : 0, tail == 0 ? 1 : light,
+					tail == 0 ? 0.75 : light * 0.2);
+				char glyph[] = { "0123456789ABCDEF"[(column * 13 + row * 7 + (guint) native->rain[column]) % 16], 0 };
+				cairo_move_to (cr, column * 16, row * 16 + 14);
+				cairo_show_text (cr, glyph);
+			}
+		}
+	}
+	cairo_destroy (cr);
+	return surface;
+}
 
 #ifdef HAVE_PROJECTM
 static char *
-visual_preset (guint index)
+visual_preset (guint index, GError **error)
 {
+	if (visual_presets[index].resource != NULL) {
+		g_autofree char *path = g_strconcat ("/org/nemo/player-presets/",
+			visual_presets[index].resource, NULL);
+		g_autoptr (GBytes) bytes = g_resources_lookup_data (path, G_RESOURCE_LOOKUP_FLAGS_NONE, error);
+		if (bytes == NULL)
+			return NULL;
+		gsize size;
+		const char *data = g_bytes_get_data (bytes, &size);
+		return g_strndup (data, size);
+	}
+	index -= 6;
 	/* Original MilkDrop equations, not third-party preset files. Feedback,
 	 * waveforms and polygon emitters are rendered by the real projectM engine. */
 	static const char *fields[] = {
@@ -245,7 +533,7 @@ visual_preset (guint index)
 	g_ascii_dtostr (phase_text, sizeof phase_text, phase);
 	return g_strdup_printf (
 		"[preset00]\n"
-		"fDecay=0.97\nfGammaAdj=1.7\nfVideoEchoZoom=1.006\nfVideoEchoAlpha=0.18\n"
+		"fDecay=0.97\nfGammaAdj=1.0\nfVideoEchoZoom=1.006\nfVideoEchoAlpha=0.18\n"
 		"nVideoEchoOrientation=%u\nnWaveMode=%u\nfWaveAlpha=0.85\nfWaveScale=0.85\n"
 		"bAdditiveWaves=1\nbWaveDots=0\nbWaveThick=1\nbMaximizeWaveColor=1\n"
 		"bModWaveAlphaByVolume=1\nfModWaveAlphaStart=0.1\nfModWaveAlphaEnd=1.5\n"
@@ -326,11 +614,20 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 {
 	NemoMediaVisualizer *self = source;
 	VisualEngine *gpu = &self->gpu;
-#ifdef HAVE_PROJECTM
 	VisualFrame *request = data;
-	g_autofree guint8 *rgba = NULL;
 	if (g_task_return_error_if_cancelled (task))
 		return;
+	if (visual_presets[request->preset].kind != VISUAL_PROJECTM) {
+		GError *error = NULL;
+		cairo_surface_t *surface = native_render (self, request, &error);
+		if (surface != NULL)
+			g_task_return_pointer (task, surface, (GDestroyNotify) cairo_surface_destroy);
+		else
+			g_task_return_error (task, error);
+		return;
+	}
+#ifdef HAVE_PROJECTM
+	g_autofree guint8 *rgba = NULL;
 	if (gpu->engine == NULL && !visual_engine_init (gpu))
 		goto failed;
 	if (!eglBindAPI (EGL_OPENGL_API) ||
@@ -340,14 +637,23 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 		goto failed;
 	}
 	if (gpu->preset != request->preset) {
-		g_autofree char *preset = visual_preset (request->preset);
+		GError *error = NULL;
+		g_autofree char *preset = visual_preset (request->preset, &error);
+		if (preset == NULL) {
+			gpu->error = g_strdup (error->message);
+			g_clear_error (&error);
+			goto failed;
+		}
 		projectm_load_preset_data (gpu->engine, preset, gpu->preset != G_MAXUINT);
 		gpu->preset = request->preset;
 		if (gpu->error != NULL)
 			goto failed;
 	}
 	projectm_pcm_add_float (gpu->engine, request->pcm, PCM_FRAMES, PROJECTM_STEREO);
+	glBindFramebuffer (GL_FRAMEBUFFER, 0);
 	projectm_opengl_render_frame (gpu->engine);
+	/* projectM 4.1 can leave its internal read framebuffer bound. */
+	glBindFramebuffer (GL_FRAMEBUFFER, 0);
 	rgba = g_malloc (VISUAL_WIDTH * VISUAL_HEIGHT * 4);
 	glReadPixels (0, 0, VISUAL_WIDTH, VISUAL_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 	GLenum gl_error = glGetError ();
@@ -368,8 +674,11 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 	for (guint y = 0; y < VISUAL_HEIGHT; y++)
 		for (guint x = 0; x < VISUAL_WIDTH; x++) {
 			guint i = ((VISUAL_HEIGHT - 1 - y) * VISUAL_WIDTH + x) * 4;
-			pixels[y * VISUAL_WIDTH + x] = 0xff000000 |
-				(rgba[i] << 16) | (rgba[i + 1] << 8) | rgba[i + 2];
+			/* Remove the near-black feedback pedestal, keeping full-white output. */
+			guint rgb[3];
+			for (guint c = 0; c < 3; c++)
+				rgb[c] = MAX (0, (gint) rgba[i + c] - 12) * 255 / 243;
+			pixels[y * VISUAL_WIDTH + x] = 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
 		}
 	cairo_surface_mark_dirty (surface);
 	g_task_return_pointer (task, surface, (GDestroyNotify) cairo_surface_destroy);
@@ -384,16 +693,38 @@ failed:
 	g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", gpu->error);
 }
 
+static gboolean
+visual_render_release (gpointer unused)
+{
+	return G_SOURCE_REMOVE;
+}
+
 static void
 visual_render_dispatch (gpointer data, gpointer unused)
 {
 	GTask *task = data;
 	visual_render_worker (task, g_task_get_source_object (task),
 		g_task_get_task_data (task), g_task_get_cancellable (task));
-	g_object_unref (task);
+	/* The final task reference can finalize its GTK source object. */
+	GSource *release = g_idle_source_new ();
+	g_source_set_callback (release, visual_render_release, task, g_object_unref);
+	g_source_attach (release, g_task_get_context (task));
+	g_source_unref (release);
 }
 
 static void visual_request_frame (NemoMediaVisualizer *self);
+
+static void
+visual_application_shutdown (GApplication *application, gpointer unused)
+{
+	visual_shutting_down = TRUE;
+	if (visual_pool != NULL) {
+		/* Explicit application quit bypasses holds. Finish OpenGL work before
+		 * projectM's process-global destructors can run. */
+		g_thread_pool_free (visual_pool, FALSE, TRUE);
+		visual_pool = NULL;
+	}
+}
 
 static void
 visual_render_ready (GObject *source, GAsyncResult *result, gpointer unused)
@@ -406,11 +737,13 @@ visual_render_ready (GObject *source, GAsyncResult *result, gpointer unused)
 	self->rendering = FALSE;
 	if (!self->destroyed && self->render_cancel == g_task_get_cancellable (task)) {
 		g_clear_object (&self->render_cancel);
-		if (surface != NULL) {
+		if (surface != NULL && request->preset == self->preset && request->reset_serial == self->reset_serial) {
 			g_clear_pointer (&self->frame, cairo_surface_destroy);
 			self->frame = g_steal_pointer (&surface);
 			self->rendered_frames++;
-		} else if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+		} else if (error != NULL && request->preset == self->preset &&
+			   request->reset_serial == self->reset_serial &&
+			   !g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
 			self->render_error = g_strdup (error->message);
 			g_debug ("Media visualization: %s", error->message);
 		}
@@ -426,28 +759,43 @@ visual_render_ready (GObject *source, GAsyncResult *result, gpointer unused)
 static void
 visual_request_frame (NemoMediaVisualizer *self)
 {
-	static GThreadPool *pool;
 	static gsize initialized;
-	if (self->rendering || self->destroyed || self->render_error != NULL ||
+	if (self->rendering || self->destroyed || visual_shutting_down || self->render_error != NULL ||
 	    !gtk_widget_get_mapped (GTK_WIDGET (self)))
 		return;
 	if (g_once_init_enter (&initialized)) {
 		GError *error = NULL;
-		pool = g_thread_pool_new (visual_render_dispatch, NULL, 2, FALSE, &error);
+		visual_pool = g_thread_pool_new (visual_render_dispatch, NULL, 2, TRUE, &error);
 		if (error != NULL) {
 			self->render_error = g_strdup (error->message);
 			g_warning ("Media visualization workers: %s", error->message);
 			g_clear_error (&error);
+			g_thread_pool_free (visual_pool, TRUE, TRUE);
+			visual_pool = NULL;
 		}
 		g_once_init_leave (&initialized, 1);
 	}
-	if (pool == NULL) {
+	if (visual_pool == NULL) {
 		if (self->render_error == NULL)
 			self->render_error = g_strdup (_("Visualization workers are unavailable."));
 		return;
 	}
+	if (self->application == NULL) {
+		GApplication *application = g_application_get_default ();
+		if (application != NULL && g_application_get_is_registered (application)) {
+			self->application = g_object_ref (application);
+			g_application_hold (application);
+			if (g_object_get_data (G_OBJECT (application), "nemo-visual-shutdown") == NULL) {
+				g_object_set_data (G_OBJECT (application), "nemo-visual-shutdown", GINT_TO_POINTER (1));
+				g_signal_connect (application, "shutdown", G_CALLBACK (visual_application_shutdown), NULL);
+			}
+		}
+	}
 	VisualFrame *request = g_new0 (VisualFrame, 1);
 	request->preset = self->preset;
+	request->reset_serial = self->reset_serial;
+	request->pcm_time = self->last_pcm;
+	memcpy (request->analysis_pcm, self->analysis_pcm, sizeof request->analysis_pcm);
 	if (g_get_monotonic_time () - self->last_pcm < 300000)
 		memcpy (request->pcm, self->pcm, sizeof request->pcm);
 	self->render_cancel = g_cancellable_new ();
@@ -455,7 +803,7 @@ visual_request_frame (NemoMediaVisualizer *self)
 	g_task_set_task_data (task, request, g_free);
 	self->rendering = TRUE;
 	GError *error = NULL;
-	if (!g_thread_pool_push (pool, task, &error)) {
+	if (!g_thread_pool_push (visual_pool, task, &error)) {
 		self->render_error = g_strdup (error->message);
 		g_warning ("Media visualization worker: %s", error->message);
 		g_cancellable_cancel (self->render_cancel);
@@ -472,8 +820,9 @@ visualizer_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer unused)
 		return G_SOURCE_CONTINUE;
 	double dt = self->last_frame == 0 ? 0 : CLAMP ((now - self->last_frame) / 1000000.0, 0, 0.1);
 	self->last_frame = now;
-	self->preset_time += dt;
-	if (self->preset_time >= 30)
+	if (self->automatic)
+		self->preset_time += dt;
+	if (self->automatic && self->preset_time >= 30)
 		nemo_media_visualizer_next (self);
 	visual_request_frame (self);
 	return G_SOURCE_CONTINUE;
@@ -594,9 +943,16 @@ visualizer_finalize (GObject *object)
 	}
 #endif
 	g_clear_pointer (&self->frame, cairo_surface_destroy);
+	g_clear_pointer (&self->native.history, cairo_surface_destroy);
+	if (self->native.fft != NULL)
+		gst_fft_f32_free (self->native.fft);
 	g_clear_object (&self->render_cancel);
 	g_free (self->gpu.error);
 	g_free (self->render_error);
+	if (self->application != NULL) {
+		g_application_release (self->application);
+		g_clear_object (&self->application);
+	}
 	G_OBJECT_CLASS (nemo_media_visualizer_parent_class)->finalize (object);
 }
 
@@ -614,9 +970,10 @@ nemo_media_visualizer_class_init (NemoMediaVisualizerClass *klass)
 static void
 nemo_media_visualizer_init (NemoMediaVisualizer *self)
 {
+	self->automatic = TRUE;
 	gtk_widget_set_hexpand (GTK_WIDGET (self), TRUE);
 	gtk_widget_set_vexpand (GTK_WIDGET (self), TRUE);
-	atk_object_set_name (gtk_widget_get_accessible (GTK_WIDGET (self)), _("projectM music visualization"));
+	atk_object_set_name (gtk_widget_get_accessible (GTK_WIDGET (self)), _("Music visualization"));
 	g_signal_connect_object (gtk_widget_get_settings (GTK_WIDGET (self)),
 		"notify::gtk-enable-animations", G_CALLBACK (visualizer_update_tick), self, G_CONNECT_SWAPPED);
 }
@@ -624,8 +981,23 @@ nemo_media_visualizer_init (NemoMediaVisualizer *self)
 void
 nemo_media_visualizer_next (NemoMediaVisualizer *self)
 {
-	self->preset = (self->preset + 1) % 12;
+	self->preset = (self->preset + 1) % G_N_ELEMENTS (visual_presets);
 	self->preset_time = 0;
+	gtk_widget_queue_draw (GTK_WIDGET (self));
+	if (!self->rendering)
+		visual_request_frame (self);
+}
+
+void
+nemo_media_visualizer_set_preset (NemoMediaVisualizer *self, gint index)
+{
+	g_return_if_fail (index >= -1 && index < (gint) G_N_ELEMENTS (visual_presets));
+	self->automatic = index == -1;
+	if (index >= 0)
+		self->preset = index;
+	g_clear_pointer (&self->render_error, g_free);
+	self->preset_time = 0;
+	visualizer_update_tick (self);
 	gtk_widget_queue_draw (GTK_WIDGET (self));
 	if (!self->rendering)
 		visual_request_frame (self);
@@ -636,6 +1008,8 @@ nemo_media_visualizer_reset (NemoMediaVisualizer *self)
 {
 	nemo_media_visualizer_set_playing (self, FALSE);
 	memset (self->pcm, 0, sizeof self->pcm);
+	memset (self->analysis_pcm, 0, sizeof self->analysis_pcm);
+	self->reset_serial++;
 	self->last_pcm = 0;
 	if (self->render_cancel != NULL) {
 		g_cancellable_cancel (self->render_cancel);
@@ -669,5 +1043,11 @@ nemo_media_visualizer_handle_message (NemoMediaVisualizer *self, GstMessage *mes
 	if (gst_buffer_get_size (buffer) != sizeof self->pcm)
 		return;
 	gst_buffer_extract (buffer, 0, self->pcm, sizeof self->pcm);
+	value = gst_structure_get_value (structure, "analysis");
+	if (value != NULL && GST_VALUE_HOLDS_BUFFER (value)) {
+		buffer = gst_value_get_buffer (value);
+		if (gst_buffer_get_size (buffer) == sizeof self->analysis_pcm)
+			gst_buffer_extract (buffer, 0, self->analysis_pcm, sizeof self->analysis_pcm);
+	}
 	self->last_pcm = g_get_monotonic_time ();
 }

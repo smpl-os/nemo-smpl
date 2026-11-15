@@ -81,11 +81,22 @@ probe_spawn (GSubprocessLauncher *launcher, const char * const *argv, GError **e
 #undef g_subprocess_launcher_spawnv
 #include <libnemo-private/nemo-file-utilities.h>
 
+static cairo_status_t
+type3_glyph (cairo_scaled_font_t *font, unsigned long glyph, cairo_t *cr, cairo_text_extents_t *extents)
+{
+	cairo_rectangle (cr, 0, -0.8, 0.6, 0.8);
+	cairo_fill (cr);
+	*extents = (cairo_text_extents_t) { 0, -0.8, 0.6, 0.8, 0.7, 0 };
+	return CAIRO_STATUS_SUCCESS;
+}
+
 static void
 write_pdf (const char *path)
 {
 	cairo_surface_t *surface = cairo_pdf_surface_create (path, 600, 800);
 	cairo_t *cr = cairo_create (surface);
+	cairo_font_face_t *type3 = cairo_user_font_face_create ();
+	cairo_user_font_face_set_render_glyph_func (type3, type3_glyph);
 	for (int i = 0; i < 3; i++) {
 		cairo_set_source_rgb (cr, 1, 1, 1);
 		cairo_paint (cr);
@@ -94,9 +105,13 @@ write_pdf (const char *path)
 		cairo_set_font_size (cr, 24);
 		cairo_move_to (cr, 50, 100);
 		cairo_show_text (cr, i == 1 ? "Unique lighthouse needle" : i == 2 ? "Final chapter" : "First chapter");
+		cairo_set_font_face (cr, type3);
+		cairo_move_to (cr, 50, 150);
+		cairo_show_text (cr, "TypeThree");
 		cairo_show_page (cr);
 	}
 	cairo_destroy (cr);
+	cairo_font_face_destroy (type3);
 	cairo_surface_finish (surface);
 	g_assert_cmpint (cairo_surface_status (surface), ==, CAIRO_STATUS_SUCCESS);
 	cairo_surface_destroy (surface);
@@ -309,6 +324,11 @@ test_real_document (void)
 	g_assert_no_error (h.error);
 	g_assert_nonnull (h.viewer->pixbuf);
 	g_assert_cmpuint (nemo_document_viewer_get_page_count (h.viewer), ==, 3);
+	nemo_document_viewer_search_set_needle (h.viewer, "TypeThree");
+	g_assert_true (nemo_document_viewer_search_find_next (h.viewer));
+	wait_search (h.viewer);
+	g_assert_no_error ((GError *) nemo_document_viewer_search_get_error (h.viewer));
+	g_assert_true (nemo_document_viewer_search_has_match (h.viewer));
 	g_autofree char *cached = g_strdup (h.viewer->job->path);
 	document_next_clicked (GTK_BUTTON (h.viewer->next), h.viewer);
 	wait_render (h.viewer);

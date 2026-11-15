@@ -422,6 +422,21 @@
       <summary>Remember reading and playback positions in previews</summary>
       <description>If set to true, Nemo remembers document pages and scroll positions in Quick Preview and the preview pane, and audio/video playback positions in Quick Preview. Reopening the same file returns to its saved position. Positions are discarded when the file changes on disk.</description>
     </key>
+    <key name="media-player-volume" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>1.0</default>
+      <summary>Last media player volume</summary>
+      <description>Initial volume for new media player windows. Changes do not affect other open players.</description>
+    </key>
+    <key name="media-player-muted" type="b">
+      <default>false</default>
+      <summary>Last media player mute setting</summary>
+    </key>
+    <key name="media-player-visual" type="s">
+      <default>'off'</default>
+      <summary>Last media player visualization</summary>
+      <description>Stable visualization identifier, off, or automatic. New players restore this choice, including after Nemo restarts.</description>
+    </key>
     <key name="ignore-view-metadata" type="b">
       <default>false</default>
       <summary>Whether to ignore folder metadata for view zoom levels and layouts</summary>

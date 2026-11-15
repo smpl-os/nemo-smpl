@@ -27,5 +27,12 @@
     <file>nemo-style-fallback-mandatory.css</file>
     <file>nemo-style-application.css</file>
     <file>nemo-style-affordances.css</file>
+    <file>player-presets/aurora-cathedral.milk</file>
+    <file>player-presets/bioluminescent-abyss.milk</file>
+    <file>player-presets/liquid-chrome-kaleidoscope.milk</file>
+    <file>player-presets/nebula-forge.milk</file>
+    <file>player-presets/neon-sacred-geometry.milk</file>
+    <file>player-presets/tramonto-sul-golfo.milk</file>
+    <file>player-presets/LICENSE</file>
   </gresource>
 </gresources>
