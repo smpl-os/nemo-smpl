@@ -140,6 +140,10 @@ if gstreamer_enabled
   nemo_deps += gstreamer_pbutils
 endif
 
+if projectm_enabled
+  nemo_deps += [projectm, epoxy]
+endif
+
 if gtk_layer_shell_enabled
   nemo_deps += gtk_layer_shell
   nemo_deps += wayland_client

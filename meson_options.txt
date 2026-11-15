@@ -16,6 +16,8 @@ option('gtk_layer_shell', type : 'boolean', value : false,
        description: 'Use gtk-layer-shell to draw desktop on wayland')
 option('gstreamer', type : 'boolean', value : true,
        description: 'Video preview via GStreamer')
+option('projectm', type : 'feature', value : 'auto',
+       description: 'Opt-in MilkDrop visualization using projectM 4')
 option('libraw', type : 'boolean', value : true,
        description: 'RAW image preview support (DNG, ARW, CR2, NEF etc.)')
 option('document_preview', type : 'boolean', value : true,

@@ -131,7 +131,7 @@ struct _NemoQuickPreview {
 	GtkWidget   *binaural_button;
 	GtkWidget   *playlist_button;
 	GtkWidget   *visuals_button;
-	GtkWidget   *visual_style_combo;
+	GtkWidget   *next_visual_button;
 	GtkWidget   *volume_scale;
 	double       player_volume;
 	GstElement  *audio_filter;
@@ -731,17 +731,18 @@ player_binaural_toggled (GtkToggleButton *button, NemoQuickPreview *self)
 static void
 player_visuals_toggled (GtkToggleButton *button, NemoQuickPreview *self)
 {
-	gtk_widget_set_visible (self->visuals_button, !self->media_is_audio);
+	gboolean enabled = gtk_toggle_button_get_active (button);
+	if (self->audio_filter != NULL)
+		nemo_media_audio_set_visuals (self->audio_filter, enabled);
+	gtk_widget_set_sensitive (self->next_visual_button, enabled);
 	gtk_stack_set_visible_child_name (GTK_STACK (self->player_display),
-		self->media_is_audio || gtk_toggle_button_get_active (button) ? "visualizer" : "video");
+		enabled ? "visualizer" : self->media_is_audio ? "audio" : "video");
 }
 
 static void
-player_visual_style_changed (GtkComboBox *combo, NemoQuickPreview *self)
+player_next_visual_clicked (GtkButton *button, NemoQuickPreview *self)
 {
-	gint style = gtk_combo_box_get_active (combo);
-	if (style >= 0 && style <= NEMO_MEDIA_VISUAL_CLOUD_TUNNEL)
-		nemo_media_visualizer_set_style (NEMO_MEDIA_VISUALIZER (self->visualizer), style);
+	nemo_media_visualizer_next (NEMO_MEDIA_VISUALIZER (self->visualizer));
 }
 
 static void
@@ -1605,8 +1606,8 @@ nemo_quick_preview_new_player (void)
 	g_signal_connect (self->playlist_button, "toggled", G_CALLBACK (player_playlist_toggled), self);
 
 	self->visuals_button = gtk_toggle_button_new_with_label (_("Visuals"));
-	gtk_widget_set_no_show_all (self->visuals_button, TRUE);
-	gtk_widget_set_tooltip_text (self->visuals_button, _("Show smooth music visualization instead of video"));
+	gtk_widget_set_tooltip_text (self->visuals_button,
+		_("Enable projectM MilkDrop visuals. Effects may flash; avoid if sensitive to flashing lights."));
 	gtk_header_bar_pack_end (GTK_HEADER_BAR (self->header_bar), self->visuals_button);
 	g_signal_connect (self->visuals_button, "toggled", G_CALLBACK (player_visuals_toggled), self);
 
@@ -1618,6 +1619,8 @@ nemo_quick_preview_new_player (void)
 	g_object_unref (self->video_area);
 	self->visualizer = nemo_media_visualizer_new ();
 	gtk_stack_add_named (GTK_STACK (self->player_display), self->visualizer, "visualizer");
+	GtkWidget *audio_idle = gtk_label_new (_("Audio playing\nVisuals are off"));
+	gtk_stack_add_named (GTK_STACK (self->player_display), audio_idle, "audio");
 	gtk_container_add (GTK_CONTAINER (self->media_overlay), self->player_display);
 
 	GtkWidget *body = gtk_paned_new (GTK_ORIENTATION_HORIZONTAL);
@@ -1671,17 +1674,15 @@ nemo_quick_preview_new_player (void)
 	self->binaural_button = gtk_check_button_new_with_label (_("Binaural tones"));
 	gtk_widget_set_tooltip_text (self->binaural_button,
 		_("Optional quiet 200/240 Hz stereo tones (40 Hz difference). Use stereo headphones at low volume. "
-		  "Not a medical treatment; no flashing visuals."));
+		  "Not a medical treatment."));
 	g_signal_connect (self->binaural_button, "toggled", G_CALLBACK (player_binaural_toggled), self);
 	gtk_box_pack_start (GTK_BOX (controls), self->binaural_button, FALSE, FALSE, 0);
-	self->visual_style_combo = gtk_combo_box_text_new ();
-	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->visual_style_combo), _("Nebula clouds"));
-	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->visual_style_combo), _("Cloud tunnel"));
-	gtk_combo_box_set_active (GTK_COMBO_BOX (self->visual_style_combo), NEMO_MEDIA_VISUAL_NEBULA);
-	atk_object_set_name (gtk_widget_get_accessible (self->visual_style_combo), _("Visualization style"));
-	gtk_widget_set_tooltip_text (self->visual_style_combo, _("Music-reactive cloud shapes and colors"));
-	g_signal_connect (self->visual_style_combo, "changed", G_CALLBACK (player_visual_style_changed), self);
-	gtk_box_pack_start (GTK_BOX (controls), self->visual_style_combo, FALSE, FALSE, 0);
+	self->next_visual_button = gtk_button_new_with_label (_("Next visual"));
+	gtk_widget_set_tooltip_text (self->next_visual_button,
+		_("Generate the next original MilkDrop preset. Presets also rotate automatically."));
+	gtk_widget_set_sensitive (self->next_visual_button, FALSE);
+	g_signal_connect (self->next_visual_button, "clicked", G_CALLBACK (player_next_visual_clicked), self);
+	gtk_box_pack_start (GTK_BOX (controls), self->next_visual_button, FALSE, FALSE, 0);
 	GtkWidget *volume_controls = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 	gtk_widget_set_halign (volume_controls, GTK_ALIGN_CENTER);
 	gtk_box_pack_end (GTK_BOX (transport), volume_controls, FALSE, FALSE, 4);
@@ -2853,6 +2854,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 			return;
 		}
 		g_object_set (self->pipeline, "volume", self->player_volume, NULL);
+		nemo_media_audio_set_visuals (self->audio_filter,
+			gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->visuals_button)));
 		nemo_media_audio_set_binaural (self->audio_filter,
 			gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->binaural_button)));
 		g_object_set (self->pipeline, "audio-filter", self->audio_filter, NULL);

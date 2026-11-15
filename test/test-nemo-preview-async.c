@@ -1596,7 +1596,8 @@ test_player_transport (void)
 	nemo_quick_preview_show_file (player, first, NULL);
 	WAIT_UNTIL (player->media_ready && player->video_playing && player->dir_files != NULL &&
 		    player->playlist_fill_id == 0);
-	WAIT_UNTIL (NEMO_MEDIA_VISUALIZER (player->visualizer)->last_spectrum > 0);
+	g_assert_cmpint (NEMO_MEDIA_VISUALIZER (player->visualizer)->last_pcm, ==, 0);
+	g_assert_null (NEMO_MEDIA_VISUALIZER (player->visualizer)->frame);
 	g_assert_cmpuint (player->dir_files->len, ==, 2);
 	g_assert_cmpint (gtk_tree_model_iter_n_children (GTK_TREE_MODEL (player->playlist_model), NULL), ==, 2);
 	g_assert_false (player->video_muted);
@@ -1636,24 +1637,41 @@ test_player_transport (void)
 	g_assert_cmpfloat_with_epsilon (volume, 0.25, 0.0001);
 	gtk_range_set_value (GTK_RANGE (player->volume_scale), 24);
 	gtk_widget_grab_focus (player->video_area);
-	gtk_combo_box_set_active (GTK_COMBO_BOX (player->visual_style_combo), NEMO_MEDIA_VISUAL_CLOUD_TUNNEL);
-	g_assert_cmpint (NEMO_MEDIA_VISUALIZER (player->visualizer)->style, ==, NEMO_MEDIA_VISUAL_CLOUD_TUNNEL);
-	if (g_getenv ("NEMO_TEST_CLOUD_OUTPUT") != NULL) {
-		WAIT_UNTIL (NEMO_MEDIA_VISUALIZER (player->visualizer)->frame != NULL);
-		iterate_for (100);
+	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->visuals_button)));
+	g_assert_false (gtk_widget_get_sensitive (player->next_visual_button));
+	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->binaural_button)));
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "audio");
+#ifdef HAVE_PROJECTM
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->visuals_button), TRUE);
+	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (player->visualizer);
+	WAIT_UNTIL (visual->last_pcm > 0 && (visual->frame != NULL || visual->render_error != NULL));
+	g_assert_null (visual->render_error);
+	if (g_getenv ("NEMO_TEST_VISUAL_OUTPUT") != NULL) {
+		iterate_for (400);
 		GdkWindow *window = gtk_widget_get_window (GTK_WIDGET (player));
 		GdkPixbuf *shot = gdk_pixbuf_get_from_window (window, 0, 0,
 			gdk_window_get_width (window), gdk_window_get_height (window));
 		g_assert_nonnull (shot);
-		g_autofree char *path = g_build_filename (g_getenv ("NEMO_TEST_CLOUD_OUTPUT"),
-			"player-cloud-controls.png", NULL);
+		g_autofree char *path = g_build_filename (g_getenv ("NEMO_TEST_VISUAL_OUTPUT"),
+			"player-projectm-controls.png", NULL);
 		GError *error = NULL;
 		g_assert_true (gdk_pixbuf_save (shot, path, "png", &error, NULL));
 		g_assert_no_error (error);
 		g_object_unref (shot);
 	}
-	g_assert_false (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->binaural_button)));
-	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "visualizer");
+	g_assert_true (gtk_widget_get_sensitive (player->next_visual_button));
+	g_signal_emit_by_name (player->next_visual_button, "clicked");
+	g_assert_cmpuint (visual->preset, ==, 1);
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->visuals_button), FALSE);
+	WAIT_UNTIL (!visual->rendering);
+	g_assert_cmpuint (visual->tick, ==, 0);
+	gint64 last_pcm = visual->last_pcm;
+	iterate_for (100);
+	/* Previously queued bus messages may arrive once after opt-out. */
+	last_pcm = visual->last_pcm;
+	iterate_for (100);
+	g_assert_cmpint (visual->last_pcm, ==, last_pcm);
+#endif
 	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_l, .state = GDK_CONTROL_MASK };
 	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
 	g_assert_true (gtk_widget_get_visible (player->playlist_scroll));
@@ -1696,36 +1714,6 @@ test_player_transport (void)
 	g_assert_cmpint (gtk_tree_model_iter_n_children (GTK_TREE_MODEL (player->playlist_model), NULL), ==, 1);
 	g_assert_true (g_file_query_exists (image, NULL));
 	g_assert_cmpfloat (gtk_widget_get_opacity (GTK_WIDGET (player)), ==, 1);
-	WAIT_UNTIL (NEMO_MEDIA_VISUALIZER (player->visualizer)->frame != NULL);
-	GtkStyleContext *context = gtk_widget_get_style_context (GTK_WIDGET (player));
-	GtkCssProvider *alpha_css = gtk_css_provider_new ();
-	gtk_css_provider_load_from_data (alpha_css,
-		".nemo-quick-preview.smplos-native-alpha { background-color: rgba(20, 40, 60, 0.35); }",
-		-1, NULL);
-	gtk_style_context_add_provider (context, GTK_STYLE_PROVIDER (alpha_css),
-		GTK_STYLE_PROVIDER_PRIORITY_USER);
-	gtk_style_context_add_class (context, "smplos-native-alpha");
-	iterate_for (100);
-	gint width = gtk_widget_get_allocated_width (player->visualizer);
-	gint height = gtk_widget_get_allocated_height (player->visualizer);
-	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
-	cairo_t *cr = cairo_create (surface);
-	gtk_widget_draw (player->visualizer, cr);
-	cairo_destroy (cr);
-	cairo_surface_flush (surface);
-	guint32 *pixels = (guint32 *) cairo_image_surface_get_data (surface);
-	g_assert_cmpuint (pixels[0] >> 24, >=, 88);
-	g_assert_cmpuint (pixels[0] >> 24, <=, 90);
-	guint max_alpha = 0;
-	gint stride = cairo_image_surface_get_stride (surface) / 4;
-	for (gint y = 0; y < height; y++)
-		for (gint x = 0; x < width; x++)
-			max_alpha = MAX (max_alpha, pixels[y * stride + x] >> 24);
-	g_assert_cmpuint (max_alpha, ==, 255);
-	cairo_surface_destroy (surface);
-	gtk_style_context_remove_class (context, "smplos-native-alpha");
-	gtk_style_context_remove_provider (context, GTK_STYLE_PROVIDER (alpha_css));
-	g_object_unref (alpha_css);
 	GdkEventWindowState fullscreen = { .new_window_state = GDK_WINDOW_STATE_FULLSCREEN };
 	preview_window_state (GTK_WIDGET (player), &fullscreen, NULL);
 	g_assert_true (gtk_widget_get_parent (player->transport_revealer) == player->media_overlay);
@@ -1811,28 +1799,9 @@ test_player_voice_pitch (void)
 	g_assert_cmpint (g_rmdir (directory), ==, 0);
 }
 
-static cairo_surface_t *
-cloud_test_frame (NemoMediaVisualStyle style, const double levels[3], double time)
-{
-	CloudFrame request = { .width = 384, .height = 216, .aspect = 16.0 / 9,
-		.style = style, .time = time };
-	memcpy (request.levels, levels, sizeof request.levels);
-	GCancellable *cancel = g_cancellable_new ();
-	GTask *task = g_task_new (NULL, cancel, NULL, NULL);
-	g_task_set_task_data (task, &request, NULL);
-	cloud_noise_init ();
-	cloud_render_worker (task, NULL, &request, cancel);
-	GError *error = NULL;
-	cairo_surface_t *surface = g_task_propagate_pointer (task, &error);
-	g_assert_no_error (error);
-	g_assert_nonnull (surface);
-	g_object_unref (task);
-	g_object_unref (cancel);
-	return surface;
-}
-
+#ifdef HAVE_PROJECTM
 static double
-cloud_frame_difference (cairo_surface_t *first, cairo_surface_t *second)
+visual_frame_difference (cairo_surface_t *first, cairo_surface_t *second)
 {
 	guint32 *a = (guint32 *) cairo_image_surface_get_data (first);
 	guint32 *b = (guint32 *) cairo_image_surface_get_data (second);
@@ -1846,9 +1815,9 @@ cloud_frame_difference (cairo_surface_t *first, cairo_surface_t *second)
 }
 
 static void
-cloud_save_example (cairo_surface_t *surface, const char *name)
+visual_save_example (cairo_surface_t *surface, const char *name)
 {
-	const char *directory = g_getenv ("NEMO_TEST_CLOUD_OUTPUT");
+	const char *directory = g_getenv ("NEMO_TEST_VISUAL_OUTPUT");
 	if (directory == NULL)
 		return;
 	g_autofree char *path = g_build_filename (directory, name, NULL);
@@ -1865,14 +1834,15 @@ cloud_save_example (cairo_surface_t *surface, const char *name)
 	cairo_destroy (cr);
 	cairo_surface_destroy (output);
 }
+#endif
 
 static gboolean
-cloud_test_bus (GstBus *bus, GstMessage *message, gpointer data)
+visual_test_bus (GstBus *bus, GstMessage *message, gpointer data)
 {
 	if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_ERROR) {
 		GError *error = NULL;
 		gst_message_parse_error (message, &error, NULL);
-		g_error ("Cloud fixture: %s", error->message);
+		g_error ("projectM fixture: %s", error->message);
 	}
 	if (GST_MESSAGE_TYPE (message) == GST_MESSAGE_ELEMENT)
 		nemo_media_visualizer_handle_message (NEMO_MEDIA_VISUALIZER (data), message);
@@ -1880,7 +1850,7 @@ cloud_test_bus (GstBus *bus, GstMessage *message, gpointer data)
 }
 
 static void
-test_player_cloud_visuals (void)
+test_player_projectm_visuals (void)
 {
 	GtkWidget *window = gtk_window_new (GTK_WINDOW_TOPLEVEL);
 	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (nemo_media_visualizer_new ());
@@ -1891,82 +1861,94 @@ test_player_cloud_visuals (void)
 	GError *error = NULL;
 	GstElement *pipeline = gst_pipeline_new (NULL);
 	GstElement *source = gst_element_factory_make ("audiotestsrc", NULL);
+	GstElement *capsfilter = gst_element_factory_make ("capsfilter", NULL);
 	GstElement *convert = gst_element_factory_make ("audioconvert", NULL);
 	GstElement *filter = nemo_media_audio_filter_new (&error);
 	GstElement *sink = gst_element_factory_make ("fakesink", NULL);
 	g_assert_no_error (error);
-	g_object_set (source, "is-live", TRUE, "freq", 70.0, "volume", 0.8, NULL);
+	nemo_media_audio_set_visuals (filter, TRUE);
+	g_object_set (source, "is-live", TRUE, "freq", 70.0, "volume", 0.8,
+		"samplesperbuffer", 128, NULL);
+	GstCaps *audio_caps = gst_caps_new_simple ("audio/x-raw", "rate", G_TYPE_INT, 192000, NULL);
+	g_object_set (capsfilter, "caps", audio_caps, NULL);
+	gst_caps_unref (audio_caps);
 	g_object_set (sink, "sync", TRUE, NULL);
-	gst_bin_add_many (GST_BIN (pipeline), source, convert, filter, sink, NULL);
-	g_assert_true (gst_element_link_many (source, convert, filter, sink, NULL));
+	gst_bin_add_many (GST_BIN (pipeline), source, capsfilter, convert, filter, sink, NULL);
+	g_assert_true (gst_element_link_many (source, capsfilter, convert, filter, sink, NULL));
 	GstBus *bus = gst_element_get_bus (pipeline);
-	guint watch = gst_bus_add_watch (bus, cloud_test_bus, visual);
+	guint watch = gst_bus_add_watch (bus, visual_test_bus, visual);
 	gst_object_unref (bus);
 	g_assert_cmpint (gst_element_set_state (pipeline, GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
 	nemo_media_visualizer_set_playing (visual, TRUE);
-	WAIT_UNTIL (visual->target[0] > 0.35 && visual->levels[0] > 0.3 && visual->frame != NULL);
-	g_assert_cmpfloat (visual->target[1], <, 0.15);
-	g_assert_cmpfloat (visual->target[2], <, 0.1);
-	g_assert_cmpint (cairo_image_surface_get_width (visual->frame) *
-		cairo_image_surface_get_height (visual->frame), <=, CLOUD_PIXELS);
-	double bass[3];
-	memcpy (bass, visual->levels, sizeof bass);
-	g_object_set (source, "freq", 5000.0, NULL);
-	WAIT_UNTIL (visual->target[2] > 0.35 && visual->levels[2] > 0.3 && visual->levels[0] < 0.15);
-	double treble[3];
-	memcpy (treble, visual->levels, sizeof treble);
-	double quiet[3] = { 0, 0, 0 };
-	gint64 render_time = 0;
-	for (guint style = 0; style < 2; style++) {
-		gint64 start = g_get_monotonic_time ();
-		cairo_surface_t *a = cloud_test_frame (style, quiet, 4);
-		cairo_surface_t *b = cloud_test_frame (style, bass, 4);
-		cairo_surface_t *c = cloud_test_frame (style, treble, 4);
-		cairo_surface_t *d = cloud_test_frame (style, treble, 5);
-		render_time += g_get_monotonic_time () - start;
-		g_test_message ("Style %u pixel change: bass %.2f, treble %.2f, motion %.2f",
-			style, cloud_frame_difference (a, b), cloud_frame_difference (b, c),
-			cloud_frame_difference (c, d));
-		g_assert_cmpfloat (cloud_frame_difference (a, b), >, 3);
-		g_assert_cmpfloat (cloud_frame_difference (b, c), >, 8);
-		g_assert_cmpfloat (cloud_frame_difference (c, d), >, 1);
-		cloud_save_example (b, style == 0 ? "nebula-bass.png" : "cloud-tunnel-bass.png");
-		cloud_save_example (c, style == 0 ? "nebula-treble.png" : "cloud-tunnel-treble.png");
-		cairo_surface_destroy (a);
-		cairo_surface_destroy (b);
-		cairo_surface_destroy (c);
-		cairo_surface_destroy (d);
-	}
-	g_test_message ("Cloud render average (excluding PNG export): %.2f ms for %u pixels",
-		render_time / 8000.0, CLOUD_PIXELS);
-	gtk_window_resize (GTK_WINDOW (window), 2560, 1440);
-	iterate_for (200);
-	WAIT_UNTIL (visual->frame != NULL && fabs (visual->frame_aspect -
-		(double) gtk_widget_get_allocated_width (GTK_WIDGET (visual)) /
-		gtk_widget_get_allocated_height (GTK_WIDGET (visual))) < 0.01);
-	g_assert_cmpint (cairo_image_surface_get_width (visual->frame) *
-		cairo_image_surface_get_height (visual->frame), <=, CLOUD_PIXELS);
+	WAIT_UNTIL (visual->last_pcm > 0);
+	g_object_set (source, "freq", 1000.0, NULL);
+	iterate_for (150);
+	guint crossings = 0;
+	for (guint i = 1; i < PCM_FRAMES; i++)
+		if (visual->pcm[(i - 1) * 2] <= 0 && visual->pcm[i * 2] > 0)
+			crossings++;
+	g_assert_cmpuint (crossings, >=, 10);
+	g_assert_cmpuint (crossings, <=, 13);
+#ifdef HAVE_PROJECTM
+	WAIT_UNTIL (visual->rendered_frames >= 24 || visual->render_error != NULL);
+	g_assert_null (visual->render_error);
+	g_assert_nonnull (visual->frame);
+	cairo_surface_t *first = cairo_surface_reference (visual->frame);
+	visual_save_example (first, "projectm-flow.png");
+	guint before = visual->rendered_frames;
+	nemo_media_visualizer_next (visual);
+	g_assert_cmpuint (visual->preset, ==, 1);
+	iterate_for (2000);
+	WAIT_UNTIL (visual->rendered_frames > before + 110 || visual->render_error != NULL);
+	g_assert_null (visual->render_error);
+	g_assert_cmpfloat (visual_frame_difference (first, visual->frame), >, 3);
+	visual_save_example (visual->frame, "projectm-lattice.png");
+	cairo_surface_destroy (first);
+	visual->preset_time = 29.99;
+	before = visual->preset;
+	WAIT_UNTIL (visual->preset != before);
+#else
+	WAIT_UNTIL (visual->render_error != NULL);
+	g_assert_null (visual->frame);
+#endif
 	nemo_media_visualizer_set_playing (visual, FALSE);
 	WAIT_UNTIL (!visual->rendering);
+#ifdef HAVE_PROJECTM
+	projectm_set_soft_cut_duration (visual->gpu.engine, 0.01);
+	for (guint preset = 0; preset < 12; preset++) {
+		VisualFrame request = { .preset = preset };
+		memcpy (request.pcm, visual->pcm, sizeof request.pcm);
+		GTask *task = g_task_new (visual, NULL, NULL, NULL);
+		visual_render_worker (task, visual, &request, NULL);
+		GError *render_error = NULL;
+		cairo_surface_t *frame = g_task_propagate_pointer (task, &render_error);
+		g_assert_no_error (render_error);
+		g_assert_nonnull (frame);
+		cairo_surface_destroy (frame);
+		g_object_unref (task);
+	}
+	projectm_set_soft_cut_duration (visual->gpu.engine, 4);
+#endif
 	g_assert_cmpuint (visual->tick, ==, 0);
-	double time = visual->time;
+	guint count = visual->rendered_frames;
 	iterate_for (150);
-	g_assert_cmpfloat (visual->time, ==, time);
-	nemo_media_visualizer_set_style (visual, NEMO_MEDIA_VISUAL_CLOUD_TUNNEL);
-	WAIT_UNTIL (visual->frame != NULL && !visual->rendering);
+	g_assert_cmpuint (visual->rendered_frames, ==, count);
 	g_object_set (gtk_widget_get_settings (GTK_WIDGET (visual)), "gtk-enable-animations", FALSE, NULL);
 	nemo_media_visualizer_set_playing (visual, TRUE);
 	g_assert_cmpuint (visual->tick, ==, 0);
-	time = visual->time;
 	iterate_for (150);
-	g_assert_cmpfloat (visual->time, ==, time);
+	g_assert_cmpuint (visual->rendered_frames, ==, count);
 	g_object_set (gtk_widget_get_settings (GTK_WIDGET (visual)), "gtk-enable-animations", TRUE, NULL);
+#ifdef HAVE_PROJECTM
 	g_assert_cmpuint (visual->tick, >, 0);
+#endif
 	gtk_widget_hide (GTK_WIDGET (visual));
 	g_assert_cmpuint (visual->tick, ==, 0);
 	WAIT_UNTIL (!visual->rendering);
 	gtk_widget_show (GTK_WIDGET (visual));
+#ifdef HAVE_PROJECTM
 	WAIT_UNTIL (visual->rendering);
+#endif
 	gpointer weak = visual;
 	g_object_add_weak_pointer (G_OBJECT (visual), &weak);
 	g_source_remove (watch);
@@ -2005,7 +1987,7 @@ test_player_error_recovery (void)
 	WAIT_UNTIL (player->media_ready);
 	g_assert_true (player->media_is_audio);
 	g_assert_nonnull (player->pipeline);
-	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "visualizer");
+	g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (player->player_display)), ==, "audio");
 	gtk_widget_destroy (GTK_WIDGET (player));
 	g_object_unref (player);
 	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
@@ -2033,6 +2015,13 @@ test_player_independent_windows (void)
 		g_assert_cmpfloat_with_epsilon (volume, i == 0 ? 0.18 : 1, 0.0001);
 	}
 	g_assert_cmpint (g_atomic_int_get (&media_pipeline_count), ==, G_N_ELEMENTS (players));
+#ifdef HAVE_PROJECTM
+	for (guint i = 0; i < 2; i++)
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (players[i]->visuals_button), TRUE);
+	NemoMediaVisualizer *second_visual = NEMO_MEDIA_VISUALIZER (players[1]->visualizer);
+	WAIT_UNTIL (NEMO_MEDIA_VISUALIZER (players[0]->visualizer)->frame != NULL &&
+		second_visual->frame != NULL);
+#endif
 	for (guint i = 0; i < G_N_ELEMENTS (players); i++) {
 		for (guint j = i + 1; j < G_N_ELEMENTS (players); j++) {
 			g_assert_true (players[j]->video_playing);
@@ -2041,6 +2030,13 @@ test_player_independent_windows (void)
 		}
 		gtk_widget_destroy (GTK_WIDGET (players[i]));
 		g_object_unref (players[i]);
+#ifdef HAVE_PROJECTM
+		if (i == 0) {
+			guint before = second_visual->rendered_frames;
+			WAIT_UNTIL (second_visual->rendered_frames > before);
+			g_assert_null (second_visual->render_error);
+		}
+#endif
 	}
 	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
 	g_assert_cmpint (g_atomic_int_get (&media_transition_count), ==, 0);
@@ -2132,7 +2128,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/player/transport-speed-playlist-delete", test_player_transport);
 	g_test_add_func ("/preview/player/stereo-tones-default-off", test_player_audio_effects);
 	g_test_add_func ("/preview/player/preserve-voice-pitch-2x-3x", test_player_voice_pitch);
-	g_test_add_func ("/preview/player/music-reactive-clouds-lifecycle", test_player_cloud_visuals);
+	g_test_add_func ("/preview/player/projectm-audio-lifecycle", test_player_projectm_visuals);
 	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);
 	g_test_add_func ("/preview/player/six-independent-windows", test_player_independent_windows);
 	gst_init (&argc, &argv);

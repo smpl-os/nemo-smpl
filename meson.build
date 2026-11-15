@@ -167,6 +167,16 @@ if gstreamer_enabled
 endif
 conf.set('HAVE_GSTREAMER', gstreamer_enabled)
 
+projectm_enabled = false
+if smpl_features_enabled and gstreamer_enabled
+  projectm = dependency('projectM-4', version: '>=4.1', required: get_option('projectm'))
+  projectm_enabled = projectm.found()
+  if projectm_enabled
+    epoxy = dependency('epoxy')
+  endif
+endif
+conf.set('HAVE_PROJECTM', projectm_enabled)
+
 libraw_enabled = get_option('libraw')
 if libraw_enabled
   libraw = dependency('libraw',                        version: '>=0.20', required: false)

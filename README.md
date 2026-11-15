@@ -221,19 +221,32 @@ starts each subsequent track at the beginning. Positions survive restarting
 Nemo, are ignored if the file changes, and use the reading/playback-position
 preference above. The existing sidebar preview remains independent and muted.
 
-Audio offers two original, textured, music-reactive visualizations:
-**Nebula clouds** and a concentric **Cloud tunnel**, selected in the transport.
-Bass deforms and moves the clouds; mids and treble shift their colors. **Visuals**
-also switches video to that view. GStreamer's spectrum analysis drives smooth
-changes without flashing or a separate visualization dependency. Cloud frames
-render off the UI thread with two shared workers and bounded resolution, even
-in fullscreen. Paused or hidden views stop animating; reduced GTK animations
-leave a static view. The deep-space canvas stays dark even with light themes and
-uses the native-alpha theme's background transparency without fading cloud
-highlights or stars. Optional **Binaural tones**, off by default, mix quiet 200 Hz
+**Visuals** enables the real [projectM](https://github.com/projectM-visualizer/projectm)
+MilkDrop-compatible engine, not the previous homemade cloud effects. Visuals
+are **off by default** for audio and video. Original generated MilkDrop presets
+rotate every 30 seconds with blended transitions; **Next visual** selects another.
+Only this player's decoded stereo audio is used: no microphone or desktop audio
+capture, downloaded presets, or network connection.
+
+**Photosensitivity warning:** visual effects may flash. Do not enable them if
+sensitive to flashing lights; there are no safety or medical claims. Reduced GTK
+animations stop motion, and paused/hidden views stop requesting frames. Rendering
+uses OpenGL off the UI thread, with two shared workers and a fixed 800x450 canvas
+scaled to the player, including fullscreen. Text and controls keep their normal
+theme and native background transparency; the visualization itself is opaque.
+An unavailable projectM/OpenGL renderer reports an error without stopping audio.
+
+Building visuals requires projectM **4.1 or newer** (`projectM-4.pc`) and libepoxy;
+use `-Dprojectm=enabled` to require support or `-Dprojectm=disabled` to omit it.
+The default `auto` enables it only when available. projectM is LGPL-2.1-or-later;
+the generated presets are original Nemo source, not unlicensed preset packs.
+Arch/smplOS release packages require projectM support. The current Debian/LMDE
+release builder provides projectM 3 only, so its packages omit visuals while
+retaining playback and volume controls.
+Optional **Binaural tones**, off by default, mix quiet 200 Hz
 and 240 Hz stereo tones (a 40 Hz difference) after speed correction. Use stereo
 headphones at low volume; this is not a medical treatment and makes no meditation
-or therapeutic efficacy claims. There is no 40 Hz visual strobe.
+or therapeutic efficacy claims. No intentional 40 Hz visual strobe is implemented.
 
 **F** or the fullscreen button toggles fullscreen; **Escape** exits fullscreen
 before closing the player. Native-alpha themes can make the background and video

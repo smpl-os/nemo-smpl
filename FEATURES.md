@@ -49,7 +49,7 @@ Double Commander-style instant file viewer:
 - **Media playlist**: Ctrl+L toggles current-directory audio/video tracks; previous/next buttons and Ctrl+Left/Right, audible autoplay, automatic next track, and Delete-to-Trash using the existing confirmation/error workflow
 - **Audiobook speeds**: 0.5x through 3x, including 2x and 3x, with pitch preservation; each player retains its rate across tracks and seeks
 - **Player volume**: independent 0–100% slider with keyboard adjustment, retained across tracks and mute/unmute; available in fullscreen
-- **Music visualization**: textured Nebula clouds and concentric Cloud tunnel with music-driven shape, motion and color; bounded background rendering, no flashing, respects reduced animation; optional quiet 200/240 Hz binaural tones off by default, without medical claims
+- **Music visualization**: opt-in projectM 4 MilkDrop rendering with original generated presets, automatic blended rotation and Next visual; bounded background GPU rendering, reduced-animation support and flashing-effects warning. Optional quiet 200/240 Hz binaural tones remain off by default, without medical claims
 - **Player display**: fullscreen with hover transport; Escape exits fullscreen first. Native-alpha backgrounds and letterboxing preserve opaque foregrounds, without whole-window opacity
 - Split view moved to Ctrl+F3
 - File-pane and right-preview dividers use a theme-aware 1-pixel line with a wider invisible resize target

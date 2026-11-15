@@ -108,7 +108,7 @@ sudo dnf install -y \
 ```bash
 sudo pacman -S --needed \
   base-devel meson ninja pkgconf \
-  gtk3 glib2 json-glib libx11 xapp cinnamon-desktop \
+  gtk3 glib2 json-glib libx11 xapp cinnamon-desktop libprojectm libepoxy \
   libexif libraw exempi gstreamer gst-plugins-base-libs \
   gst-plugins-base gst-plugins-good \
   md4c poppler-glib mupdf-tools bubblewrap \
@@ -142,6 +142,14 @@ Archive audio/video previews need GStreamer's `giosrc` plugin and the relevant
 decoders. Packaged builds include the base/good plugin sets, also required for
 the WAV archive regression: `gst-plugins-base` and `gst-plugins-good` on Arch,
 or `gstreamer1.0-plugins-base` and `gstreamer1.0-plugins-good` on Debian/Ubuntu.
+
+Opt-in MilkDrop visuals use projectM 4.1+ and libepoxy, with an OpenGL 3.3
+renderer. On Arch, install `libprojectm` and `libepoxy`. Other distributions need
+development packages providing `projectM-4.pc` and `epoxy.pc`; projectM 3 is not
+compatible. Use `-Dprojectm=enabled` to require these dependencies or
+`-Dprojectm=disabled` to build without visuals. The default is auto-detection.
+Playback and volume controls work without projectM; enabling unavailable visuals
+shows an error. Visual effects are off by default and may flash.
 
 Archive filename decoding requires an installed UTF-8 locale, including when
 Nemo runs under the `C` locale. Decoding uses a temporary thread-local locale;
