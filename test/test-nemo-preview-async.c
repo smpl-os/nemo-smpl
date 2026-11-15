@@ -2207,7 +2207,7 @@ test_player_preferences_restart (void)
 				g_subprocess_launcher_setenv (launcher, "NEMO_TEST_PLAYER_PREFERENCES_VISUAL", choices[choice], TRUE);
 				GError *error = NULL;
 				GSubprocess *child = g_subprocess_launcher_spawn (launcher, &error, test_program,
-					"-p", "/preview/player/preferences-process-restart", "--GTestSubprocess", NULL);
+					"-p", "/preview/player/preferences-process-restart", NULL);
 				g_assert_no_error (error);
 				g_object_unref (launcher);
 				g_autofree char *output = NULL;
@@ -2215,8 +2215,11 @@ test_player_preferences_restart (void)
 				g_assert_true (g_subprocess_communicate_utf8 (child, NULL, NULL, &output, &diagnostic, &error));
 				g_assert_no_error (error);
 				if (!g_subprocess_get_successful (child))
-					g_error ("Player preference %s/%s: %s\n%s", choices[choice],
-						step == 0 ? "write" : "read", output, diagnostic);
+					g_error ("Player preference %s/%s (%s %d): %s\n%s", choices[choice],
+						step == 0 ? "write" : "read",
+						g_subprocess_get_if_signaled (child) ? "signal" : "exit",
+						g_subprocess_get_if_signaled (child) ? g_subprocess_get_term_sig (child) :
+							g_subprocess_get_exit_status (child), output, diagnostic);
 				g_object_unref (child);
 			}
 		return;
@@ -2651,6 +2654,10 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/media/optional-decoders", test_media_optional_decoders);
 #endif
 	int result = g_test_run ();
+#ifdef HAVE_GSTREAMER
+	/* Widget-only tests have no GApplication shutdown signal. */
+	visual_application_shutdown (NULL, NULL);
+#endif
 	g_source_remove (tick);
 	return result;
 }
