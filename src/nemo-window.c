@@ -934,6 +934,9 @@ nemo_window_destroy (GtkWidget *object)
 	}
 
 #ifdef NEMO_SMPL
+	/* Finish menu rebuilds before GTK destroys their proxy widgets. */
+	if (window->details->ui_manager != NULL)
+		gtk_ui_manager_ensure_update (window->details->ui_manager);
 	window->details->transfer_area = NULL;
 	window->details->transfer_area_container = NULL;
 	window->details->zen_updating = TRUE;

@@ -1997,6 +1997,107 @@ test_player_error_recovery (void)
 	g_assert_cmpint (g_rmdir (directory), ==, 0);
 }
 
+typedef struct {
+	GtkApplication *application;
+	GFile *file;
+	GtkWidget *browsers[2];
+	NemoQuickPreview *players[3];
+	guint stage;
+	gboolean finished;
+} PlayerApplicationTest;
+
+static gboolean
+player_application_close_windows (gpointer data)
+{
+	PlayerApplicationTest *test = data;
+	NemoQuickPreview *first = test->players[0];
+	NemoQuickPreview *extra = test->players[1];
+	NemoQuickPreview *second = test->players[2];
+
+	if (test->stage == 0) {
+		for (guint i = 0; i < G_N_ELEMENTS (test->players); i++) {
+			if (!test->players[i]->media_ready)
+				return G_SOURCE_CONTINUE;
+			g_assert_true (test->players[i]->video_playing);
+		}
+		gtk_window_close (GTK_WINDOW (test->browsers[0]));
+		test->stage++;
+	} else if (test->stage == 1) {
+		if (!first->destroyed || !extra->destroyed)
+			return G_SOURCE_CONTINUE;
+		g_assert_null (first->player_application);
+		g_assert_null (extra->player_application);
+		g_assert_null (first->pipeline);
+		g_assert_null (extra->pipeline);
+		g_assert_cmpuint (g_list_length (gtk_application_get_windows (test->application)), ==, 1);
+		g_assert_true (gtk_widget_get_mapped (test->browsers[1]));
+		g_assert_true (second->video_playing);
+		g_assert_true (second->player_application == G_APPLICATION (test->application));
+		/* A separate operation must survive closing the final player. */
+		g_application_hold (G_APPLICATION (test->application));
+		gtk_window_close (GTK_WINDOW (second));
+		test->stage++;
+	} else if (test->stage == 2) {
+		if (!second->destroyed)
+			return G_SOURCE_CONTINUE;
+		g_assert_null (second->player_application);
+		gtk_window_close (GTK_WINDOW (test->browsers[1]));
+		test->stage++;
+	} else {
+		if (gtk_application_get_windows (test->application) != NULL)
+			return G_SOURCE_CONTINUE;
+		test->finished = TRUE;
+		g_application_release (G_APPLICATION (test->application));
+		return G_SOURCE_REMOVE;
+	}
+	return G_SOURCE_CONTINUE;
+}
+
+static void
+player_application_activate (GtkApplication *application, gpointer data)
+{
+	PlayerApplicationTest *test = data;
+	for (guint i = 0; i < G_N_ELEMENTS (test->browsers); i++) {
+		test->browsers[i] = gtk_application_window_new (application);
+		gtk_widget_show (test->browsers[i]);
+	}
+	for (guint i = 0; i < G_N_ELEMENTS (test->players); i++) {
+		test->players[i] = g_object_ref_sink (nemo_quick_preview_new_player ());
+		GtkWindow *parent = GTK_WINDOW (test->browsers[i < 2 ? 0 : 1]);
+		nemo_quick_preview_show_file (test->players[i], test->file, parent);
+	}
+	g_assert_cmpuint (g_list_length (gtk_application_get_windows (application)), ==, 2);
+	g_timeout_add (10, player_application_close_windows, test);
+}
+
+static void
+test_player_application_lifetime (void)
+{
+	if (!g_test_subprocess ()) {
+		g_test_trap_subprocess (NULL, 15 * G_USEC_PER_SEC, 0);
+		g_test_trap_assert_passed ();
+		return;
+	}
+
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-application-XXXXXX", NULL);
+	PlayerApplicationTest test = { 0 };
+	test.application = gtk_application_new ("org.Nemo.PlayerLifetimeTest", G_APPLICATION_NON_UNIQUE);
+	test.file = player_track_fixture (directory, "track.wav");
+	g_signal_connect (test.application, "activate", G_CALLBACK (player_application_activate), &test);
+	char *argv[] = { "nemo-player-lifetime", NULL };
+	g_assert_cmpint (g_application_run (G_APPLICATION (test.application), 1, argv), ==, 0);
+	g_assert_true (test.finished);
+	for (guint i = 0; i < G_N_ELEMENTS (test.players); i++) {
+		g_assert_true (test.players[i]->destroyed);
+		gtk_widget_destroy (GTK_WIDGET (test.players[i]));
+		g_object_unref (test.players[i]);
+	}
+	g_object_unref (test.application);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (test.file);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
 static void
 test_player_independent_windows (void)
 {
@@ -2131,6 +2232,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/player/projectm-audio-lifecycle", test_player_projectm_visuals);
 	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);
 	g_test_add_func ("/preview/player/six-independent-windows", test_player_independent_windows);
+	g_test_add_func ("/preview/player/application-lifetime", test_player_application_lifetime);
 	gst_init (&argc, &argv);
 #endif
 	main_thread = g_thread_self ();

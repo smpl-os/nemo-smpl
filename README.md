@@ -197,9 +197,12 @@ their own reference-frame memory, so high-resolution video can use substantial
 memory even in a small preview.
 
 F3 on audio/video opens a **new independent Nemo Media Player window** each time,
-with audible autoplay. Players stay open when the file-manager window closes;
-opening a document or image does not interrupt them. **Ctrl+L** (configurable in
+with audible autoplay. Closing a file-manager window also closes the players
+opened from that window; players belonging to other windows keep playing.
+Opening a document or image does not interrupt playback. **Ctrl+L** (configurable in
 Quick Preview shortcuts) shows the current directory's media-only playlist.
+A player keeps Nemo running while open; closing it releases that keep-alive.
+Nemo can then exit when no other windows or operations require it.
 Double-click a track or use the previous/next buttons or **Ctrl+Left/Right**.
 Playback advances automatically and stops at the end of the playlist; decoder
 errors are shown rather than silently skipping files.

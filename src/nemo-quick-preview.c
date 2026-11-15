@@ -1151,10 +1151,6 @@ nemo_quick_preview_init (NemoQuickPreview *self)
 #endif
 	self->mode = PREVIEW_NONE;
 	self->parent_window = NULL;
-	if (self->player_application != NULL) {
-		g_application_release (self->player_application);
-		g_clear_object (&self->player_application);
-	}
 	self->current_file = NULL;
 	self->current_dir = NULL;
 	self->dir_files = NULL;
@@ -1550,6 +1546,10 @@ nemo_quick_preview_destroy (GtkWidget *widget)
 			g_object_remove_weak_pointer (G_OBJECT (self->parent_window),
 						     (gpointer *) &self->parent_window);
 		self->parent_window = NULL;
+		if (self->player_application != NULL) {
+			g_application_release (self->player_application);
+			g_clear_object (&self->player_application);
+		}
 	}
 	GTK_WIDGET_CLASS (nemo_quick_preview_parent_class)->destroy (widget);
 }
@@ -3110,6 +3110,8 @@ nemo_quick_preview_show_file (NemoQuickPreview *self,
 			/* Browser window lists must not contain non-Nemo player windows. */
 			self->player_application = g_object_ref (G_APPLICATION (application));
 			g_application_hold (self->player_application);
+			g_signal_connect_object (parent, "destroy", G_CALLBACK (gtk_widget_destroy),
+						 self, G_CONNECT_SWAPPED);
 		}
 	}
 #endif

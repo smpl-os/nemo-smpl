@@ -600,6 +600,7 @@ test_detached_media_players (void)
     GList *players = preview_windows ();
     g_assert_cmpuint (g_list_length (players), ==, 2);
     for (GList *l = players; l != NULL; l = l->next) {
+        g_object_ref (l->data);
         g_assert_null (gtk_window_get_transient_for (l->data));
         g_assert_false (gtk_window_get_skip_taskbar_hint (l->data));
         g_assert_cmpint (gtk_window_get_type_hint (l->data), ==, GDK_WINDOW_TYPE_HINT_NORMAL);
@@ -622,15 +623,30 @@ test_detached_media_players (void)
     g_object_get (g_ptr_array_index (player_pipelines, 2), "current-uri", &uri, NULL);
     g_assert_cmpstr (uri, ==, expected);
     g_assert_true (gtk_widget_get_visible (GTK_WIDGET (document)));
-    gtk_widget_destroy (GTK_WIDGET (fixture.window));
-    g_assert_null (gtk_application_get_windows (GTK_APPLICATION (application)));
-    for (GList *l = players; l != NULL; l = l->next)
-        g_assert_true (gtk_widget_get_visible (l->data));
-    g_assert_true (pipeline_playing (1));
-    g_assert_true (pipeline_playing (2));
-    for (GList *l = players; l != NULL; l = l->next)
-        gtk_widget_destroy (l->data);
-    g_list_free (players);
+    Fixture other = fixture_new ();
+    nemo_window_slot_open_location (other.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (other.slot, fixture.containing));
+    activate_f3 (&other, first);
+    WAIT_FOR (pipeline_playing (3));
+    gtk_window_close (GTK_WINDOW (fixture.window));
+    WAIT_FOR (g_list_length (gtk_application_get_windows (GTK_APPLICATION (application))) == 1);
+    for (GList *l = players; l != NULL; l = l->next) {
+        g_assert_false (gtk_widget_get_visible (l->data));
+        g_assert_false (gtk_widget_get_realized (l->data));
+    }
+    for (guint i = 0; i < 3; i++) {
+        GstState state;
+        WAIT_FOR (gst_element_get_state (g_ptr_array_index (player_pipelines, i), &state, NULL, 0)
+                  != GST_STATE_CHANGE_ASYNC && state == GST_STATE_NULL);
+    }
+    g_assert_true (pipeline_playing (3));
+    g_assert_true (gtk_widget_get_mapped (GTK_WIDGET (other.window)));
+    gtk_window_close (GTK_WINDOW (other.window));
+    WAIT_FOR (gtk_application_get_windows (GTK_APPLICATION (application)) == NULL);
+    GstState state;
+    WAIT_FOR (gst_element_get_state (g_ptr_array_index (player_pipelines, 3), &state, NULL, 0)
+              != GST_STATE_CHANGE_ASYNC && state == GST_STATE_NULL);
+    g_list_free_full (players, g_object_unref);
     nemo_quick_preview_dismiss (document);
     g_ptr_array_unref (player_pipelines);
     player_pipelines = NULL;
@@ -638,6 +654,7 @@ test_detached_media_players (void)
     g_assert_true (g_file_delete (second, NULL, NULL));
     g_object_unref (first);
     g_object_unref (second);
+    fixture_clear (&other);
     fixture_clear (&fixture);
 }
 #endif

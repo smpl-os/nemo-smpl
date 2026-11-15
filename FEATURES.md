@@ -45,7 +45,7 @@ Double Commander-style instant file viewer:
 - **Filename footer**: the current filename stays visible at the bottom, including fullscreen
 - **File information (I)**: toggle file and available camera metadata, with an OpenStreetMap location map when GPS coordinates exist (uncached tiles require network access)
 - **Media information**: original image/video dimensions and aspect ratio; audio/video duration, codecs, stream bit rates, average overall bit rate, frame rate, sample rate and channels when available. Shared with the preview pane; GPS remains available for geotagged JPEG and supported RAW photos.
-- Escape to dismiss; documents/images reuse the preview window, while each F3 media activation opens an independent, taskbar-visible player that survives closing the file-manager window
+- Escape to dismiss; documents/images reuse the preview window, while each F3 media activation opens a taskbar-visible player. Closing a file-manager window stops its own players, without affecting other windows' players or active file transfers
 - **Media playlist**: Ctrl+L toggles current-directory audio/video tracks; previous/next buttons and Ctrl+Left/Right, audible autoplay, automatic next track, and Delete-to-Trash using the existing confirmation/error workflow
 - **Audiobook speeds**: 0.5x through 3x, including 2x and 3x, with pitch preservation; each player retains its rate across tracks and seeks
 - **Player volume**: independent 0–100% slider with keyboard adjustment, retained across tracks and mute/unmute; available in fullscreen
