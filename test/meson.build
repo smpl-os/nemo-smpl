@@ -12,10 +12,8 @@ if smpl_features_enabled
     is_parallel: false,
   )
   archive_source_test_sources = []
-  media_effect_test_sources = []
   if gstreamer_enabled
     archive_source_test_sources = ['../src/nemo-archive-source.c']
-    media_effect_test_sources = ['../src/nemo-media-effects.c']
   endif
   copy_integrity_schemas = custom_target('copy-integrity-schemas',
     input: '../libnemo-private/org.nemo.gschema.xml',
@@ -305,7 +303,7 @@ if smpl_features_enabled
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
         '../src/nemo-document-viewer.c',
-      ] + archive_source_test_sources + media_effect_test_sources,
+      ] + archive_source_test_sources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,

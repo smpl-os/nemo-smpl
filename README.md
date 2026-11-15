@@ -211,15 +211,26 @@ The speed selector offers **0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x and 3x**, preservin
 voice pitch for audiobooks. Speed is retained across tracks and seeks in that
 window. A file that cannot seek/change speed reports the limitation.
 
+The **Volume** slider adjusts this player's audio from **0–100%**, without
+changing other players or system volume. Its level is retained across tracks;
+mute/unmute preserves it. Focus the slider (or press **Alt+V**) and use arrow
+keys for fine adjustment. Volume is also available in fullscreen transport.
+
 The initially selected file resumes its saved position; playlist navigation
 starts each subsequent track at the beginning. Positions survive restarting
 Nemo, are ignored if the file changes, and use the reading/playback-position
 preference above. The existing sidebar preview remains independent and muted.
 
-Audio has an original, smooth, music-reactive ring visualization; **Visuals**
-also switches video to that view. It uses GStreamer's spectrum analysis without
-screen flashing or a separate visualization dependency. Reduced GTK animations
-stop its motion. Optional **Binaural tones**, off by default, mix quiet 200 Hz
+Audio offers two original, textured, music-reactive visualizations:
+**Nebula clouds** and a concentric **Cloud tunnel**, selected in the transport.
+Bass deforms and moves the clouds; mids and treble shift their colors. **Visuals**
+also switches video to that view. GStreamer's spectrum analysis drives smooth
+changes without flashing or a separate visualization dependency. Cloud frames
+render off the UI thread with two shared workers and bounded resolution, even
+in fullscreen. Paused or hidden views stop animating; reduced GTK animations
+leave a static view. The deep-space canvas stays dark even with light themes and
+uses the native-alpha theme's background transparency without fading cloud
+highlights or stars. Optional **Binaural tones**, off by default, mix quiet 200 Hz
 and 240 Hz stereo tones (a 40 Hz difference) after speed correction. Use stereo
 headphones at low volume; this is not a medical treatment and makes no meditation
 or therapeutic efficacy claims. There is no 40 Hz visual strobe.

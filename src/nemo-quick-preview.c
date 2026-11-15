@@ -131,6 +131,9 @@ struct _NemoQuickPreview {
 	GtkWidget   *binaural_button;
 	GtkWidget   *playlist_button;
 	GtkWidget   *visuals_button;
+	GtkWidget   *visual_style_combo;
+	GtkWidget   *volume_scale;
+	double       player_volume;
 	GstElement  *audio_filter;
 	guint        playlist_fill_id;
 	guint        playlist_fill_index;
@@ -732,6 +735,22 @@ player_visuals_toggled (GtkToggleButton *button, NemoQuickPreview *self)
 	gtk_stack_set_visible_child_name (GTK_STACK (self->player_display),
 		self->media_is_audio || gtk_toggle_button_get_active (button) ? "visualizer" : "video");
 }
+
+static void
+player_visual_style_changed (GtkComboBox *combo, NemoQuickPreview *self)
+{
+	gint style = gtk_combo_box_get_active (combo);
+	if (style >= 0 && style <= NEMO_MEDIA_VISUAL_CLOUD_TUNNEL)
+		nemo_media_visualizer_set_style (NEMO_MEDIA_VISUALIZER (self->visualizer), style);
+}
+
+static void
+player_volume_changed (GtkRange *range, NemoQuickPreview *self)
+{
+	self->player_volume = gtk_range_get_value (range) / 100;
+	if (self->pipeline != NULL)
+		g_object_set (self->pipeline, "volume", self->player_volume, NULL);
+}
 #endif
 
 #ifdef NEMO_SMPL
@@ -920,6 +939,10 @@ on_key_press (GtkWidget *widget, GdkEventKey *event, gpointer data)
 			return GDK_EVENT_PROPAGATE;
 #endif
 #ifdef HAVE_GSTREAMER
+#ifdef NEMO_SMPL
+		if (self->player_mode && gtk_window_get_focus (GTK_WINDOW (self)) == self->volume_scale)
+			return GDK_EVENT_PROPAGATE;
+#endif
 		/* In video preview: Left/Right seek ±20s, clamped to [0, duration]. */
 		if (self->mode == PREVIEW_MEDIA && self->pipeline != NULL) {
 #ifdef NEMO_SMPL
@@ -1567,6 +1590,7 @@ nemo_quick_preview_new_player (void)
 	self->player_mode = TRUE;
 	self->opening_track = TRUE;
 	self->playback_rate = 1;
+	self->player_volume = 1;
 	self->video_muted = FALSE;
 	gtk_window_set_type_hint (GTK_WINDOW (self), GDK_WINDOW_TYPE_HINT_NORMAL);
 	gtk_window_set_skip_taskbar_hint (GTK_WINDOW (self), FALSE);
@@ -1650,6 +1674,30 @@ nemo_quick_preview_new_player (void)
 		  "Not a medical treatment; no flashing visuals."));
 	g_signal_connect (self->binaural_button, "toggled", G_CALLBACK (player_binaural_toggled), self);
 	gtk_box_pack_start (GTK_BOX (controls), self->binaural_button, FALSE, FALSE, 0);
+	self->visual_style_combo = gtk_combo_box_text_new ();
+	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->visual_style_combo), _("Nebula clouds"));
+	gtk_combo_box_text_append_text (GTK_COMBO_BOX_TEXT (self->visual_style_combo), _("Cloud tunnel"));
+	gtk_combo_box_set_active (GTK_COMBO_BOX (self->visual_style_combo), NEMO_MEDIA_VISUAL_NEBULA);
+	atk_object_set_name (gtk_widget_get_accessible (self->visual_style_combo), _("Visualization style"));
+	gtk_widget_set_tooltip_text (self->visual_style_combo, _("Music-reactive cloud shapes and colors"));
+	g_signal_connect (self->visual_style_combo, "changed", G_CALLBACK (player_visual_style_changed), self);
+	gtk_box_pack_start (GTK_BOX (controls), self->visual_style_combo, FALSE, FALSE, 0);
+	GtkWidget *volume_controls = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_set_halign (volume_controls, GTK_ALIGN_CENTER);
+	gtk_box_pack_end (GTK_BOX (transport), volume_controls, FALSE, FALSE, 4);
+	GtkWidget *volume_label = gtk_label_new_with_mnemonic (_("_Volume"));
+	gtk_box_pack_start (GTK_BOX (volume_controls), volume_label, FALSE, FALSE, 0);
+	self->volume_scale = gtk_scale_new_with_range (GTK_ORIENTATION_HORIZONTAL, 0, 100, 1);
+	gtk_widget_set_size_request (self->volume_scale, 180, -1);
+	gtk_scale_set_digits (GTK_SCALE (self->volume_scale), 0);
+	gtk_scale_set_value_pos (GTK_SCALE (self->volume_scale), GTK_POS_RIGHT);
+	gtk_label_set_mnemonic_widget (GTK_LABEL (volume_label), self->volume_scale);
+	atk_object_set_name (gtk_widget_get_accessible (self->volume_scale), _("Player volume (percent)"));
+	gtk_widget_set_tooltip_text (self->volume_scale,
+		_("Volume for this player only. Use arrow keys for fine adjustment; mute keeps this level."));
+	gtk_range_set_value (GTK_RANGE (self->volume_scale), 100);
+	g_signal_connect (self->volume_scale, "value-changed", G_CALLBACK (player_volume_changed), self);
+	gtk_box_pack_start (GTK_BOX (volume_controls), self->volume_scale, TRUE, TRUE, 0);
 	return self;
 }
 #endif
@@ -2804,6 +2852,7 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 			media_stop (self);
 			return;
 		}
+		g_object_set (self->pipeline, "volume", self->player_volume, NULL);
 		nemo_media_audio_set_binaural (self->audio_filter,
 			gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->binaural_button)));
 		g_object_set (self->pipeline, "audio-filter", self->audio_filter, NULL);
@@ -2974,7 +3023,7 @@ media_stop (NemoQuickPreview *self)
 		self->advance_id = 0;
 	}
 	if (self->visualizer != NULL && !self->destroyed)
-		nemo_media_visualizer_set_playing (NEMO_MEDIA_VISUALIZER (self->visualizer), FALSE);
+		nemo_media_visualizer_reset (NEMO_MEDIA_VISUALIZER (self->visualizer));
 	g_clear_pointer (&self->audio_filter, gst_object_unref);
 #endif
 	if (self->seek_update_id > 0) {
