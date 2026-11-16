@@ -2312,8 +2312,10 @@ test_player_projectm_visuals (void)
 	guint before = visual->rendered_frames;
 	nemo_media_visualizer_next (visual);
 	g_assert_cmpuint (visual->preset, ==, 7);
-	iterate_for (2000);
-	WAIT_UNTIL (visual->rendered_frames > before + 110 || visual->render_error != NULL);
+	/* Wait out the four-second blend without assuming a GPU frame rate. */
+	iterate_for (5000);
+	before = visual->rendered_frames;
+	WAIT_UNTIL (visual->rendered_frames > before + 2 || visual->render_error != NULL);
 	g_assert_null (visual->render_error);
 	g_assert_cmpfloat (visual_frame_difference (first, visual->frame), >, 3);
 	visual_save_example (visual->frame, "projectm-lattice.png");
