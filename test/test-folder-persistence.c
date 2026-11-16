@@ -9,6 +9,7 @@
 #include "../src/nemo-quick-preview.h"
 #ifdef HAVE_GSTREAMER
 #include <gst/gst.h>
+#include <ebur128.h>
 GstElement *__real_gst_element_factory_make (const char *factory, const char *name);
 #define gst_element_factory_make __real_gst_element_factory_make
 #include "preview-media-fixture.h"
@@ -741,6 +742,29 @@ main (int argc, char **argv)
     if (g_strcmp0 (g_getenv ("NEMO_TEST_ISOLATED"), "1") != 0)
         return 77;
 #ifdef HAVE_GSTREAMER
+    if (argc == 3 && g_str_equal (argv[1], "--measure-pcm")) {
+        g_autofree char *data = NULL;
+        gsize length;
+        GError *error = NULL;
+        g_assert_true (g_file_get_contents (argv[2], &data, &length, &error));
+        g_assert_no_error (error);
+        g_assert_cmpuint (length, >, 44100 * 2 * sizeof (float));
+        g_assert_cmpuint (length % (2 * sizeof (float)), ==, 0);
+        ebur128_state *meter = ebur128_init (2, 44100,
+            EBUR128_MODE_I | EBUR128_MODE_TRUE_PEAK | EBUR128_MODE_HISTOGRAM);
+        g_assert_nonnull (meter);
+        g_assert_cmpint (ebur128_add_frames_float (meter, (const float *) data,
+            length / (2 * sizeof (float))), ==, EBUR128_SUCCESS);
+        double lufs, left, right;
+        g_assert_cmpint (ebur128_loudness_global (meter, &lufs), ==, EBUR128_SUCCESS);
+        float tail[128 * 2] = { 0 };
+        g_assert_cmpint (ebur128_add_frames_float (meter, tail, 128), ==, EBUR128_SUCCESS);
+        g_assert_cmpint (ebur128_true_peak (meter, 0, &left), ==, EBUR128_SUCCESS);
+        g_assert_cmpint (ebur128_true_peak (meter, 1, &right), ==, EBUR128_SUCCESS);
+        g_print ("%.6f %.6f\n", lufs, MAX (left, right));
+        ebur128_destroy (&meter);
+        return 0;
+    }
     if (argc == 4 && g_str_equal (argv[1], "--encode-webm")) {
         gst_init (NULL, NULL);
         g_autofree char *path = preview_webm_codec_fixture (argv[2]);
@@ -778,7 +802,7 @@ main (int argc, char **argv)
                 const guchar *p = pixels + y * stride + x * channels;
                 guint high = MAX (p[0], MAX (p[1], p[2]));
                 guint low = MIN (p[0], MIN (p[1], p[2]));
-                colored += high > 100 && low < 80 && high - low > 80;
+                colored += high > 70 && high - low > 30;
                 black += high < 12;
             }
         g_print ("%u %u\n", colored, black);

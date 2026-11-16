@@ -110,7 +110,10 @@ nemoDesktop_headers = [
 
 
 if smpl_features_enabled and gstreamer_enabled
-  nemoCommon_sources += ['nemo-archive-source.c', 'nemo-media-effects.c']
+  nemoCommon_sources += ['nemo-archive-source.c', 'nemo-media-effects.c', 'nemo-media-loudness.c']
+endif
+if projectm_enabled
+  nemoCommon_sources += 'nemo-flight-renderer.c'
 endif
 if smpl_features_enabled
   nemoCommon_sources += ['nemo-archive-dialog.c', 'nemo-smpl-theme.c']
@@ -123,7 +126,7 @@ sidebar_favorites_test_sources = nemoCommon_sources + ['nemo-main-application.c'
 nemoCommon_sources += 'nemo-places-sidebar.c'
 
 nemo_deps = [ cinnamon, gail, glib, gtk, math,
-  egg, nemo_extension, nemo_private, xapp ]
+  egg, nemo_extension, nemo_private, xapp, xext ]
 
 if exempi_enabled
   nemo_deps += exempi
@@ -143,6 +146,10 @@ endif
 
 if projectm_enabled
   nemo_deps += [projectm, epoxy]
+endif
+
+if smpl_features_enabled and gstreamer_enabled
+  nemo_deps += ebur128
 endif
 
 if gtk_layer_shell_enabled

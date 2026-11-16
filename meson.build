@@ -99,6 +99,7 @@ libisofs = dependency('libisofs-1',                 version: '>=1.4.0', required
 cinnamon= dependency('cinnamon-desktop',            version: '>=4.8.0')
 gail    = dependency('gail-3.0')
 x11     = dependency('x11')
+xext    = dependency('xext')
 xapp    = dependency('xapp',                        version: '>=2.0.0')
 
 # Facultative dependencies
@@ -170,6 +171,7 @@ conf.set('HAVE_GSTREAMER', gstreamer_enabled)
 
 projectm_enabled = false
 if smpl_features_enabled and gstreamer_enabled
+  ebur128 = dependency('libebur128', version: '>=1.2.6')
   projectm = dependency('projectM-4', version: '>=4.1', required: get_option('projectm'))
   projectm_enabled = projectm.found()
   if projectm_enabled

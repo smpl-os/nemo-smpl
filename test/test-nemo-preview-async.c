@@ -1586,6 +1586,83 @@ player_track_fixture (const char *directory, const char *name)
 }
 
 static void
+assert_player_playlist_row (NemoQuickPreview *player, gint index)
+{
+	GtkTreeView *view = GTK_TREE_VIEW (player->playlist_view);
+	GtkTreePath *cursor = NULL, *start = NULL, *end = NULL;
+	gtk_tree_view_get_cursor (view, &cursor, NULL);
+	g_assert_nonnull (cursor);
+	g_assert_cmpint (gtk_tree_path_get_indices (cursor)[0], ==, index);
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	g_assert_true (gtk_tree_selection_get_selected (gtk_tree_view_get_selection (view), &model, &iter));
+	GtkTreePath *selected = gtk_tree_model_get_path (model, &iter);
+	g_assert_cmpint (gtk_tree_path_compare (selected, cursor), ==, 0);
+	g_assert_true (gtk_tree_view_get_visible_range (view, &start, &end));
+	g_assert_cmpint (gtk_tree_path_compare (start, cursor), <=, 0);
+	g_assert_cmpint (gtk_tree_path_compare (cursor, end), <=, 0);
+	gtk_tree_path_free (selected);
+	gtk_tree_path_free (cursor);
+	gtk_tree_path_free (start);
+	gtk_tree_path_free (end);
+}
+
+static void
+test_player_playlist_follows_track (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-playlist-XXXXXX", NULL);
+	GFile *track = player_track_fixture (directory, "track-220.wav");
+	for (guint i = 0; i < 240; i++) {
+		if (i == 220)
+			continue;
+		g_autofree char *name = g_strdup_printf ("track-%03u.wav", i);
+		g_autofree char *path = g_build_filename (directory, name, NULL);
+		g_autoptr (GFile) file = g_file_new_for_path (path);
+		GError *error = NULL;
+		g_assert_true (g_file_make_symbolic_link (file, "track-220.wav", NULL, &error));
+		g_assert_no_error (error);
+	}
+	NemoQuickPreview *player = g_object_ref_sink (nemo_quick_preview_new_player ());
+	nemo_quick_preview_show_file (player, track, NULL);
+	WAIT_UNTIL (player->media_ready && player->dir_files != NULL && player->playlist_fill_id == 0);
+	g_assert_cmpuint (player->dir_files->len, ==, 240);
+	g_assert_cmpint (player->current_index, ==, 220);
+	GdkEventKey key = { .type = GDK_KEY_PRESS, .keyval = GDK_KEY_l, .state = GDK_CONTROL_MASK };
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	iterate_for (100);
+	assert_player_playlist_row (player, 220);
+	GtkTreePath *browse = gtk_tree_path_new_from_indices (5, -1);
+	gtk_tree_view_set_cursor (GTK_TREE_VIEW (player->playlist_view), browse, NULL, FALSE);
+	gtk_tree_path_free (browse);
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	iterate_for (100);
+	assert_player_playlist_row (player, 220);
+	key.keyval = GDK_KEY_Right;
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	WAIT_UNTIL (player->media_ready && player->current_index == 221);
+	iterate_for (50);
+	assert_player_playlist_row (player, 221);
+	key.keyval = GDK_KEY_Left;
+	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
+	WAIT_UNTIL (player->media_ready && player->current_index == 220);
+	iterate_for (50);
+	assert_player_playlist_row (player, 220);
+	gpointer weak = player;
+	g_object_add_weak_pointer (G_OBJECT (player), &weak);
+	gtk_widget_destroy (GTK_WIDGET (player));
+	g_object_unref (player);
+	WAIT_UNTIL (weak == NULL);
+	for (guint i = 0; i < 240; i++) {
+		g_autofree char *name = g_strdup_printf ("track-%03u.wav", i);
+		g_autofree char *path = g_build_filename (directory, name, NULL);
+		g_assert_cmpint (g_unlink (path), ==, 0);
+	}
+	g_object_unref (track);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
 test_player_transport (void)
 {
 	g_autofree char *directory = g_dir_make_tmp ("nemo-player-XXXXXX", NULL);
@@ -2197,7 +2274,11 @@ test_player_preferences_restart (void)
 {
 	const char *stage = g_getenv ("NEMO_TEST_PLAYER_PREFERENCES_STAGE");
 	if (stage == NULL) {
-		const char *choices[] = { "stereo-spectrum", "automatic", "off" };
+		const char *choices[] = { "stereo-spectrum", "automatic", "off",
+#ifdef HAVE_PROJECTM
+			"stellar-voyage", "earthflight",
+#endif
+		};
 		for (guint choice = 0; choice < G_N_ELEMENTS (choices); choice++)
 			for (guint step = 0; step < 2; step++) {
 				GSubprocessLauncher *launcher = g_subprocess_launcher_new (
@@ -2232,10 +2313,12 @@ test_player_preferences_restart (void)
 		g_assert_cmpfloat_with_epsilon (gtk_range_get_value (GTK_RANGE (player->volume_scale)), 23, 0.0001);
 		g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, choice);
 		g_assert_true (player->video_muted);
+		g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->normalization_button)));
 	}
 	nemo_quick_preview_show_file (player, file, NULL);
 	WAIT_UNTIL (player->media_ready && player->video_playing);
 	if (g_str_equal (stage, "write")) {
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (player->normalization_button), TRUE);
 		gtk_range_set_value (GTK_RANGE (player->volume_scale), 23);
 		if (!player->video_muted)
 			mute_clicked_cb (GTK_BUTTON (player->mute_btn), player);
@@ -2247,7 +2330,7 @@ test_player_preferences_restart (void)
 		g_assert_cmpfloat_with_epsilon (volume, 0.23, 0.0001);
 		g_assert_true (muted);
 		NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (player->visualizer);
-		if (g_str_equal (choice, "stereo-spectrum")) {
+		if (!g_str_equal (choice, "off") && !g_str_equal (choice, "automatic")) {
 			WAIT_UNTIL (visual->frame != NULL || visual->render_error != NULL);
 			g_assert_null (visual->render_error);
 			g_assert_false (visual->automatic);
@@ -2261,6 +2344,8 @@ test_player_preferences_restart (void)
 		NemoQuickPreview *other = g_object_ref_sink (nemo_quick_preview_new_player ());
 		gtk_range_set_value (GTK_RANGE (other->volume_scale), 41);
 		gtk_combo_box_set_active_id (GTK_COMBO_BOX (other->visuals_combo), "off");
+		gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (other->normalization_button), FALSE);
+		g_assert_true (gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (player->normalization_button)));
 		g_assert_cmpfloat_with_epsilon (player->player_volume, 0.23, 0.0001);
 		g_assert_cmpstr (gtk_combo_box_get_active_id (GTK_COMBO_BOX (player->visuals_combo)), ==, choice);
 		gtk_widget_destroy (GTK_WIDGET (other));
@@ -2301,6 +2386,7 @@ visualizer_exit_activate (GtkApplication *application, gpointer data)
 #endif
 	gtk_container_add (GTK_CONTAINER (window), GTK_WIDGET (test->visual));
 	gtk_widget_show_all (window);
+	WAIT_UNTIL (visualizer_is_visible (test->visual));
 	visual_request_frame (test->visual);
 	g_assert_true (test->visual->rendering);
 	gtk_window_close (GTK_WINDOW (window));
@@ -2578,6 +2664,7 @@ test_player_audio_effects (void)
 		gst_object_unref (filter);
 	}
 }
+#include "test-media-loudness.h"
 #endif
 
 int
@@ -2601,7 +2688,16 @@ main (int argc, char **argv)
 	g_test_message ("GTK display: %s", gdk_display_get_name (gdk_display_get_default ()));
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview/player/transport-speed-playlist-delete", test_player_transport);
+	g_test_add_func ("/preview/player/playlist-follows-playing-track", test_player_playlist_follows_track);
 	g_test_add_func ("/preview/player/stereo-tones-default-off", test_player_audio_effects);
+	g_test_add_func ("/preview/player/loudness/cache-playback-volume", test_player_loudness_cache_and_playback);
+	g_test_add_func ("/preview/player/loudness/peak-silence-invalidation", test_player_loudness_peak_silence_invalidation);
+	g_test_add_func ("/preview/player/loudness/errors-cancel-close", test_player_loudness_errors_and_close);
+	g_test_add_func ("/preview/player/loudness/short-peak-corrupt-cache", test_player_loudness_short_peak_and_corrupt_cache);
+	g_test_add_data_func ("/preview/player/loudness/application-hold",
+		GINT_TO_POINTER (FALSE), test_player_loudness_application_lifetime);
+	g_test_add_data_func ("/preview/player/loudness/application-explicit-quit",
+		GINT_TO_POINTER (TRUE), test_player_loudness_application_lifetime);
 	g_test_add_func ("/preview/player/preserve-voice-pitch-2x-3x", test_player_voice_pitch);
 	g_test_add_func ("/preview/player/projectm-audio-lifecycle", test_player_projectm_visuals);
 	g_test_add_func ("/preview/player/stereo-spectrum-spectrogram-rain", test_player_native_visuals);
@@ -2657,6 +2753,7 @@ main (int argc, char **argv)
 #ifdef HAVE_GSTREAMER
 	/* Widget-only tests have no GApplication shutdown signal. */
 	visual_application_shutdown (NULL, NULL);
+	nemo_media_loudness_shutdown ();
 #endif
 	g_source_remove (tick);
 	return result;

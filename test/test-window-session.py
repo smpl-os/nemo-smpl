@@ -112,14 +112,17 @@ def main():
                 if expected == unplugged:
                     unplugged.rmdir()
             if env.get("NEMO_TEST_GSTREAMER") == "1":
-                track = first / "qualification.wav"
+                track = first / "track-220.wav"
                 with wave.open(str(track), "wb") as audio:
                     audio.setparams((2, 2, 44100, 0, "NONE", "not compressed"))
                     frames = b"".join(struct.pack(
                         "<hh", int(20000 * math.sin(2 * math.pi * 440 * i / 44100)),
                         int(20000 * math.sin(2 * math.pi * 3520 * i / 44100)),
                     ) for i in range(44100))
-                    audio.writeframes(frames * 30)
+                    audio.writeframes(frames * 90)
+                for index in range(240):
+                    if index != 220:
+                        (first / f"track-{index:03d}.wav").symlink_to(track.name)
                 pulse = os.environ.get("NEMO_TEST_PULSE_EXE") or shutil.which("pulseaudio")
                 if not pulse:
                     raise RuntimeError("Real F3 qualification requires pulseaudio for a private, clocked null sink")
@@ -154,7 +157,7 @@ def main():
                 )
                 modes = ["stereo-spectrum", "spectrogram", "digital-rain"]
                 if env.get("NEMO_TEST_PROJECTM") == "1":
-                    modes.append("aurora-cathedral")
+                    modes.extend(("aurora-cathedral", "stellar-voyage", "earthflight"))
                 media = [(track, mode, mode) for mode in modes]
                 for codec in ("vp8", "vp9", "av1"):
                     video = first / f"qualification-{codec}.webm"
@@ -163,10 +166,18 @@ def main():
                         env=env, check=True, timeout=30,
                     )
                     media.append((video, "off", codec))
+                recorder = shutil.which("parec")
+                if not recorder:
+                    raise RuntimeError("Actual normalization qualification requires parec")
+                media.extend((track, "stereo-spectrum", case) for case in (
+                    "normalization-first", "normalization-cached", "normalization-volume"))
                 for selected, mode, case in media:
-                    for key, value in (("media-player-volume", "0.23"),
-                                       ("media-player-muted", "true"),
-                                       ("media-player-visual", mode)):
+                    normalizing = case.startswith("normalization-")
+                    volume = "0.5" if case == "normalization-volume" else "1.0" if normalizing else "0.23"
+                    for key, value in (("media-player-volume", volume),
+                                       ("media-player-muted", str(not normalizing).lower()),
+                                       ("media-player-visual", mode),
+                                       ("media-player-normalize", str(normalizing).lower())):
                         subprocess.run(
                             ["gsettings", "set", "org.nemo.preferences", key, value],
                             env=env, check=True, timeout=10,
@@ -189,7 +200,8 @@ def main():
                             [inspector, "--capture-window", player_title, str(image)],
                             env=env, timeout=15,
                         ).split())
-                        if colored > 30 and black > 100:
+                        minimum_color = 100 if mode == "digital-rain" else 1000
+                        if colored > minimum_color and (black > 100 or mode == "earthflight"):
                             break
                         if time.monotonic() > deadline:
                             output = os.environ.get("NEMO_TEST_VISUAL_OUTPUT")
@@ -202,7 +214,7 @@ def main():
                         shutil.copyfile(image, Path(output) / image.name)
                     if case == "stereo-spectrum":
                         send_key(inspector, player_title, "l", env, control=True)
-                        time.sleep(0.1)
+                        time.sleep(0.25)
                         image = profile / "player-native-playlist.png"
                         subprocess.run(
                             [inspector, "--capture-window", player_title, str(image)],
@@ -210,6 +222,46 @@ def main():
                         )
                         if output:
                             shutil.copyfile(image, Path(output) / image.name)
+                        send_key(inspector, player_title, "Right", env, control=True)
+                        subprocess.run(
+                            [inspector, "--wait-for-title", "track-221.wav"],
+                            env=env, check=True, timeout=15,
+                        )
+                        send_key(inspector, "track-221.wav", "Left", env, control=True)
+                        subprocess.run(
+                            [inspector, "--wait-for-title", player_title],
+                            env=env, check=True, timeout=15,
+                        )
+                    if normalizing:
+                        raw = profile / f"{case}.pcm"
+                        with raw.open("wb") as samples:
+                            capture = subprocess.Popen(
+                                [recorder, "--raw", "--format=float32ne", "--rate=44100",
+                                 "--channels=2", "--device=nemo-qualification.monitor"],
+                                env=env, stdout=samples, stderr=log,
+                            )
+                            try:
+                                time.sleep(3)
+                                if capture.poll() is not None:
+                                    raise RuntimeError("Private monitor recording stopped unexpectedly")
+                            finally:
+                                capture.terminate()
+                                capture.wait(timeout=5)
+                        lufs, peak = map(float, subprocess.check_output(
+                            [inspector, "--measure-pcm", str(raw)], env=env, timeout=15,
+                        ).split())
+                        print(f"Actual F3 {case}: {lufs:.2f} LUFS, peak {peak:.6f}", flush=True)
+                        if case == "normalization-first":
+                            if not math.isfinite(lufs) or lufs <= -12:
+                                raise RuntimeError(f"Uncached playback was unexpectedly normalized: {lufs}")
+                        else:
+                            target = -22.02 if case == "normalization-volume" else -16
+                            if not math.isfinite(lufs) or abs(lufs - target) > 0.3:
+                                raise RuntimeError(f"Actual normalized output missed {target} LUFS: {lufs}")
+                            if not math.isfinite(peak) or peak > 10 ** (-0.9 / 20):
+                                raise RuntimeError(f"Actual normalized output exceeded safe peak: {peak}")
+                        if output:
+                            shutil.copyfile(raw, Path(output) / raw.name)
                     send_key(inspector, title, "w", env, control=True)
                     if process.wait(timeout=10) != 0:
                         raise RuntimeError("Nemo did not naturally exit after closing the player's owner")

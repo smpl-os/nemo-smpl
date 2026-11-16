@@ -211,6 +211,8 @@ Quick Preview shortcuts) shows the current directory's media-only playlist.
 A player keeps Nemo running while open; closing it releases that keep-alive.
 Nemo can then exit when no other windows or operations require it.
 Double-click a track or use the previous/next buttons or **Ctrl+Left/Right**.
+Opening the playlist and changing tracks select and scroll to the playing row,
+even in a long directory listing.
 Playback advances automatically and stops at the end of the playlist; decoder
 errors are shown rather than silently skipping files.
 
@@ -227,6 +229,26 @@ are remembered for new players, including after restarting Nemo; mute/unmute
 preserves the level. Focus the slider (or press **Alt+V**) and use arrow keys for
 fine adjustment. Both controls remain adjacent in fullscreen. Playlist selection
 uses the theme's full selected colors, including while unfocused.
+
+Optional **-16 LUFS** normalization is off by default and remembered for new
+players. It measures the entire local track in a single low-priority background
+worker, without decoding video, altering files, or using network/audio devices.
+An uncached track plays at its original level immediately; **Analyzing** becomes
+**Ready for next play**, never a mid-track gain jump. Enabling it during playback
+also takes effect on the next play; disabling restores original level immediately.
+Cached tracks use a fixed gain before the player's independent volume control.
+**Peak-limited** means the **-1 dBTP** true-peak ceiling prevents reaching -16 LUFS;
+there is no compression or limiting, and dynamics are preserved. Silence is
+unchanged; unmeasurable audio is never boosted, but can receive peak-safe
+attenuation. Playback speed and
+optional added tones can affect the final output; the measurement describes the
+original decoded stereo track, not a guarantee about downstream effects/devices.
+Status text reports unsupported sources, decoding/cache errors, and silence
+explicitly. Analysis is audio-only and supports local regular files; closing or
+changing tracks cancels unfinished work. Results persist in
+`~/.cache/nemo/loudness-v1` and are invalidated by file identity, size, and
+nanosecond modification/change times. Building this feature requires
+**libebur128 1.2.6 or newer**.
 
 The initially selected file resumes its saved position; playlist navigation
 starts each subsequent track at the beginning. Positions survive restarting
@@ -246,17 +268,28 @@ opaque black canvas, not the previous homemade clouds or a lifted gray
 background. Only this player's decoded stereo audio is used: no microphone or
 desktop audio capture, runtime downloads, or network connection.
 
+**Stellar Voyage** flies through a seeded three-dimensional star field past
+procedurally shaded planets. **Earthflight** follows a gentle, terrain-clearing
+route over generated mountains, sandy shores, lakes, and mixed forests. Both
+are native OpenGL scenes, not videos or downloaded maps; each player generates
+its own landscape and pauses travel while its visualization is suspended.
+
 **Photosensitivity warning:** visual effects may flash. Do not enable them if
 sensitive to flashing lights; there are no safety or medical claims. Reduced GTK
-animations stop motion, and paused/hidden views stop requesting frames. Rendering
-uses two shared workers off the UI thread and a fixed 800x450 canvas
-scaled to the player, including fullscreen. Text and controls keep their normal
+animations stop motion. Paused, hidden, minimized, and fully covered views stop
+requesting frames and collecting visualization PCM; audio continues. Visible
+unfocused players keep animating. X11 coverage includes multiple opaque windows;
+Wayland suspension follows compositor frame throttling. Rendering uses two
+shared workers off the UI thread and an 800x450 canvas scaled to the player,
+including fullscreen. Flight scenes use 400x225 on detected software renderers
+to bound CPU cost. Text and controls keep their normal
 theme and native background transparency; the visualization itself is opaque.
 An unavailable projectM/OpenGL renderer reports an error without stopping audio.
 
 Building the MilkDrop presets requires projectM **4.1 or newer**
 (`projectM-4.pc`) and libepoxy; use `-Dprojectm=enabled` to require support or
-`-Dprojectm=disabled` to omit those presets. Native effects remain available
+`-Dprojectm=disabled` to omit those presets and flight scenes. Native FFT and
+digital rain effects remain available
 without projectM/OpenGL. The default `auto` enables projectM when available.
 projectM is LGPL-2.1-or-later; the generated presets are original Nemo source,
 not unlicensed preset packs. Arch/smplOS and Debian/LMDE release builds require

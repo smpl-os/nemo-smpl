@@ -4,9 +4,38 @@
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
+
+
+def run_wayland(weston, command, env, root):
+    env["WAYLAND_DISPLAY"] = "nemo-test-wayland"
+    socket = Path(env["XDG_RUNTIME_DIR"]) / env["WAYLAND_DISPLAY"]
+    with (root / "weston.log").open("w+") as log:
+        compositor = subprocess.Popen(
+            ["xvfb-run", "-a", weston, "--backend=x11", "--renderer=pixman", "--idle-time=0",
+             "--no-config", f"--socket={env['WAYLAND_DISPLAY']}"],
+            env=env, stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not socket.exists():
+                if compositor.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("Private Wayland compositor failed to start")
+                time.sleep(0.02)
+            return subprocess.run(command, env=env, check=False).returncode
+        finally:
+            try:
+                os.killpg(compositor.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            compositor.wait(timeout=10)
+            log.seek(0)
+            print(log.read(), file=sys.stderr)
 
 
 def main():
@@ -14,10 +43,12 @@ def main():
         print("usage: run-isolated-regression.py <test executable> [args...]", file=sys.stderr)
         return 2
 
-    xvfb = shutil.which("xvfb-run")
+    wayland = sys.argv[1] == "--wayland"
+    arguments = sys.argv[2:] if wayland else sys.argv[1:]
+    xvfb = shutil.which("weston" if wayland else "xvfb-run")
     dbus = shutil.which("dbus-run-session")
     if xvfb is None or dbus is None:
-        print("SKIP: GTK regressions require xvfb-run and dbus-run-session.", file=sys.stderr)
+        print("SKIP: GTK regressions require a private display server and dbus-run-session.", file=sys.stderr)
         return 77
 
     # Runtime socket paths must stay short even inside a long build directory.
@@ -48,8 +79,8 @@ def main():
             env[key] = str(directory)
         env.update(
             NEMO_TEST_PROFILE=str(root),
-            GDK_BACKEND="x11",
-            XDG_SESSION_TYPE="x11",
+            GDK_BACKEND="wayland" if wayland else "x11",
+            XDG_SESSION_TYPE="wayland" if wayland else "x11",
             GSETTINGS_BACKEND="memory",
             GIO_USE_VFS="local",
             GIO_USE_VOLUME_MONITOR="unix",
@@ -70,7 +101,10 @@ def main():
             "</policy></busconfig>",
             encoding="utf-8",
         )
-        command = [xvfb, "-a", dbus, "--config-file", str(bus_config), "--", *sys.argv[1:]]
+        command = [dbus, "--config-file", str(bus_config), "--", *arguments]
+        if wayland:
+            return run_wayland(xvfb, command, env, root)
+        command = [xvfb, "-a", *command]
         return subprocess.run(command, env=env, check=False).returncode
 
 

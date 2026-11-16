@@ -72,7 +72,7 @@ sudo apt-get install -y \
   build-essential meson ninja-build pkgconf \
   libgtk-3-dev libglib2.0-dev libjson-glib-dev \
   libx11-dev libxapp-dev libcinnamon-desktop-dev \
-  libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
+  libexif-dev libraw-dev libexempi-dev libebur128-dev libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev libgsf-1-dev \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
@@ -93,7 +93,7 @@ sudo dnf install -y \
   meson ninja-build pkgconfig \
   gtk3-devel glib2-devel json-glib-devel \
   libX11-devel xapp-devel cinnamon-desktop-devel \
-  libexif-devel LibRaw-devel exempi-devel gstreamer1-devel \
+  libexif-devel LibRaw-devel exempi-devel libebur128-devel gstreamer1-devel \
   md4c-devel poppler-glib-devel mupdf bubblewrap \
   gstreamer1-plugins-base-devel libgsf-devel \
   gobject-introspection-devel intltool itstool \
@@ -108,7 +108,7 @@ sudo dnf install -y \
 ```bash
 sudo pacman -S --needed \
   base-devel meson ninja pkgconf \
-  gtk3 glib2 json-glib libx11 xapp cinnamon-desktop libprojectm libepoxy \
+  gtk3 glib2 json-glib libx11 xapp cinnamon-desktop libprojectm libepoxy libebur128 \
   libexif libraw exempi gstreamer gst-plugins-base-libs \
   gst-plugins-base gst-plugins-good \
   md4c poppler-glib mupdf-tools bubblewrap \
@@ -124,6 +124,9 @@ Release packaging checks Arch runtime dependencies and verifies the staged
 rootfs archive against its SHA-256 checksum before creating the pacman package.
 Debian packaging uses the Python and GObject introspection debhelper sequences
 to generate runtime dependencies and extension development metadata.
+Release regressions require Xvfb, Xauth, D-Bus, Weston, and PulseAudio. They run
+against private X11/Wayland displays, settings, and audio servers, not the
+running desktop.
 
 ## Archive browsing dependencies
 
@@ -143,13 +146,14 @@ decoders. Packaged builds include the base/good plugin sets, also required for
 the WAV archive regression: `gst-plugins-base` and `gst-plugins-good` on Arch,
 or `gstreamer1.0-plugins-base` and `gstreamer1.0-plugins-good` on Debian/Ubuntu.
 
-Opt-in MilkDrop visuals use projectM 4.1+ and libepoxy, with an OpenGL 3.3
+Opt-in MilkDrop and procedural flight visuals use projectM 4.1+ and libepoxy, with an OpenGL 3.3
 renderer. On Arch, install `libprojectm` and `libepoxy`. Other distributions need
 development packages providing `projectM-4.pc` and `epoxy.pc`; projectM 3 is not
 compatible. Use `-Dprojectm=enabled` to require these dependencies or
-`-Dprojectm=disabled` to build without visuals. The default is auto-detection.
-Playback and volume controls work without projectM; enabling unavailable visuals
-shows an error. Visual effects are off by default and may flash.
+`-Dprojectm=disabled` to omit GPU visuals. The default is auto-detection.
+Playback, loudness normalization, stereo FFT visuals, and digital rain work
+without projectM; an unavailable GPU renderer reports an error without stopping
+audio. Visual effects are off by default and may flash.
 
 Archive filename decoding requires an installed UTF-8 locale, including when
 Nemo runs under the `C` locale. Decoding uses a temporary thread-local locale;

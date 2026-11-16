@@ -41,6 +41,7 @@
 #endif
 
 #include <glib/gi18n.h>
+#include <math.h>
 #include <string.h>
 
 #ifdef HAVE_GSTREAMER
@@ -49,6 +50,7 @@
 #include <gst/app/gstappsink.h>
 #ifdef NEMO_SMPL
 #include "nemo-media-effects.h"
+#include "nemo-media-loudness.h"
 #endif
 #endif
 
@@ -134,6 +136,10 @@ struct _NemoQuickPreview {
 	GtkWidget   *volume_scale;
 	double       player_volume;
 	GstElement  *audio_filter;
+	GtkWidget   *normalization_button;
+	GtkWidget   *normalization_status;
+	GCancellable *loudness_cancel;
+	gboolean     loudness_waiting;
 	guint        playlist_fill_id;
 	guint        playlist_fill_index;
 	guint        advance_id;
@@ -596,11 +602,14 @@ static void     update_navigation_ui   (NemoQuickPreview *self);
 static void
 player_sync_selection (NemoQuickPreview *self)
 {
-	if (!self->player_mode || self->current_index < 0)
+	if (!self->player_mode || self->current_index < 0 ||
+	    self->current_index >= gtk_tree_model_iter_n_children (GTK_TREE_MODEL (self->playlist_model), NULL))
 		return;
 	GtkTreePath *path = gtk_tree_path_new_from_indices (self->current_index, -1);
 	gtk_tree_selection_select_path (gtk_tree_view_get_selection (GTK_TREE_VIEW (self->playlist_view)), path);
 	gtk_tree_view_set_cursor (GTK_TREE_VIEW (self->playlist_view), path, NULL, FALSE);
+	if (gtk_widget_get_mapped (self->playlist_view))
+		gtk_tree_view_scroll_to_cell (GTK_TREE_VIEW (self->playlist_view), path, NULL, TRUE, 0.5, 0);
 	gtk_tree_path_free (path);
 }
 
@@ -727,6 +736,123 @@ player_binaural_toggled (GtkToggleButton *button, NemoQuickPreview *self)
 		nemo_media_audio_set_binaural (self->audio_filter, gtk_toggle_button_get_active (button));
 }
 
+typedef struct {
+	GWeakRef player;
+	GCancellable *cancel;
+	gboolean start;
+} PlayerLoudnessRequest;
+
+static void
+player_loudness_status (NemoQuickPreview *self, const char *text)
+{
+	if (self->normalization_status != NULL && !self->destroyed) {
+		gtk_label_set_text (GTK_LABEL (self->normalization_status), text);
+		gtk_widget_set_tooltip_text (self->normalization_status, text);
+	}
+}
+
+static void
+player_loudness_start_playback (NemoQuickPreview *self)
+{
+	self->loudness_waiting = FALSE;
+	if (self->pipeline != NULL &&
+	    !nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED)) {
+		media_stop (self);
+		preview_set_status (self, _("Media preview is still closing another file. Try again shortly."));
+	}
+}
+
+static PlayerLoudnessRequest *
+player_loudness_request (NemoQuickPreview *self, gboolean start)
+{
+	PlayerLoudnessRequest *request = g_new0 (PlayerLoudnessRequest, 1);
+	g_weak_ref_init (&request->player, self);
+	request->cancel = g_object_ref (self->loudness_cancel);
+	request->start = start;
+	return request;
+}
+
+static void
+player_loudness_done (GObject *source, GAsyncResult *result, gpointer data)
+{
+	PlayerLoudnessRequest *request = data;
+	g_autoptr (NemoQuickPreview) self = g_weak_ref_get (&request->player);
+	g_autoptr (GError) error = NULL;
+	g_autofree NemoMediaLoudness *measurement = nemo_media_loudness_finish (result, &error);
+	if (self != NULL && !self->destroyed && self->loudness_cancel == request->cancel &&
+	    !g_cancellable_is_cancelled (request->cancel)) {
+		if (error != NULL) {
+			g_autofree char *message = g_strdup_printf (_("Normalization unavailable: %s"), error->message);
+			player_loudness_status (self, message);
+		} else if (measurement->cached) {
+			if (request->start && self->audio_filter != NULL) {
+				nemo_media_audio_set_normalization_gain (self->audio_filter, measurement->gain);
+				if (measurement->silent && !measurement->peak_limited)
+					player_loudness_status (self, _("LUFS unavailable — original level"));
+				else {
+					g_autofree char *message = g_strdup_printf (
+						measurement->silent ? _("Peak-limited: %+.1f dB (LUFS unavailable)") :
+						measurement->peak_limited ? _("Peak-limited: %+.1f dB") : _("Normalized: %+.1f dB"),
+						20 * log10 (measurement->gain));
+					player_loudness_status (self, message);
+				}
+			} else
+				player_loudness_status (self, measurement->peak_limited ?
+					_("Ready for next play — peak-limited") :
+					measurement->silent ? _("Ready for next play — LUFS unavailable") :
+					_("Ready for next play — -16 LUFS"));
+		} else {
+			player_loudness_status (self, _("Analyzing — playing original level"));
+			nemo_media_loudness_analyze_async (self->media_file, self->loudness_cancel,
+				player_loudness_done, player_loudness_request (self, FALSE));
+		}
+		if (request->start)
+			player_loudness_start_playback (self);
+	}
+	g_weak_ref_clear (&request->player);
+	g_object_unref (request->cancel);
+	g_free (request);
+}
+
+static void
+player_loudness_lookup (NemoQuickPreview *self, gboolean start)
+{
+	g_cancellable_cancel (self->loudness_cancel);
+	g_clear_object (&self->loudness_cancel);
+	self->loudness_cancel = g_cancellable_new ();
+	self->loudness_waiting = start;
+	player_loudness_status (self, _("Checking loudness cache…"));
+	nemo_media_loudness_lookup_async (self->media_file, self->loudness_cancel,
+		player_loudness_done, player_loudness_request (self, start));
+}
+
+static void
+player_normalization_toggled (GtkToggleButton *button, NemoQuickPreview *self)
+{
+	gboolean enabled = gtk_toggle_button_get_active (button);
+	g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_MEDIA_PLAYER_NORMALIZE, enabled);
+	if (enabled && self->media_file != NULL)
+		player_loudness_lookup (self, self->loudness_waiting);
+	else {
+		g_cancellable_cancel (self->loudness_cancel);
+		g_clear_object (&self->loudness_cancel);
+		if (self->audio_filter != NULL)
+			nemo_media_audio_set_normalization_gain (self->audio_filter, 1);
+		player_loudness_status (self, enabled ? _("Normalization on — next track") : _("Original level"));
+		if (self->loudness_waiting)
+			player_loudness_start_playback (self);
+	}
+}
+
+static void
+player_visual_sampling_changed (GObject *visualizer, GParamSpec *spec, NemoQuickPreview *self)
+{
+	if (self->audio_filter != NULL)
+		nemo_media_audio_set_visuals (self->audio_filter,
+			gtk_combo_box_get_active (GTK_COMBO_BOX (self->visuals_combo)) > 0 &&
+			nemo_media_visualizer_get_active (NEMO_MEDIA_VISUALIZER (visualizer)));
+}
+
 static void
 player_visuals_changed (GtkComboBox *combo, NemoQuickPreview *self)
 {
@@ -734,10 +860,9 @@ player_visuals_changed (GtkComboBox *combo, NemoQuickPreview *self)
 	gboolean enabled = choice > 0;
 	if (enabled)
 		nemo_media_visualizer_set_preset (NEMO_MEDIA_VISUALIZER (self->visualizer), choice - 2);
-	if (self->audio_filter != NULL)
-		nemo_media_audio_set_visuals (self->audio_filter, enabled);
 	gtk_stack_set_visible_child_name (GTK_STACK (self->player_display),
 		enabled ? "visualizer" : self->media_is_audio ? "audio" : "video");
+	player_visual_sampling_changed (G_OBJECT (self->visualizer), NULL, self);
 }
 
 static void
@@ -1636,6 +1761,8 @@ nemo_quick_preview_new_player (void)
 	gtk_stack_add_named (GTK_STACK (self->player_display), self->video_area, "video");
 	g_object_unref (self->video_area);
 	self->visualizer = nemo_media_visualizer_new ();
+	g_signal_connect (self->visualizer, "notify::render-active",
+		G_CALLBACK (player_visual_sampling_changed), self);
 	gtk_stack_add_named (GTK_STACK (self->player_display), self->visualizer, "visualizer");
 	GtkWidget *audio_idle = gtk_label_new (_("Audio playing\nVisuals are off"));
 	gtk_stack_add_named (GTK_STACK (self->player_display), audio_idle, "audio");
@@ -1650,6 +1777,7 @@ nemo_quick_preview_new_player (void)
 	gtk_box_pack_start (GTK_BOX (content_box), body, TRUE, TRUE, 0);
 	self->playlist_model = gtk_list_store_new (1, G_TYPE_STRING);
 	self->playlist_view = gtk_tree_view_new_with_model (GTK_TREE_MODEL (self->playlist_model));
+	g_signal_connect_swapped (self->playlist_view, "map", G_CALLBACK (player_sync_selection), self);
 	gtk_style_context_add_class (gtk_widget_get_style_context (self->playlist_view), "nemo-player-playlist");
 	g_object_unref (self->playlist_model);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (self->playlist_view), FALSE);
@@ -1696,6 +1824,19 @@ nemo_quick_preview_new_player (void)
 		  "Not a medical treatment."));
 	g_signal_connect (self->binaural_button, "toggled", G_CALLBACK (player_binaural_toggled), self);
 	gtk_box_pack_start (GTK_BOX (controls), self->binaural_button, FALSE, FALSE, 0);
+	self->normalization_button = gtk_check_button_new_with_label (_("-16 LUFS"));
+	gtk_widget_set_tooltip_text (self->normalization_button,
+		_("Optional cached whole-track loudness normalization before player volume, with a -1 dBTP ceiling. "
+		  "Uncached tracks play immediately at original level; analysis is used only on subsequent plays. "
+		  "Enabling during playback takes effect next play. Original files are never changed."));
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (self->normalization_button),
+		g_settings_get_boolean (nemo_preferences, NEMO_PREFERENCES_MEDIA_PLAYER_NORMALIZE));
+	g_signal_connect (self->normalization_button, "toggled", G_CALLBACK (player_normalization_toggled), self);
+	gtk_box_pack_start (GTK_BOX (controls), self->normalization_button, FALSE, FALSE, 0);
+	self->normalization_status = gtk_label_new (_("Original level"));
+	gtk_label_set_ellipsize (GTK_LABEL (self->normalization_status), PANGO_ELLIPSIZE_END);
+	gtk_label_set_max_width_chars (GTK_LABEL (self->normalization_status), 32);
+	gtk_box_pack_start (GTK_BOX (controls), self->normalization_status, TRUE, TRUE, 0);
 	GtkWidget *volume_controls = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
 	GtkWidget *volume_row = gtk_widget_get_parent (self->mute_btn);
 	gtk_box_pack_start (GTK_BOX (volume_row), volume_controls, FALSE, FALSE, 0);
@@ -2641,6 +2782,14 @@ play_pause_clicked_cb (GtkButton *btn, gpointer data)
 	if (self->player_mode) {
 		if (!self->media_ready)
 			return;
+		if (self->player_finished && self->media_file != NULL &&
+		    gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->normalization_button))) {
+			/* A deliberate replay is a new playback decision, unlike a seek
+			 * or resume of this track. Recheck the cache before starting it. */
+			g_autoptr (GFile) file = g_object_ref (self->media_file);
+			preview_show_media (self, file, self->media_is_audio);
+			return;
+		}
 		if (self->player_finished &&
 		    !media_seek_with_rate (self, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, 0))
 			return;
@@ -2875,7 +3024,8 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 		}
 		g_object_set (self->pipeline, "volume", self->player_volume, NULL);
 		nemo_media_audio_set_visuals (self->audio_filter,
-			gtk_combo_box_get_active (GTK_COMBO_BOX (self->visuals_combo)) > 0);
+			gtk_combo_box_get_active (GTK_COMBO_BOX (self->visuals_combo)) > 0 &&
+			nemo_media_visualizer_get_active (NEMO_MEDIA_VISUALIZER (self->visualizer)));
 		nemo_media_audio_set_binaural (self->audio_filter,
 			gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->binaural_button)));
 		g_object_set (self->pipeline, "audio-filter", self->audio_filter, NULL);
@@ -3006,7 +3156,10 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 
 	/* Start PAUSED — user clicks Play to begin */
 #ifdef NEMO_SMPL
-	if (!nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED)) {
+	if (self->player_mode &&
+	    gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (self->normalization_button)))
+		player_loudness_lookup (self, TRUE);
+	else if (!nemo_preview_media_set_state_async (self->pipeline, GST_STATE_PAUSED)) {
 		media_stop (self);
 		preview_set_status (self, _("Media preview is still closing another file. Try again shortly."));
 	}
@@ -3019,6 +3172,10 @@ static void
 media_stop (NemoQuickPreview *self)
 {
 #ifdef NEMO_SMPL
+	g_cancellable_cancel (self->loudness_cancel);
+	g_clear_object (&self->loudness_cancel);
+	self->loudness_waiting = FALSE;
+	player_loudness_status (self, _("Original level"));
 	if (self->pipeline != NULL && self->media_ready && self->media_file != NULL) {
 		gint64 position;
 		if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &position)) {

@@ -12,8 +12,14 @@ if smpl_features_enabled
     is_parallel: false,
   )
   archive_source_test_sources = []
+  loudness_test_sources = []
+  flight_test_sources = []
+  if projectm_enabled
+    flight_test_sources = ['../src/nemo-flight-renderer.c']
+  endif
   if gstreamer_enabled
     archive_source_test_sources = ['../src/nemo-archive-source.c']
+    loudness_test_sources = ['../src/nemo-media-loudness.c']
   endif
   copy_integrity_schemas = custom_target('copy-integrity-schemas',
     input: '../libnemo-private/org.nemo.gschema.xml',
@@ -305,7 +311,7 @@ if smpl_features_enabled
         '../src/nemo-paged-viewer.c',
         '../src/nemo-dir-analyzer.c',
         '../src/nemo-document-viewer.c',
-      ] + archive_source_test_sources + gresources,
+      ] + archive_source_test_sources + loudness_test_sources + flight_test_sources + gresources,
       include_directories: [rootInclude],
       dependencies: nemo_deps,
       c_args: nemo_definitions + document_test_args,
@@ -323,6 +329,30 @@ if smpl_features_enabled
       link_args: ['-Wl,--gc-sections'],
     ),
   ]
+  if gstreamer_enabled
+    visual_background_test = executable('test-nemo-visual-background',
+      ['test-nemo-visual-background.c'] + flight_test_sources,
+      include_directories: [rootInclude],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+    )
+    ui_regressions += [visual_background_test]
+    if find_program('weston', required: false).found()
+      test('Wayland visualization suspension', hardening_python,
+        args: [files('run-isolated-regression.py')[0], '--wayland', visual_background_test],
+        env: ['GSETTINGS_SCHEMA_DIR=' + meson.current_build_dir()],
+        timeout: 60,
+      )
+    endif
+  endif
+  if projectm_enabled
+    ui_regressions += [executable('test-nemo-visual-flight',
+      ['test-nemo-visual-flight.c'] + flight_test_sources + gresources,
+      include_directories: [rootInclude],
+      dependencies: nemo_deps,
+      c_args: nemo_definitions,
+    )]
+  endif
   foreach pair : [['archive-dialog', 'nemo-archive-dialog'],
                   ['archive-shortcuts', 'nemo-keybindings']]
     ui_regressions += [executable('test-' + pair[0],

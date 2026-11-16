@@ -17,8 +17,10 @@ void nemo_media_visualizer_set_preset (NemoMediaVisualizer *self, gint index);
 void nemo_media_visualizer_next (NemoMediaVisualizer *self);
 void nemo_media_visualizer_reset (NemoMediaVisualizer *self);
 void nemo_media_visualizer_set_playing (NemoMediaVisualizer *self, gboolean playing);
+gboolean nemo_media_visualizer_get_active (NemoMediaVisualizer *self);
 void nemo_media_visualizer_handle_message (NemoMediaVisualizer *self, GstMessage *message);
 GstElement *nemo_media_audio_filter_new (GError **error);
+void nemo_media_audio_set_normalization_gain (GstElement *filter, double gain);
 void nemo_media_audio_set_binaural (GstElement *filter, gboolean enabled);
 void nemo_media_audio_set_visuals (GstElement *filter, gboolean enabled);
 

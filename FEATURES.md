@@ -49,7 +49,10 @@ Double Commander-style instant file viewer:
 - **Media playlist**: Ctrl+L toggles current-directory audio/video tracks; previous/next buttons and Ctrl+Left/Right, audible autoplay, automatic next track, and Delete-to-Trash using the existing confirmation/error workflow
 - **Audiobook speeds**: 0.5x through 3x, including 2x and 3x, with pitch preservation; each player retains its rate across tracks and seeks
 - **Player volume**: independent 0–100% slider beside mute, including fullscreen; volume/mute are restored across player windows and process restarts without changing existing players
+- **Loudness normalization**: optional cached -16 LUFS gain before user volume, with a -1 dBTP ceiling and no compression. Uncached tracks play immediately at their original level while a single low-priority worker analyzes them for subsequent plays
+- **Playlist following**: Ctrl+L reveals the playing row; Ctrl+Left/Right updates the playlist cursor, selection, and scroll position
 - **Music visualization**: persistent named dropdown with fixed effects or explicit Automatic rotation; twelve original projectM presets, six licensed modern shader presets, stereo FFT bars, scrolling stereo spectrograms and reactive digital rain on opaque black. Bounded background rendering, reduced-animation support and flashing-effects warning. Optional quiet 200/240 Hz binaural tones remain off by default, without medical claims
+- **Procedural flight**: Stellar Voyage's stars and planets and Earthflight's mountains, sandy shores, forests, and lakes are generated native 3D scenes, not videos. Hidden, minimized, and fully covered visualizations suspend rendering and PCM analysis without stopping audio; visible unfocused players keep moving
 - **Player display**: fullscreen with hover transport; Escape exits fullscreen first. Native-alpha backgrounds and letterboxing preserve opaque foregrounds, without whole-window opacity
 - Split view moved to Ctrl+F3
 - File-pane and right-preview dividers use a theme-aware 1-pixel line with a wider invisible resize target

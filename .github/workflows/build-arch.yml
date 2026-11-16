@@ -72,11 +72,11 @@ jobs:
 
               pacman -Syu --noconfirm --needed \
                 base-devel git meson ninja pkgconf intltool \
-                gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop libprojectm libepoxy \
+                gtk3 glib2 glib2-devel json-glib libx11 xapp cinnamon-desktop libprojectm libepoxy libebur128 \
                 libexif libraw exempi gstreamer gst-plugins-base-libs \
                 gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pulseaudio \
                 pango gobject-introspection libgsf python zstd mesa \
-                dbus xorg-server-xvfb xorg-xauth libarchive sqlite libisofs libisoburn \
+                dbus xorg-server-xvfb xorg-xauth weston libarchive sqlite libisofs libisoburn \
                 md4c poppler-glib mupdf-tools bubblewrap
 
               BUILD_UID=$(stat -c %u /src)
@@ -123,7 +123,7 @@ jobs:
           depends=(
             at-spi2-core bash cairo cinnamon-desktop dconf exempi gcc-libs
             gdk-pixbuf2 glib2 glibc gtk3 gvfs gvfs-mtp hicolor-icon-theme
-            json-glib libexif libx11 libxmlb libprojectm libepoxy pango python python-cairo
+            json-glib libexif libx11 libxmlb libprojectm libepoxy libebur128 pango python python-cairo
             python-gobject xapp gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
             webp-pixbuf-loader libraw md4c poppler-glib mupdf-tools bubblewrap libarchive sqlite libisofs
           )

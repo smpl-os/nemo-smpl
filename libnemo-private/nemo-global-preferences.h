@@ -176,6 +176,7 @@ typedef enum
 #define NEMO_PREFERENCES_RESTORE_TABS_ON_STARTUP "restore-tabs-on-startup"
 #define NEMO_PREFERENCES_REMEMBER_DOCUMENT_POSITION "remember-document-position"
 #define NEMO_PREFERENCES_MEDIA_PLAYER_VOLUME "media-player-volume"
+#define NEMO_PREFERENCES_MEDIA_PLAYER_NORMALIZE "media-player-normalize"
 #define NEMO_PREFERENCES_MEDIA_PLAYER_MUTED "media-player-muted"
 #define NEMO_PREFERENCES_MEDIA_PLAYER_VISUAL "media-player-visual"
 #define NEMO_PREFERENCES_IGNORE_VIEW_METADATA "ignore-view-metadata"

@@ -36,7 +36,7 @@ jobs:
             meson ninja-build pkgconf intltool itstool cmake curl ca-certificates \
             libgtk-3-dev libglib2.0-dev libjson-glib-dev \
             libx11-dev libxapp-dev libcinnamon-desktop-dev \
-            libexif-dev libraw-dev libexempi-dev libgstreamer1.0-dev \
+            libexif-dev libraw-dev libexempi-dev libebur128-dev libgstreamer1.0-dev \
             libepoxy-dev libopengl-dev libgl-dev libegl-dev libgl1-mesa-dri \
             libgstreamer-plugins-base1.0-dev libgsf-1-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -48,7 +48,7 @@ jobs:
             libpango1.0-dev libatk1.0-dev libgail-3-dev \
             libxext-dev libxrender-dev libwayland-dev \
             python3 python3-gi x11proto-dev \
-            dbus-daemon xvfb xauth libarchive-dev libarchive-tools libsqlite3-dev \
+            dbus-daemon xvfb xauth weston libarchive-dev libarchive-tools libsqlite3-dev \
             libisofs-dev xorriso \
             libmd4c-dev libmd4c-html0-dev libpoppler-glib-dev mupdf-tools bubblewrap
 

@@ -8,8 +8,17 @@
 #include <math.h>
 #ifdef HAVE_PROJECTM
 #include <projectM-4/projectM.h>
+#include "nemo-flight-renderer.h"
 #include <epoxy/egl.h>
 #include <epoxy/gl.h>
+#endif
+#ifdef GDK_WINDOWING_X11
+#include <gdk/gdkx.h>
+#include <X11/Xatom.h>
+#include <X11/extensions/shape.h>
+#endif
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/gdkwayland.h>
 #endif
 
 #define TONE_LEVEL 0.01
@@ -31,6 +40,7 @@ typedef struct {
 	float visual_pcm[PCM_FRAMES * 2];
 	float analysis_pcm[ANALYSIS_FRAMES * 2];
 	double left_phase, right_phase, gain;
+	double normalization_gain;
 } NemoBinauralFilter;
 
 typedef GstBaseTransformClass NemoBinauralFilterClass;
@@ -50,6 +60,9 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 	NemoBinauralFilter *self = (NemoBinauralFilter *) base;
 	gboolean enabled = g_atomic_int_get (&self->enabled);
 	gboolean visuals = g_atomic_int_get (&self->visuals);
+	GST_OBJECT_LOCK (self);
+	double normalization_gain = self->normalization_gain;
+	GST_OBJECT_UNLOCK (self);
 	if (visuals != self->previous_visuals) {
 		self->previous_visuals = visuals;
 		self->visual_frames = self->pcm_write = self->pcm_count = 0;
@@ -58,7 +71,7 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 		memset (self->analysis_pcm, 0, sizeof self->analysis_pcm);
 		self->analysis_write = 0;
 	}
-	if (!enabled && self->gain == 0 && !visuals)
+	if (!enabled && self->gain == 0 && !visuals && normalization_gain == 1)
 		return GST_FLOW_OK;
 	GstMapInfo map;
 	if (!gst_buffer_map (buffer, &map, GST_MAP_READWRITE))
@@ -70,6 +83,9 @@ binaural_process (GstBaseTransform *base, GstBuffer *buffer)
 	}
 	float *samples = (float *) map.data;
 	guint frames = map.size / (2 * sizeof (float));
+	if (normalization_gain != 1)
+		for (guint i = 0; i < frames * 2; i++)
+			samples[i] *= normalization_gain;
 	if (enabled || self->gain > 0) {
 		double ramp = TONE_LEVEL / (0.25 * self->rate);
 		for (guint i = 0; i < frames * 2; i += 2) {
@@ -154,6 +170,7 @@ nemo_binaural_filter_init (NemoBinauralFilter *self)
 {
 	gst_base_transform_set_in_place (GST_BASE_TRANSFORM (self), TRUE);
 	self->rate = 48000;
+	self->normalization_gain = 1;
 }
 
 GstElement *
@@ -200,6 +217,18 @@ nemo_media_audio_filter_new (GError **error)
 }
 
 void
+nemo_media_audio_set_normalization_gain (GstElement *filter, double gain)
+{
+	g_return_if_fail (isfinite (gain) && gain >= 0);
+	GstElement *tones = gst_bin_get_by_name (GST_BIN (filter), "binaural-tones");
+	g_return_if_fail (tones != NULL);
+	GST_OBJECT_LOCK (tones);
+	((NemoBinauralFilter *) tones)->normalization_gain = gain;
+	GST_OBJECT_UNLOCK (tones);
+	gst_object_unref (tones);
+}
+
+void
 nemo_media_audio_set_binaural (GstElement *filter, gboolean enabled)
 {
 	GstElement *tones = gst_bin_get_by_name (GST_BIN (filter), "binaural-tones");
@@ -223,6 +252,8 @@ typedef struct {
 	EGLContext context;
 	EGLSurface surface;
 	projectm_handle engine;
+	NemoFlightRenderer *flight;
+	gboolean software;
 #endif
 	guint preset;
 	char *error;
@@ -244,6 +275,8 @@ struct _NemoMediaVisualizer {
 	guint tick, preset, rendered_frames;
 	gint64 last_frame, last_pcm;
 	double preset_time;
+	double scene_time;
+	guint32 scene_seed;
 	float pcm[PCM_FRAMES * 2];
 	float analysis_pcm[ANALYSIS_FRAMES * 2];
 	guint reset_serial;
@@ -252,6 +285,13 @@ struct _NemoMediaVisualizer {
 	VisualEngine gpu;
 	NativeVisual native;
 	char *render_error;
+	GtkWidget *toplevel;
+	gulong window_state_handler;
+	guint visibility_check;
+	gboolean obscured, stack_obscured, minimized, render_active, watching_x11;
+	guint frame_watch;
+	gint64 last_tick;
+	gboolean compositor_idle;
 };
 
 G_DEFINE_TYPE (NemoMediaVisualizer, nemo_media_visualizer, GTK_TYPE_DRAWING_AREA)
@@ -259,19 +299,288 @@ G_DEFINE_TYPE (NemoMediaVisualizer, nemo_media_visualizer, GTK_TYPE_DRAWING_AREA
 static GThreadPool *visual_pool;
 static gboolean visual_shutting_down;
 
+enum {
+	VISUAL_PROP_0,
+	VISUAL_PROP_RENDER_ACTIVE
+};
+
+static void visualizer_update_tick (NemoMediaVisualizer *self);
+static void visual_request_frame (NemoMediaVisualizer *self);
+
+static gboolean
+visualizer_is_visible (NemoMediaVisualizer *self)
+{
+	return !self->destroyed && gtk_widget_get_mapped (GTK_WIDGET (self)) &&
+		!self->obscured && !self->stack_obscured && !self->minimized;
+}
+
+#ifdef GDK_WINDOWING_X11
+static unsigned long *
+visual_x11_property (Display *display, Window window, Atom property, Atom type,
+		     unsigned long limit, unsigned long *length)
+{
+	Atom actual_type;
+	int format;
+	unsigned long remaining;
+	unsigned char *data = NULL;
+	*length = 0;
+	if (XGetWindowProperty (display, window, property, 0, limit, False, type,
+		&actual_type, &format, length, &remaining, &data) != Success ||
+	    actual_type != type || format != 32 || remaining != 0) {
+		if (data != NULL)
+			XFree (data);
+		*length = 0;
+		return NULL;
+	}
+	return (unsigned long *) data;
+}
+
+static gboolean
+visual_x11_desktop (Display *display, Window window, Atom atom, guint32 *desktop)
+{
+	unsigned long length;
+	unsigned long *value = visual_x11_property (display, window, atom, XA_CARDINAL, 1, &length);
+	gboolean found = value != NULL && length == 1;
+	if (found)
+		*desktop = value[0];
+	if (value != NULL)
+		XFree (value);
+	return found;
+}
+
+static gboolean
+visual_x11_is_obscured (NemoMediaVisualizer *self)
+{
+	GtkWidget *widget = GTK_WIDGET (self);
+	GdkDisplay *gdk_display = gtk_widget_get_display (widget);
+	GdkWindow *window = gtk_widget_get_window (widget);
+	GdkWindow *top = self->toplevel != NULL ? gtk_widget_get_window (self->toplevel) : NULL;
+	if (!GDK_IS_X11_DISPLAY (gdk_display) || window == NULL || top == NULL)
+		return FALSE;
+	Display *display = gdk_x11_display_get_xdisplay (gdk_display);
+	Window root = gdk_x11_window_get_xid (gdk_screen_get_root_window (gtk_widget_get_screen (widget)));
+	Window own = gdk_x11_window_get_xid (top);
+	Atom stack_atom = XInternAtom (display, "_NET_CLIENT_LIST_STACKING", False);
+	Atom desktop_atom = XInternAtom (display, "_NET_WM_DESKTOP", False);
+	Atom current_atom = XInternAtom (display, "_NET_CURRENT_DESKTOP", False);
+	Atom opacity_atom = XInternAtom (display, "_NET_WM_WINDOW_OPACITY", False);
+	Atom opaque_atom = XInternAtom (display, "_NET_WM_OPAQUE_REGION", False);
+	gboolean obscured = FALSE, above = FALSE;
+	unsigned long length = 0;
+	guint32 current = 0, desktop;
+	int x, y, shape_event, shape_error;
+	cairo_region_t *remaining = NULL;
+	unsigned long *stack = NULL;
+
+	gdk_x11_display_error_trap_push (gdk_display);
+	gboolean have_desktop = visual_x11_desktop (display, root, current_atom, &current);
+	if (have_desktop && visual_x11_desktop (display, own, desktop_atom, &desktop) &&
+	    desktop != G_MAXUINT32 && desktop != current) {
+		obscured = TRUE;
+		goto done;
+	}
+	stack = visual_x11_property (display, root, stack_atom, XA_WINDOW, 4096, &length);
+	if (stack == NULL || !gdk_window_get_origin (window, &x, &y))
+		goto done;
+	cairo_rectangle_int_t target = { x, y, gtk_widget_get_allocated_width (widget),
+		gtk_widget_get_allocated_height (widget) };
+	remaining = cairo_region_create_rectangle (&target);
+	gboolean have_shape = XShapeQueryExtension (display, &shape_event, &shape_error);
+	for (unsigned long i = 0; i < length && !cairo_region_is_empty (remaining); i++) {
+		Window other = stack[i], child;
+		XWindowAttributes attrs;
+		if (other == own) {
+			above = TRUE;
+			continue;
+		}
+		if (!above || !XGetWindowAttributes (display, other, &attrs) ||
+		    attrs.map_state != IsViewable || attrs.class != InputOutput ||
+		    !XTranslateCoordinates (display, other, root, 0, 0, &x, &y, &child))
+			continue;
+		if (have_desktop && visual_x11_desktop (display, other, desktop_atom, &desktop) &&
+		    desktop != G_MAXUINT32 && desktop != current)
+			continue;
+		unsigned long count;
+		unsigned long *values = visual_x11_property (display, other, opacity_atom, XA_CARDINAL, 1, &count);
+		gboolean transparent = values != NULL && count == 1 && values[0] < G_MAXUINT32;
+		if (values != NULL)
+			XFree (values);
+		if (transparent)
+			continue;
+		cairo_region_t *opaque = cairo_region_create ();
+		values = visual_x11_property (display, other, opaque_atom, XA_CARDINAL, 1024, &count);
+		if (values != NULL && count % 4 == 0) {
+			for (unsigned long j = 0; j + 3 < count; j += 4) {
+				if (values[j] > (unsigned long) attrs.width ||
+				    values[j + 1] > (unsigned long) attrs.height ||
+				    values[j + 2] > (unsigned long) attrs.width - values[j] ||
+				    values[j + 3] > (unsigned long) attrs.height - values[j + 1])
+					continue;
+				cairo_rectangle_int_t rect = { x + values[j], y + values[j + 1],
+					values[j + 2], values[j + 3] };
+				cairo_region_union_rectangle (opaque, &rect);
+			}
+		} else if (attrs.depth < 32) {
+			cairo_rectangle_int_t rect = { x, y, attrs.width, attrs.height };
+			cairo_region_union_rectangle (opaque, &rect);
+		}
+		if (values != NULL)
+			XFree (values);
+		if (have_shape) {
+			int rectangles, ordering;
+			XRectangle *bounds = XShapeGetRectangles (display, other, ShapeBounding,
+				&rectangles, &ordering);
+			cairo_region_t *shape = cairo_region_create ();
+			if (bounds != NULL && rectangles <= 4096)
+				for (int j = 0; j < rectangles; j++) {
+					cairo_rectangle_int_t rect = { x + bounds[j].x, y + bounds[j].y,
+						bounds[j].width, bounds[j].height };
+					cairo_region_union_rectangle (shape, &rect);
+				}
+			cairo_region_intersect (opaque, shape);
+			cairo_region_destroy (shape);
+			if (bounds != NULL)
+				XFree (bounds);
+		}
+		cairo_region_subtract (remaining, opaque);
+		cairo_region_destroy (opaque);
+	}
+	obscured = above && cairo_region_is_empty (remaining);
+done:
+	if (stack != NULL)
+		XFree (stack);
+	if (remaining != NULL)
+		cairo_region_destroy (remaining);
+	gdk_x11_display_error_trap_pop_ignored (gdk_display);
+	return obscured;
+}
+#endif
+
+static gboolean
+visualizer_check_visibility (gpointer data)
+{
+	NemoMediaVisualizer *self = data;
+	self->visibility_check = 0;
+	if (self->destroyed || !gtk_widget_get_mapped (GTK_WIDGET (self)))
+		return G_SOURCE_REMOVE;
+#ifdef GDK_WINDOWING_X11
+	self->stack_obscured = visual_x11_is_obscured (self);
+#endif
+	visualizer_update_tick (self);
+	if (visualizer_is_visible (self))
+		gtk_widget_queue_draw (GTK_WIDGET (self));
+	return G_SOURCE_REMOVE;
+}
+
+static void
+visualizer_queue_visibility (NemoMediaVisualizer *self)
+{
+	if (!self->destroyed && gtk_widget_get_mapped (GTK_WIDGET (self)) && self->visibility_check == 0)
+		self->visibility_check = g_timeout_add (100, visualizer_check_visibility, self);
+}
+
+#ifdef GDK_WINDOWING_X11
+static GdkFilterReturn
+visualizer_x11_event (GdkXEvent *native, GdkEvent *event, gpointer data)
+{
+	XEvent *xevent = native;
+	if (xevent->type == PropertyNotify || xevent->type == ConfigureNotify ||
+	    xevent->type == MapNotify || xevent->type == UnmapNotify || xevent->type == DestroyNotify)
+		visualizer_queue_visibility (data);
+	return GDK_FILTER_CONTINUE;
+}
+#endif
+
+static gboolean
+visualizer_window_state (GtkWidget *window, GdkEventWindowState *event, gpointer data)
+{
+	NemoMediaVisualizer *self = data;
+	self->minimized = (event->new_window_state &
+		(GDK_WINDOW_STATE_ICONIFIED | GDK_WINDOW_STATE_WITHDRAWN)) != 0;
+	visualizer_update_tick (self);
+	visualizer_queue_visibility (self);
+	return FALSE;
+}
+
+static void
+visualizer_unwatch_window (NemoMediaVisualizer *self)
+{
+	if (self->frame_watch != 0) {
+		g_source_remove (self->frame_watch);
+		self->frame_watch = 0;
+	}
+	if (self->visibility_check != 0) {
+		g_source_remove (self->visibility_check);
+		self->visibility_check = 0;
+	}
+#ifdef GDK_WINDOWING_X11
+	if (self->watching_x11) {
+		gdk_window_remove_filter (NULL, visualizer_x11_event, self);
+		self->watching_x11 = FALSE;
+	}
+#endif
+	if (self->toplevel != NULL) {
+		g_signal_handler_disconnect (self->toplevel, self->window_state_handler);
+		g_object_remove_weak_pointer (G_OBJECT (self->toplevel), (gpointer *) &self->toplevel);
+		self->toplevel = NULL;
+	}
+}
+
+static void
+visualizer_watch_window (NemoMediaVisualizer *self)
+{
+	GtkWidget *top = gtk_widget_get_toplevel (GTK_WIDGET (self));
+	visualizer_unwatch_window (self);
+	self->obscured = self->stack_obscured = self->minimized = FALSE;
+	if (!GTK_IS_WINDOW (top))
+		return;
+	self->toplevel = top;
+	g_object_add_weak_pointer (G_OBJECT (top), (gpointer *) &self->toplevel);
+	self->window_state_handler = g_signal_connect (top, "window-state-event",
+		G_CALLBACK (visualizer_window_state), self);
+	GdkWindow *window = gtk_widget_get_window (top);
+	if (window != NULL)
+		self->minimized = (gdk_window_get_state (window) &
+			(GDK_WINDOW_STATE_ICONIFIED | GDK_WINDOW_STATE_WITHDRAWN)) != 0;
+#ifdef GDK_WINDOWING_X11
+	if (GDK_IS_X11_DISPLAY (gtk_widget_get_display (top))) {
+		GdkWindow *root = gdk_screen_get_root_window (gtk_widget_get_screen (top));
+		gdk_window_set_events (root, gdk_window_get_events (root) |
+			GDK_PROPERTY_CHANGE_MASK | GDK_SUBSTRUCTURE_MASK);
+		gdk_window_add_filter (NULL, visualizer_x11_event, self);
+		self->watching_x11 = TRUE;
+	}
+#endif
+	visualizer_check_visibility (self);
+}
+
+static gboolean
+visualizer_visibility (GtkWidget *widget, GdkEventVisibility *event)
+{
+	NemoMediaVisualizer *self = NEMO_MEDIA_VISUALIZER (widget);
+	self->obscured = event->state == GDK_VISIBILITY_FULLY_OBSCURED;
+	visualizer_update_tick (self);
+	visualizer_queue_visibility (self);
+	return FALSE;
+}
+
 typedef struct {
 	guint preset;
 	float pcm[PCM_FRAMES * 2];
 	float analysis_pcm[ANALYSIS_FRAMES * 2];
 	gint64 pcm_time;
 	guint reset_serial;
+	double scene_time, energy;
+	guint32 scene_seed;
 } VisualFrame;
 
 typedef enum {
 	VISUAL_PROJECTM,
 	VISUAL_SPECTRUM,
 	VISUAL_SPECTROGRAM,
-	VISUAL_MATRIX
+	VISUAL_MATRIX,
+	VISUAL_FLIGHT_SPACE,
+	VISUAL_FLIGHT_TERRAIN
 } VisualKind;
 
 static const struct {
@@ -300,7 +609,9 @@ static const struct {
 	{ "iridescent-ribbons", N_("Iridescent Ribbons"), NULL, VISUAL_PROJECTM },
 	{ "stereo-spectrum", N_("Stereo spectrum"), NULL, VISUAL_SPECTRUM },
 	{ "spectrogram", N_("Spectrogram"), NULL, VISUAL_SPECTROGRAM },
-	{ "digital-rain", N_("Digital rain"), NULL, VISUAL_MATRIX }
+	{ "digital-rain", N_("Digital rain"), NULL, VISUAL_MATRIX },
+	{ "stellar-voyage", N_("Stellar Voyage"), NULL, VISUAL_FLIGHT_SPACE },
+	{ "earthflight", N_("Earthflight"), NULL, VISUAL_FLIGHT_TERRAIN }
 };
 
 guint
@@ -571,7 +882,8 @@ visual_engine_init (VisualEngine *gpu)
 		return FALSE;
 	}
 	EGLint attributes[] = { EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE };
+		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+		EGL_DEPTH_SIZE, 24, EGL_NONE };
 	EGLConfig config;
 	EGLint count;
 	EGLint size[] = { EGL_WIDTH, VISUAL_WIDTH, EGL_HEIGHT, VISUAL_HEIGHT, EGL_NONE };
@@ -604,6 +916,12 @@ visual_engine_init (VisualEngine *gpu)
 	projectm_set_soft_cut_duration (gpu->engine, 4);
 	projectm_set_preset_locked (gpu->engine, TRUE);
 	projectm_set_preset_switch_failed_event_callback (gpu->engine, visual_preset_failed, gpu);
+	const char *renderer = (const char *) glGetString (GL_RENDERER);
+	g_autofree char *lower = renderer != NULL ? g_ascii_strdown (renderer, -1) : NULL;
+	gpu->software = lower != NULL && (strstr (lower, "llvmpipe") != NULL ||
+		strstr (lower, "softpipe") != NULL || strstr (lower, "swrast") != NULL ||
+		strstr (lower, "software") != NULL || strstr (lower, "swiftshader") != NULL);
+	g_debug ("Media visualization renderer: %s (%s)", renderer, glGetString (GL_VERSION));
 	gpu->preset = G_MAXUINT;
 	return TRUE;
 }
@@ -615,9 +933,11 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 	NemoMediaVisualizer *self = source;
 	VisualEngine *gpu = &self->gpu;
 	VisualFrame *request = data;
+	VisualKind kind = visual_presets[request->preset].kind;
+	gboolean flight = kind == VISUAL_FLIGHT_SPACE || kind == VISUAL_FLIGHT_TERRAIN;
 	if (g_task_return_error_if_cancelled (task))
 		return;
-	if (visual_presets[request->preset].kind != VISUAL_PROJECTM) {
+	if (kind != VISUAL_PROJECTM && !flight) {
 		GError *error = NULL;
 		cairo_surface_t *surface = native_render (self, request, &error);
 		if (surface != NULL)
@@ -630,40 +950,69 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 	g_autofree guint8 *rgba = NULL;
 	if (gpu->engine == NULL && !visual_engine_init (gpu))
 		goto failed;
+	gint width = flight && gpu->software ? VISUAL_WIDTH / 2 : VISUAL_WIDTH;
+	gint height = flight && gpu->software ? VISUAL_HEIGHT / 2 : VISUAL_HEIGHT;
 	if (!eglBindAPI (EGL_OPENGL_API) ||
 	    !eglMakeCurrent (gpu->display, gpu->surface, gpu->surface, gpu->context)) {
 		g_free (gpu->error);
 		gpu->error = g_strdup (_("Cannot activate the projectM OpenGL context."));
 		goto failed;
 	}
-	if (gpu->preset != request->preset) {
+	if (flight) {
 		GError *error = NULL;
-		g_autofree char *preset = visual_preset (request->preset, &error);
-		if (preset == NULL) {
-			gpu->error = g_strdup (error->message);
-			g_clear_error (&error);
-			goto failed;
+		if (gpu->flight == NULL)
+			gpu->flight = nemo_flight_renderer_new (&error);
+		if (gpu->flight == NULL ||
+		    !nemo_flight_renderer_render (gpu->flight,
+			kind == VISUAL_FLIGHT_SPACE ? NEMO_FLIGHT_SPACE : NEMO_FLIGHT_TERRAIN,
+			request->scene_seed, request->scene_time, request->energy,
+			width, height, &error)) {
+			eglMakeCurrent (gpu->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+			g_task_return_error (task, error);
+			return;
 		}
-		projectm_load_preset_data (gpu->engine, preset, gpu->preset != G_MAXUINT);
-		gpu->preset = request->preset;
-		if (gpu->error != NULL)
-			goto failed;
+		gpu->preset = G_MAXUINT;
+	} else {
+		if (gpu->preset != request->preset) {
+			GError *error = NULL;
+			g_autofree char *preset = visual_preset (request->preset, &error);
+			if (preset == NULL) {
+				gpu->error = g_strdup (error->message);
+				g_clear_error (&error);
+				goto failed;
+			}
+			g_clear_pointer (&gpu->error, g_free);
+			projectm_load_preset_data (gpu->engine, preset, gpu->preset != G_MAXUINT);
+			gpu->preset = request->preset;
+			if (gpu->error != NULL)
+				goto failed;
+		}
+		projectm_pcm_add_float (gpu->engine, request->pcm, PCM_FRAMES, PROJECTM_STEREO);
+		glDisable (GL_DEPTH_TEST);
+		glDepthMask (GL_TRUE);
+		glDisable (GL_CULL_FACE);
+		glDisable (GL_SCISSOR_TEST);
+		glDisable (GL_STENCIL_TEST);
+		glDisable (GL_BLEND);
+		glDisable (GL_FRAMEBUFFER_SRGB);
+		glColorMask (GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glActiveTexture (GL_TEXTURE0);
+		glViewport (0, 0, VISUAL_WIDTH, VISUAL_HEIGHT);
+		glBindFramebuffer (GL_FRAMEBUFFER, 0);
+		projectm_opengl_render_frame (gpu->engine);
 	}
-	projectm_pcm_add_float (gpu->engine, request->pcm, PCM_FRAMES, PROJECTM_STEREO);
-	glBindFramebuffer (GL_FRAMEBUFFER, 0);
-	projectm_opengl_render_frame (gpu->engine);
 	/* projectM 4.1 can leave its internal read framebuffer bound. */
 	glBindFramebuffer (GL_FRAMEBUFFER, 0);
-	rgba = g_malloc (VISUAL_WIDTH * VISUAL_HEIGHT * 4);
-	glReadPixels (0, 0, VISUAL_WIDTH, VISUAL_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+	rgba = g_malloc (width * height * 4);
+	glReadPixels (0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
 	GLenum gl_error = glGetError ();
 	eglMakeCurrent (gpu->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 	if (gl_error != GL_NO_ERROR) {
 		g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
-			"projectM OpenGL rendering error: 0x%x", gl_error);
+			"Visualization OpenGL rendering error: 0x%x", gl_error);
 		return;
 	}
-	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, VISUAL_WIDTH, VISUAL_HEIGHT);
+	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, width, height);
 	if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS) {
 		g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s",
 			cairo_status_to_string (cairo_surface_status (surface)));
@@ -671,14 +1020,14 @@ visual_render_worker (GTask *task, gpointer source, gpointer data, GCancellable 
 		return;
 	}
 	guint32 *pixels = (guint32 *) cairo_image_surface_get_data (surface);
-	for (guint y = 0; y < VISUAL_HEIGHT; y++)
-		for (guint x = 0; x < VISUAL_WIDTH; x++) {
-			guint i = ((VISUAL_HEIGHT - 1 - y) * VISUAL_WIDTH + x) * 4;
-			/* Remove the near-black feedback pedestal, keeping full-white output. */
+	for (gint y = 0; y < height; y++)
+		for (gint x = 0; x < width; x++) {
+			guint i = ((height - 1 - y) * width + x) * 4;
+			/* Only projectM's feedback has the near-black pedestal. */
 			guint rgb[3];
 			for (guint c = 0; c < 3; c++)
-				rgb[c] = MAX (0, (gint) rgba[i + c] - 12) * 255 / 243;
-			pixels[y * VISUAL_WIDTH + x] = 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+				rgb[c] = flight ? rgba[i + c] : MAX (0, (gint) rgba[i + c] - 12) * 255 / 243;
+			pixels[y * width + x] = 0xff000000 | (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
 		}
 	cairo_surface_mark_dirty (surface);
 	g_task_return_pointer (task, surface, (GDestroyNotify) cairo_surface_destroy);
@@ -711,8 +1060,6 @@ visual_render_dispatch (gpointer data, gpointer unused)
 	g_source_attach (release, g_task_get_context (task));
 	g_source_unref (release);
 }
-
-static void visual_request_frame (NemoMediaVisualizer *self);
 
 static void
 visual_application_shutdown (GApplication *application, gpointer unused)
@@ -748,9 +1095,10 @@ visual_render_ready (GObject *source, GAsyncResult *result, gpointer unused)
 			g_debug ("Media visualization: %s", error->message);
 		}
 	}
-	if (!self->destroyed)
+	visualizer_update_tick (self);
+	if (visualizer_is_visible (self) && !self->compositor_idle)
 		gtk_widget_queue_draw (GTK_WIDGET (self));
-	if (!self->destroyed && request->preset != self->preset)
+	if (visualizer_is_visible (self) && request->preset != self->preset)
 		visual_request_frame (self);
 	g_clear_pointer (&surface, cairo_surface_destroy);
 	g_clear_error (&error);
@@ -761,7 +1109,7 @@ visual_request_frame (NemoMediaVisualizer *self)
 {
 	static gsize initialized;
 	if (self->rendering || self->destroyed || visual_shutting_down || self->render_error != NULL ||
-	    !gtk_widget_get_mapped (GTK_WIDGET (self)))
+	    !visualizer_is_visible (self) || self->compositor_idle)
 		return;
 	if (g_once_init_enter (&initialized)) {
 		GError *error = NULL;
@@ -770,7 +1118,8 @@ visual_request_frame (NemoMediaVisualizer *self)
 			self->render_error = g_strdup (error->message);
 			g_warning ("Media visualization workers: %s", error->message);
 			g_clear_error (&error);
-			g_thread_pool_free (visual_pool, TRUE, TRUE);
+			if (visual_pool != NULL)
+				g_thread_pool_free (visual_pool, TRUE, TRUE);
 			visual_pool = NULL;
 		}
 		g_once_init_leave (&initialized, 1);
@@ -795,9 +1144,16 @@ visual_request_frame (NemoMediaVisualizer *self)
 	request->preset = self->preset;
 	request->reset_serial = self->reset_serial;
 	request->pcm_time = self->last_pcm;
+	request->scene_time = self->scene_time;
+	request->scene_seed = self->scene_seed;
 	memcpy (request->analysis_pcm, self->analysis_pcm, sizeof request->analysis_pcm);
-	if (g_get_monotonic_time () - self->last_pcm < 300000)
+	if (g_get_monotonic_time () - self->last_pcm < 300000) {
 		memcpy (request->pcm, self->pcm, sizeof request->pcm);
+		double square = 0;
+		for (guint i = 0; i < G_N_ELEMENTS (request->pcm); i++)
+			square += request->pcm[i] * request->pcm[i];
+		request->energy = CLAMP (sqrt (square / G_N_ELEMENTS (request->pcm)) * 2, 0, 1);
+	}
 	self->render_cancel = g_cancellable_new ();
 	GTask *task = g_task_new (self, self->render_cancel, visual_render_ready, NULL);
 	g_task_set_task_data (task, request, g_free);
@@ -815,11 +1171,17 @@ static gboolean
 visualizer_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer unused)
 {
 	NemoMediaVisualizer *self = NEMO_MEDIA_VISUALIZER (widget);
+	self->last_tick = g_get_monotonic_time ();
+	if (self->compositor_idle) {
+		self->compositor_idle = FALSE;
+		visualizer_update_tick (self);
+	}
 	gint64 now = gdk_frame_clock_get_frame_time (clock);
 	if (self->last_frame != 0 && now - self->last_frame < 41666)
 		return G_SOURCE_CONTINUE;
 	double dt = self->last_frame == 0 ? 0 : CLAMP ((now - self->last_frame) / 1000000.0, 0, 0.1);
 	self->last_frame = now;
+	self->scene_time += dt;
 	if (self->automatic)
 		self->preset_time += dt;
 	if (self->automatic && self->preset_time >= 30)
@@ -828,19 +1190,54 @@ visualizer_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer unused)
 	return G_SOURCE_CONTINUE;
 }
 
+#ifdef GDK_WINDOWING_WAYLAND
+static gboolean
+visualizer_frame_watch (gpointer data)
+{
+	NemoMediaVisualizer *self = data;
+	/* Wayland throttles covered surfaces' frame clocks rather than exposing
+	 * other windows' geometry. Stop PCM work until its next frame callback. */
+	if (!self->compositor_idle && g_get_monotonic_time () - self->last_tick > 750000) {
+		self->compositor_idle = TRUE;
+		visualizer_update_tick (self);
+	}
+	return G_SOURCE_CONTINUE;
+}
+#endif
+
 static void
 visualizer_update_tick (NemoMediaVisualizer *self)
 {
 	gboolean animate;
 	g_object_get (gtk_widget_get_settings (GTK_WIDGET (self)), "gtk-enable-animations", &animate, NULL);
 	gboolean active = self->playing && !self->destroyed && animate &&
-		gtk_widget_get_mapped (GTK_WIDGET (self)) && self->render_error == NULL;
+		visualizer_is_visible (self) && self->render_error == NULL;
 	if (active && self->tick == 0) {
 		self->last_frame = 0;
+		self->last_tick = g_get_monotonic_time ();
+		self->compositor_idle = FALSE;
 		self->tick = gtk_widget_add_tick_callback (GTK_WIDGET (self), visualizer_tick, NULL, NULL);
 	} else if (!active && self->tick != 0) {
 		gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick);
 		self->tick = 0;
+	}
+#ifdef GDK_WINDOWING_WAYLAND
+	if (active && self->frame_watch == 0 &&
+	    GDK_IS_WAYLAND_DISPLAY (gtk_widget_get_display (GTK_WIDGET (self))))
+		self->frame_watch = g_timeout_add (1000, visualizer_frame_watch, self);
+#endif
+	if (!active && self->frame_watch != 0) {
+		g_source_remove (self->frame_watch);
+		self->frame_watch = 0;
+	}
+	gboolean sampling = active && !self->compositor_idle;
+	if (self->render_active != sampling) {
+		self->render_active = sampling;
+		g_object_notify (G_OBJECT (self), "render-active");
+	}
+	if ((!visualizer_is_visible (self) || self->compositor_idle) && self->render_cancel != NULL) {
+		g_cancellable_cancel (self->render_cancel);
+		g_clear_object (&self->render_cancel);
 	}
 }
 
@@ -848,6 +1245,7 @@ static void
 visualizer_map (GtkWidget *widget)
 {
 	GTK_WIDGET_CLASS (nemo_media_visualizer_parent_class)->map (widget);
+	visualizer_watch_window (NEMO_MEDIA_VISUALIZER (widget));
 	visualizer_update_tick (NEMO_MEDIA_VISUALIZER (widget));
 }
 
@@ -855,6 +1253,7 @@ static void
 visualizer_unmap (GtkWidget *widget)
 {
 	NemoMediaVisualizer *self = NEMO_MEDIA_VISUALIZER (widget);
+	visualizer_unwatch_window (self);
 	if (self->tick != 0) {
 		gtk_widget_remove_tick_callback (widget, self->tick);
 		self->tick = 0;
@@ -864,12 +1263,19 @@ visualizer_unmap (GtkWidget *widget)
 		g_clear_object (&self->render_cancel);
 	}
 	GTK_WIDGET_CLASS (nemo_media_visualizer_parent_class)->unmap (widget);
+	visualizer_update_tick (self);
 }
 
 static gboolean
 visualizer_draw (GtkWidget *widget, cairo_t *cr)
 {
 	NemoMediaVisualizer *self = NEMO_MEDIA_VISUALIZER (widget);
+	if (self->compositor_idle) {
+		self->compositor_idle = FALSE;
+		self->last_tick = g_get_monotonic_time ();
+		visualizer_update_tick (self);
+		visual_request_frame (self);
+	}
 	double width = gtk_widget_get_allocated_width (widget);
 	double height = gtk_widget_get_allocated_height (widget);
 	cairo_set_source_rgb (cr, 0, 0, 0);
@@ -878,10 +1284,13 @@ visualizer_draw (GtkWidget *widget, cairo_t *cr)
 		visual_request_frame (self);
 	if (self->frame != NULL) {
 		cairo_save (cr);
-		double scale = MIN (width / VISUAL_WIDTH, height / VISUAL_HEIGHT);
-		cairo_translate (cr, (width - VISUAL_WIDTH * scale) / 2, (height - VISUAL_HEIGHT * scale) / 2);
+		double frame_width = cairo_image_surface_get_width (self->frame);
+		double frame_height = cairo_image_surface_get_height (self->frame);
+		double scale = MIN (width / frame_width, height / frame_height);
+		cairo_translate (cr, (width - frame_width * scale) / 2, (height - frame_height * scale) / 2);
 		cairo_scale (cr, scale, scale);
 		cairo_set_source_surface (cr, self->frame, 0, 0);
+		cairo_pattern_set_filter (cairo_get_source (cr), CAIRO_FILTER_BILINEAR);
 		cairo_paint (cr);
 		cairo_restore (cr);
 	}
@@ -902,6 +1311,7 @@ visualizer_destroy (GtkWidget *widget)
 {
 	NemoMediaVisualizer *self = NEMO_MEDIA_VISUALIZER (widget);
 	self->destroyed = TRUE;
+	visualizer_unwatch_window (self);
 	if (self->render_cancel != NULL)
 		g_cancellable_cancel (self->render_cancel);
 	self->playing = FALSE;
@@ -924,6 +1334,8 @@ visualizer_finalize (GObject *object)
 		if (gpu->context != EGL_NO_CONTEXT && gpu->surface != EGL_NO_SURFACE &&
 		    eglBindAPI (EGL_OPENGL_API) &&
 		    eglMakeCurrent (gpu->display, gpu->surface, gpu->surface, gpu->context)) {
+			if (gpu->flight != NULL)
+				nemo_flight_renderer_free (gpu->flight);
 			if (gpu->engine != NULL)
 				projectm_destroy (gpu->engine);
 			eglMakeCurrent (gpu->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -957,6 +1369,15 @@ visualizer_finalize (GObject *object)
 }
 
 static void
+nemo_media_visualizer_get_property (GObject *object, guint id, GValue *value, GParamSpec *spec)
+{
+	if (id == VISUAL_PROP_RENDER_ACTIVE)
+		g_value_set_boolean (value, NEMO_MEDIA_VISUALIZER (object)->render_active);
+	else
+		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, id, spec);
+}
+
+static void
 nemo_media_visualizer_class_init (NemoMediaVisualizerClass *klass)
 {
 	GtkWidgetClass *widget = GTK_WIDGET_CLASS (klass);
@@ -964,13 +1385,21 @@ nemo_media_visualizer_class_init (NemoMediaVisualizerClass *klass)
 	widget->map = visualizer_map;
 	widget->unmap = visualizer_unmap;
 	widget->destroy = visualizer_destroy;
+	widget->visibility_notify_event = visualizer_visibility;
+	G_OBJECT_CLASS (klass)->get_property = nemo_media_visualizer_get_property;
 	G_OBJECT_CLASS (klass)->finalize = visualizer_finalize;
+	g_object_class_install_property (G_OBJECT_CLASS (klass), VISUAL_PROP_RENDER_ACTIVE,
+		g_param_spec_boolean ("render-active", "Rendering active",
+			"Whether a visible, playing visualization needs PCM samples", FALSE,
+			G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
 nemo_media_visualizer_init (NemoMediaVisualizer *self)
 {
 	self->automatic = TRUE;
+	self->scene_seed = g_random_int ();
+	gtk_widget_add_events (GTK_WIDGET (self), GDK_VISIBILITY_NOTIFY_MASK);
 	gtk_widget_set_hexpand (GTK_WIDGET (self), TRUE);
 	gtk_widget_set_vexpand (GTK_WIDGET (self), TRUE);
 	atk_object_set_name (gtk_widget_get_accessible (GTK_WIDGET (self)), _("Music visualization"));
@@ -1011,6 +1440,8 @@ nemo_media_visualizer_reset (NemoMediaVisualizer *self)
 	memset (self->analysis_pcm, 0, sizeof self->analysis_pcm);
 	self->reset_serial++;
 	self->last_pcm = 0;
+	self->scene_time = 0;
+	self->scene_seed = g_random_int ();
 	if (self->render_cancel != NULL) {
 		g_cancellable_cancel (self->render_cancel);
 		g_clear_object (&self->render_cancel);
@@ -1028,6 +1459,12 @@ nemo_media_visualizer_set_playing (NemoMediaVisualizer *self, gboolean playing)
 {
 	self->playing = playing;
 	visualizer_update_tick (self);
+}
+
+gboolean
+nemo_media_visualizer_get_active (NemoMediaVisualizer *self)
+{
+	return self->render_active;
 }
 
 void
