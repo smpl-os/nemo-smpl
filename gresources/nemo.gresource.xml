@@ -26,6 +26,7 @@
     <file>nemo-style-fallback.css</file>
     <file>nemo-style-fallback-mandatory.css</file>
     <file>nemo-style-application.css</file>
+    <file>nemo-player.css</file>
     <file>nemo-style-affordances.css</file>
     <file>player-presets/aurora-cathedral.milk</file>
     <file>player-presets/bioluminescent-abyss.milk</file>

@@ -228,7 +228,8 @@ from **0–100%**, without changing other players or system volume. Volume and m
 are remembered for new players, including after restarting Nemo; mute/unmute
 preserves the level. Focus the slider (or press **Alt+V**) and use arrow keys for
 fine adjustment. Both controls remain adjacent in fullscreen. Playlist selection
-uses the theme's full selected colors, including while unfocused.
+uses the theme's full selected colors, including while unfocused and with the
+live smplOS stylesheet enabled.
 
 Optional **-16 LUFS** normalization is off by default and remembered for new
 players. It measures the entire local track in a single low-priority background
@@ -261,6 +262,10 @@ only **Automatic** cycles every 30 seconds. The real
 [projectM](https://github.com/projectM-visualizer/projectm) MilkDrop-compatible
 engine provides twelve original presets and six bundled MIT-licensed modern
 shader presets by Gianluca Boiano (M0Rf30), with license and pinned provenance.
+Nebula's star accents follow bass onsets rather than a separate flashing clock;
+Neon Sacred Geometry does not invent beats during silence. These use projectM's
+frequency-band analysis, not drum-source separation. Ambient motion can continue
+between beats; the procedural flight scenes intentionally react more subtly.
 There are also native **Stereo spectrum** segmented bars, a scrolling
 log-frequency **Spectrogram**, and music-reactive **Digital rain**. The first
 two analyze the left and right channels independently. These effects use an
@@ -285,6 +290,13 @@ including fullscreen. Flight scenes use 400x225 on detected software renderers
 to bound CPU cost. Text and controls keep their normal
 theme and native background transparency; the visualization itself is opaque.
 An unavailable projectM/OpenGL renderer reports an error without stopping audio.
+
+Visuals are registered by stable IDs in `src/nemo-media-effects.c`; names,
+resources and generated-preset variants do not depend on registry positions.
+The player shares rendering scheduling and visibility handling across effects,
+while procedural 3D scenes live in `src/nemo-flight-renderer.c`. Adding a preset
+does not require changing playback or playlist code; a new rendering backend
+still requires implementation and integration with the shared renderer.
 
 Building the MilkDrop presets requires projectM **4.1 or newer**
 (`projectM-4.pc`) and libepoxy; use `-Dprojectm=enabled` to require support or

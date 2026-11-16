@@ -112,13 +112,26 @@ def main():
                 if expected == unplugged:
                     unplugged.rmdir()
             if env.get("NEMO_TEST_GSTREAMER") == "1":
+                theme = Path(env["XDG_CONFIG_HOME"]) / "smplos" / "nemo-theme.css"
+                theme.parent.mkdir(parents=True, exist_ok=True)
+                theme.write_text(
+                    "@define-color theme_selected_bg_color #ff8a30;\n"
+                    "@define-color theme_selected_fg_color #000000;\n"
+                    ".nemo-quick-preview .view { background-color: #000000; color: #ffffff; }\n"
+                    "treeview:selected { background-color: #ff8a30; color: #000000; }\n",
+                    encoding="ascii",
+                )
                 track = first / "track-220.wav"
                 with wave.open(str(track), "wb") as audio:
                     audio.setparams((2, 2, 44100, 0, "NONE", "not compressed"))
-                    frames = b"".join(struct.pack(
-                        "<hh", int(20000 * math.sin(2 * math.pi * 440 * i / 44100)),
-                        int(20000 * math.sin(2 * math.pi * 3520 * i / 44100)),
-                    ) for i in range(44100))
+                    frames = bytearray()
+                    for i in range(44100):
+                        beat_time = (i % 22050) / 44100
+                        kick = 6500 * math.exp(-beat_time * 24) * math.sin(2 * math.pi * 65 * i / 44100)
+                        frames.extend(struct.pack(
+                            "<hh", int(20000 * math.sin(2 * math.pi * 440 * i / 44100) + kick),
+                            int(20000 * math.sin(2 * math.pi * 3520 * i / 44100) + kick),
+                        ))
                     audio.writeframes(frames * 90)
                 for index in range(240):
                     if index != 220:
@@ -157,7 +170,8 @@ def main():
                 )
                 modes = ["stereo-spectrum", "spectrogram", "digital-rain"]
                 if env.get("NEMO_TEST_PROJECTM") == "1":
-                    modes.extend(("aurora-cathedral", "stellar-voyage", "earthflight"))
+                    modes.extend(("aurora-cathedral", "nebula-forge", "neon-sacred-geometry",
+                                  "stellar-voyage", "earthflight"))
                 media = [(track, mode, mode) for mode in modes]
                 for codec in ("vp8", "vp9", "av1"):
                     video = first / f"qualification-{codec}.webm"

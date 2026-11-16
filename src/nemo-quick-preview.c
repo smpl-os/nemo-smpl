@@ -1779,6 +1779,13 @@ nemo_quick_preview_new_player (void)
 	self->playlist_view = gtk_tree_view_new_with_model (GTK_TREE_MODEL (self->playlist_model));
 	g_signal_connect_swapped (self->playlist_view, "map", G_CALLBACK (player_sync_selection), self);
 	gtk_style_context_add_class (gtk_widget_get_style_context (self->playlist_view), "nemo-player-playlist");
+	GtkCssProvider *playlist_style = gtk_css_provider_new ();
+	gtk_css_provider_load_from_resource (playlist_style, "/org/nemo/nemo-player.css");
+	/* Match the live theme's priority locally, without overriding its palette
+	 * or changing selection styling in other views. */
+	gtk_style_context_add_provider (gtk_widget_get_style_context (self->playlist_view),
+		GTK_STYLE_PROVIDER (playlist_style), GTK_STYLE_PROVIDER_PRIORITY_USER);
+	g_object_unref (playlist_style);
 	g_object_unref (self->playlist_model);
 	gtk_tree_view_set_headers_visible (GTK_TREE_VIEW (self->playlist_view), FALSE);
 	GtkCellRenderer *renderer = gtk_cell_renderer_text_new ();

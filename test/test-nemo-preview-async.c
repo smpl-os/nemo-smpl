@@ -1608,8 +1608,58 @@ assert_player_playlist_row (NemoQuickPreview *player, gint index)
 }
 
 static void
+assert_player_playlist_highlight (NemoQuickPreview *player)
+{
+	GtkWidget *view = player->playlist_view;
+	GtkStyleContext *style = gtk_widget_get_style_context (view);
+	for (guint backdrop = 0; backdrop < 2; backdrop++) {
+		GdkRGBA background, foreground;
+		GtkStateFlags state = GTK_STATE_FLAG_SELECTED |
+			(backdrop ? GTK_STATE_FLAG_BACKDROP : 0);
+		gtk_style_context_get_background_color (style, state, &background);
+		gtk_style_context_get_color (style, state, &foreground);
+		g_assert_cmpfloat_with_epsilon (background.red, 1.0, 0.001);
+		g_assert_cmpfloat_with_epsilon (background.green, 138.0 / 255, 0.001);
+		g_assert_cmpfloat_with_epsilon (background.blue, 48.0 / 255, 0.001);
+		g_assert_cmpfloat_with_epsilon (foreground.red + foreground.green + foreground.blue, 0, 0.001);
+	}
+
+	GtkTreePath *path = gtk_tree_path_new_from_indices (player->current_index, -1);
+	GdkRectangle area;
+	gtk_tree_view_get_background_area (GTK_TREE_VIEW (view), path,
+		gtk_tree_view_get_column (GTK_TREE_VIEW (view), 0), &area);
+	gtk_tree_path_free (path);
+	gint x, y;
+	gtk_tree_view_convert_bin_window_to_widget_coords (GTK_TREE_VIEW (view),
+		area.x + area.width - 12, area.y + area.height / 2, &x, &y);
+	cairo_surface_t *surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
+		gtk_widget_get_allocated_width (view), gtk_widget_get_allocated_height (view));
+	cairo_t *cr = cairo_create (surface);
+	gtk_widget_draw (view, cr);
+	cairo_destroy (cr);
+	cairo_surface_flush (surface);
+	g_assert_cmpint (x, >=, 0);
+	g_assert_cmpint (x, <, cairo_image_surface_get_width (surface));
+	g_assert_cmpint (y, >=, 0);
+	g_assert_cmpint (y, <, cairo_image_surface_get_height (surface));
+	guint32 pixel = *(guint32 *) (cairo_image_surface_get_data (surface) +
+		y * cairo_image_surface_get_stride (surface) + x * 4);
+	g_assert_cmphex (pixel, ==, 0xffff8a30);
+	cairo_surface_destroy (surface);
+}
+
+static void
 test_player_playlist_follows_track (void)
 {
+	GtkCssProvider *theme = gtk_css_provider_new ();
+	GdkScreen *screen = gdk_screen_get_default ();
+	gtk_css_provider_load_from_data (theme,
+		"@define-color theme_selected_bg_color #ff8a30;"
+		"@define-color theme_selected_fg_color #000000;"
+		".nemo-quick-preview .view { background-color: #000000; color: #ffffff; }"
+		"treeview:selected { background-color: #ff8a30; color: #000000; }", -1, NULL);
+	gtk_style_context_add_provider_for_screen (screen, GTK_STYLE_PROVIDER (theme),
+		GTK_STYLE_PROVIDER_PRIORITY_USER);
 	g_autofree char *directory = g_dir_make_tmp ("nemo-player-playlist-XXXXXX", NULL);
 	GFile *track = player_track_fixture (directory, "track-220.wav");
 	for (guint i = 0; i < 240; i++) {
@@ -1631,6 +1681,7 @@ test_player_playlist_follows_track (void)
 	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
 	iterate_for (100);
 	assert_player_playlist_row (player, 220);
+	assert_player_playlist_highlight (player);
 	GtkTreePath *browse = gtk_tree_path_new_from_indices (5, -1);
 	gtk_tree_view_set_cursor (GTK_TREE_VIEW (player->playlist_view), browse, NULL, FALSE);
 	gtk_tree_path_free (browse);
@@ -1643,11 +1694,13 @@ test_player_playlist_follows_track (void)
 	WAIT_UNTIL (player->media_ready && player->current_index == 221);
 	iterate_for (50);
 	assert_player_playlist_row (player, 221);
+	assert_player_playlist_highlight (player);
 	key.keyval = GDK_KEY_Left;
 	g_assert_true (on_key_press (GTK_WIDGET (player), &key, NULL));
 	WAIT_UNTIL (player->media_ready && player->current_index == 220);
 	iterate_for (50);
 	assert_player_playlist_row (player, 220);
+	assert_player_playlist_highlight (player);
 	gpointer weak = player;
 	g_object_add_weak_pointer (G_OBJECT (player), &weak);
 	gtk_widget_destroy (GTK_WIDGET (player));
@@ -1660,6 +1713,8 @@ test_player_playlist_follows_track (void)
 	}
 	g_object_unref (track);
 	g_assert_cmpint (g_rmdir (directory), ==, 0);
+	gtk_style_context_remove_provider_for_screen (screen, GTK_STYLE_PROVIDER (theme));
+	g_object_unref (theme);
 }
 
 static void
@@ -2018,6 +2073,71 @@ visual_assert_shader (NemoMediaVisualizer *visual, const char *preset, const cha
 	/* projectM can silently substitute a default shader after compilation errors. */
 	g_assert_cmpuint (magenta, >, sampled * 9 / 10);
 	cairo_surface_destroy (frame);
+}
+
+static guint
+visual_nebula_star_brightness (NemoMediaVisualizer *visual, const char *preset,
+			      const char *time, const char *kick, const char *treble)
+{
+	const char *statement = strstr (preset, "float inten = ");
+	g_assert_nonnull (statement);
+	const char *end = strchr (statement, ';');
+	g_assert_nonnull (end);
+	g_autofree char *expression = g_strndup (statement, end - statement + 1);
+	g_auto (GStrv) parts = g_strsplit (expression, "time", -1);
+	g_autofree char *timed = g_strjoinv (time, parts);
+	g_autofree char *probe = g_strdup_printf (
+		"[preset00]\nMILKDROP_PRESET_VERSION=201\nPSVERSION_COMP=2\n"
+		"per_frame_1=q1=%s; q5=%s;\n"
+		"comp_1=`shader_body { float4 rn = float4(0.5,0,0.5,0.5); %s "
+		"ret = float3(inten*0.25,0,0); }\n", kick, treble, timed);
+	cairo_surface_t *frame = visual_render_test_preset (visual, probe);
+	guint32 pixel = *(guint32 *) (cairo_image_surface_get_data (frame) +
+		(VISUAL_HEIGHT / 2) * cairo_image_surface_get_stride (frame) + (VISUAL_WIDTH / 2) * 4);
+	cairo_surface_destroy (frame);
+	g_assert_cmphex (pixel & 0x00ffff, ==, 0);
+	guint red = (pixel >> 16) & 255;
+	g_assert_cmpuint (red, >, 30);
+	g_assert_cmpuint (red, <, 120);
+	return red;
+}
+
+static void
+test_player_projectm_music_accents (void)
+{
+	NemoMediaVisualizer *visual = NEMO_MEDIA_VISUALIZER (nemo_media_visualizer_new ());
+	g_object_ref_sink (visual);
+	g_assert_true (visual_engine_init (&visual->gpu));
+	g_autoptr (GBytes) bytes = g_resources_lookup_data (
+		"/org/nemo/player-presets/nebula-forge.milk", G_RESOURCE_LOOKUP_FLAGS_NONE, NULL);
+	g_assert_nonnull (bytes);
+	g_autofree char *preset = g_strndup (g_bytes_get_data (bytes, NULL), g_bytes_get_size (bytes));
+	guint steady = visual_nebula_star_brightness (visual, preset, "0.0", "0", "1");
+	guint later = visual_nebula_star_brightness (visual, preset, "0.5235987756", "0", "1");
+	g_assert_cmpuint (steady, ==, later);
+	guint hit = visual_nebula_star_brightness (visual, preset, "0.5235987756", "1", "1");
+	g_assert_cmpuint (hit, >, steady + 12);
+	guint loud = visual_nebula_star_brightness (visual, preset, "0.5235987756", "1", "20");
+	g_assert_cmpuint (loud, ==, hit);
+
+	g_autoptr (GBytes) neon = g_resources_lookup_data (
+		"/org/nemo/player-presets/neon-sacred-geometry.milk", G_RESOURCE_LOOKUP_FLAGS_NONE, NULL);
+	g_assert_nonnull (neon);
+	g_autofree char *source = g_strndup (g_bytes_get_data (neon, NULL), g_bytes_get_size (neon));
+	g_auto (GStrv) lines = g_strsplit (source, "\n", -1);
+	GString *probe = g_string_new (NULL);
+	for (guint i = 0; lines[i] != NULL; i++)
+		if (!g_str_has_prefix (lines[i], "warp_") && !g_str_has_prefix (lines[i], "comp_"))
+			g_string_append_printf (probe, "%s\n", lines[i]);
+	g_string_append (probe, "per_frame_init_2=tb=-10;\n"
+		"comp_1=`shader_body { ret = float3(q2,0,0); }\n");
+	cairo_surface_t *frame = visual_render_test_preset (visual, probe->str);
+	g_string_free (probe, TRUE);
+	guint32 pixel = *(guint32 *) (cairo_image_surface_get_data (frame) +
+		(VISUAL_HEIGHT / 2) * cairo_image_surface_get_stride (frame) + (VISUAL_WIDTH / 2) * 4);
+	g_assert_cmphex (pixel, ==, 0xff000000);
+	cairo_surface_destroy (frame);
+	g_object_unref (visual);
 }
 #endif
 
@@ -2700,6 +2820,9 @@ main (int argc, char **argv)
 		GINT_TO_POINTER (TRUE), test_player_loudness_application_lifetime);
 	g_test_add_func ("/preview/player/preserve-voice-pitch-2x-3x", test_player_voice_pitch);
 	g_test_add_func ("/preview/player/projectm-audio-lifecycle", test_player_projectm_visuals);
+#ifdef HAVE_PROJECTM
+	g_test_add_func ("/preview/player/projectm-music-driven-accents", test_player_projectm_music_accents);
+#endif
 	g_test_add_func ("/preview/player/stereo-spectrum-spectrogram-rain", test_player_native_visuals);
 	g_test_add_func ("/preview/player/preferences-process-restart", test_player_preferences_restart);
 	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);

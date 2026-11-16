@@ -588,6 +588,7 @@ static const struct {
 	const char *name;
 	const char *resource;
 	VisualKind kind;
+	guint variant;
 } visual_presets[] = {
 	{ "aurora-cathedral", N_("Aurora Cathedral"), "aurora-cathedral.milk", VISUAL_PROJECTM },
 	{ "bioluminescent-abyss", N_("Bioluminescent Abyss"), "bioluminescent-abyss.milk", VISUAL_PROJECTM },
@@ -595,18 +596,18 @@ static const struct {
 	{ "nebula-forge", N_("Nebula Forge"), "nebula-forge.milk", VISUAL_PROJECTM },
 	{ "neon-sacred-geometry", N_("Neon Sacred Geometry"), "neon-sacred-geometry.milk", VISUAL_PROJECTM },
 	{ "tramonto-sul-golfo", N_("Tramonto sul Golfo"), "tramonto-sul-golfo.milk", VISUAL_PROJECTM },
-	{ "spectrum-vortex", N_("Spectrum Vortex"), NULL, VISUAL_PROJECTM },
-	{ "prismatic-lattice", N_("Prismatic Lattice"), NULL, VISUAL_PROJECTM },
-	{ "spiral-bloom", N_("Spiral Bloom"), NULL, VISUAL_PROJECTM },
-	{ "liquid-ribbons", N_("Liquid Ribbons"), NULL, VISUAL_PROJECTM },
-	{ "emerald-vortex", N_("Emerald Vortex"), NULL, VISUAL_PROJECTM },
-	{ "violet-lattice", N_("Violet Lattice"), NULL, VISUAL_PROJECTM },
-	{ "solar-bloom", N_("Solar Bloom"), NULL, VISUAL_PROJECTM },
-	{ "sapphire-ribbons", N_("Sapphire Ribbons"), NULL, VISUAL_PROJECTM },
-	{ "crimson-vortex", N_("Crimson Vortex"), NULL, VISUAL_PROJECTM },
-	{ "amber-lattice", N_("Amber Lattice"), NULL, VISUAL_PROJECTM },
-	{ "midnight-bloom", N_("Midnight Bloom"), NULL, VISUAL_PROJECTM },
-	{ "iridescent-ribbons", N_("Iridescent Ribbons"), NULL, VISUAL_PROJECTM },
+	{ "spectrum-vortex", N_("Spectrum Vortex"), NULL, VISUAL_PROJECTM, 0 },
+	{ "prismatic-lattice", N_("Prismatic Lattice"), NULL, VISUAL_PROJECTM, 1 },
+	{ "spiral-bloom", N_("Spiral Bloom"), NULL, VISUAL_PROJECTM, 2 },
+	{ "liquid-ribbons", N_("Liquid Ribbons"), NULL, VISUAL_PROJECTM, 3 },
+	{ "emerald-vortex", N_("Emerald Vortex"), NULL, VISUAL_PROJECTM, 4 },
+	{ "violet-lattice", N_("Violet Lattice"), NULL, VISUAL_PROJECTM, 5 },
+	{ "solar-bloom", N_("Solar Bloom"), NULL, VISUAL_PROJECTM, 6 },
+	{ "sapphire-ribbons", N_("Sapphire Ribbons"), NULL, VISUAL_PROJECTM, 7 },
+	{ "crimson-vortex", N_("Crimson Vortex"), NULL, VISUAL_PROJECTM, 8 },
+	{ "amber-lattice", N_("Amber Lattice"), NULL, VISUAL_PROJECTM, 9 },
+	{ "midnight-bloom", N_("Midnight Bloom"), NULL, VISUAL_PROJECTM, 10 },
+	{ "iridescent-ribbons", N_("Iridescent Ribbons"), NULL, VISUAL_PROJECTM, 11 },
 	{ "stereo-spectrum", N_("Stereo spectrum"), NULL, VISUAL_SPECTRUM },
 	{ "spectrogram", N_("Spectrogram"), NULL, VISUAL_SPECTROGRAM },
 	{ "digital-rain", N_("Digital rain"), NULL, VISUAL_MATRIX },
@@ -818,11 +819,11 @@ native_render (NemoMediaVisualizer *self, VisualFrame *request, GError **error)
 
 #ifdef HAVE_PROJECTM
 static char *
-visual_preset (guint index, GError **error)
+visual_preset (guint preset, GError **error)
 {
-	if (visual_presets[index].resource != NULL) {
+	if (visual_presets[preset].resource != NULL) {
 		g_autofree char *path = g_strconcat ("/org/nemo/player-presets/",
-			visual_presets[index].resource, NULL);
+			visual_presets[preset].resource, NULL);
 		g_autoptr (GBytes) bytes = g_resources_lookup_data (path, G_RESOURCE_LOOKUP_FLAGS_NONE, error);
 		if (bytes == NULL)
 			return NULL;
@@ -830,7 +831,7 @@ visual_preset (guint index, GError **error)
 		const char *data = g_bytes_get_data (bytes, &size);
 		return g_strndup (data, size);
 	}
-	index -= 6;
+	guint index = visual_presets[preset].variant;
 	/* Original MilkDrop equations, not third-party preset files. Feedback,
 	 * waveforms and polygon emitters are rendered by the real projectM engine. */
 	static const char *fields[] = {

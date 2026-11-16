@@ -229,11 +229,12 @@ shapecode_3_border_g=0
 shapecode_3_border_b=0
 shapecode_3_border_a=0
 shape_3_per_frame1=
+per_frame_init_1=bm=1; bd=0.3; tl=0; kick=0; prevhit=0; tb=-1; ringt=10; sb=0; sm=0; st=0; racc=0;
 per_frame_1=dt = min(max(time-tl,0.004),0.1); tl = time; bm = bm + (bass-bm)*(1-exp(-dt/0.8)); bd = bd + (abs(bass-bm)-bd)*(1-exp(-dt/2.5));
 per_frame_2=hit = min(max(((bass-bm)/max(bd,0.1) - 0.8)/1.5, 0), 1);
-per_frame_3=kick = max(kick*pow(0.86, 60*dt), hit);
-per_frame_4=trig = above(kick, 0.55)*above(time, tb+0.3);
-per_frame_5=tb = trig*time + (1-trig)*tb;
+per_frame_3=kick = kick + (hit-kick)*(1-exp(-dt/if(above(hit,kick),0.025,0.22)));
+per_frame_4=trig = above(hit, 0.55)*below(prevhit, 0.55)*above(time, tb+0.18);
+per_frame_5=tb = trig*time + (1-trig)*tb; prevhit = hit;
 per_frame_6=ringt = trig*0 + (1-trig)*(ringt+dt);
 per_frame_7=sb = sb*pow(0.97,60*dt) + bass_att*(1-pow(0.97,60*dt));
 per_frame_8=sm = sm*pow(0.97,60*dt) + mid_att*(1-pow(0.97,60*dt));
@@ -337,7 +338,7 @@ comp_43=`    float k = lerp(70.0, 25.0, rn.a);
 comp_44=`    float core = exp(-dot(d,d)*k);
 comp_45=`    float spike = exp(-abs(d.x)*14.0)*exp(-abs(d.y)*2.2) + exp(-abs(d.y)*14.0)*exp(-abs(d.x)*2.2);
 comp_46=`    float big = step(0.75, rn.a);
-comp_47=`    float inten = (0.5 + 0.9*rn.a)*(1.0 + 0.4*sin(time*3.0 + rn.b*40.0)*q5);
+comp_47=`    float inten = (0.5 + 0.9*rn.a)*(0.9 + 0.1*saturate(q5) + 0.3*q1);
 comp_48=`    float3 sc = lerp(float3(0.65,0.8,1.0), float3(1.0,0.75,0.5), rn.b);
 comp_49=`    st += on*fade*sc*inten*(core + 0.35*big*spike);
 comp_50=`  }

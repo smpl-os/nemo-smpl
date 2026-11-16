@@ -5,16 +5,6 @@
 .nemo-secondary-label.nemo-dim-70 { opacity: 0.7; }
 .nemo-secondary-label.nemo-dim-80 { opacity: 0.8; }
 
-/* Keep the playlist selection legible when transport controls take focus. */
-.nemo-quick-preview treeview.nemo-player-playlist.view:selected,
-.nemo-quick-preview treeview.nemo-player-playlist.view:selected:backdrop {
-    background-color: @theme_selected_bg_color;
-    background-image: none;
-    color: @theme_selected_fg_color;
-    text-shadow: none;
-    opacity: 1;
-}
-
 /* Desktop text stuff */
 
 .nemo-window.nemo-desktop-window notebook,

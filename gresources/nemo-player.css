@@ -1,0 +1,8 @@
+treeview.nemo-player-playlist.view:selected,
+treeview.nemo-player-playlist.view:selected:backdrop {
+    background-color: @theme_selected_bg_color;
+    background-image: none;
+    color: @theme_selected_fg_color;
+    text-shadow: none;
+    opacity: 1;
+}
