@@ -9,6 +9,8 @@ static guint delete_calls, trash_calls;
 static gboolean completed, cancelled;
 static gboolean expect_confirmation, confirmed;
 static GFile *expected_file;
+static NemoDeleteCallback trash_callback;
+static gpointer trash_callback_data;
 
 void __real_nemo_file_operations_delete (GList *, GtkWindow *, NemoDeleteCallback, gpointer);
 void __real_nemo_file_operations_trash_or_delete (GList *, GtkWindow *, NemoDeleteCallback, gpointer);
@@ -33,12 +35,24 @@ __wrap_nemo_file_operations_delete (GList *files, GtkWindow *parent,
     __real_nemo_file_operations_delete (files, parent, delete_done, NULL);
 }
 
+static void
+trash_done (GHashTable *debuting, gboolean user_cancel, gpointer unused)
+{
+    trash_callback (debuting, user_cancel, trash_callback_data);
+    delete_done (debuting, user_cancel, NULL);
+}
+
 void
 __wrap_nemo_file_operations_trash_or_delete (GList *files, GtkWindow *parent,
                                             NemoDeleteCallback callback, gpointer data)
 {
+    g_assert_nonnull (callback);
+    g_assert_cmpuint (g_list_length (files), ==, 1);
+    g_assert_true (g_file_equal (files->data, expected_file));
+    trash_callback = callback;
+    trash_callback_data = data;
     trash_calls++;
-    __real_nemo_file_operations_trash_or_delete (files, parent, callback, data);
+    __real_nemo_file_operations_trash_or_delete (files, parent, trash_done, NULL);
 }
 
 static void
@@ -80,11 +94,11 @@ find_confirmation (void)
 }
 
 static gboolean
-delete_enabled (NemoWindow *window)
+operation_enabled (NemoWindow *window, const char *name)
 {
     for (GList *l = gtk_ui_manager_get_action_groups (nemo_window_get_ui_manager (window));
          l != NULL; l = l->next) {
-        GtkAction *action = gtk_action_group_get_action (l->data, NEMO_ACTION_DELETE);
+        GtkAction *action = gtk_action_group_get_action (l->data, name);
         if (action != NULL)
             return gtk_action_is_sensitive (action) && gtk_action_is_visible (action);
     }
@@ -96,6 +110,7 @@ typedef struct {
     const char *key;
     gboolean cancel;
     gboolean rebind;
+    gboolean trash;
 } DeleteCase;
 
 static gboolean
@@ -106,8 +121,8 @@ respond_confirmation (gpointer data)
     if (dialog == NULL)
         return G_SOURCE_CONTINUE;
     g_assert_true (expect_confirmation);
-    g_assert_cmpuint (delete_calls, ==, 1);
-    g_assert_cmpuint (trash_calls, ==, 0);
+    g_assert_cmpuint (delete_calls, ==, !test->trash);
+    g_assert_cmpuint (trash_calls, ==, test->trash);
     g_assert_true (gtk_window_get_modal (GTK_WINDOW (dialog)));
     g_assert_true (g_file_query_exists (expected_file, NULL));
     confirmed = TRUE;
@@ -116,15 +131,23 @@ respond_confirmation (gpointer data)
 }
 
 static gboolean
-record_trash_binding (NemoView *view, gpointer data)
+record_view_binding (NemoView *view, gpointer data)
 {
     (*(guint *) data)++;
     return TRUE;
 }
 
+typedef struct {
+    const char *action;
+    const char *shortcut;
+    const char *conflicting_default;
+    const char *signal;
+} CustomCase;
+
 static void
-test_custom_binding_preserved (void)
+test_custom_binding_preserved (gconstpointer data)
 {
+    const CustomCase *test = data;
     if (!g_test_subprocess ()) {
         g_test_trap_subprocess (NULL, 25000000, 0);
         g_test_trap_assert_passed ();
@@ -132,18 +155,23 @@ test_custom_binding_preserved (void)
     }
     g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
     GSettings *settings = g_settings_new ("org.nemo.keybindings");
-    g_assert_true (g_settings_set_string (settings, "trash", "<Shift>F8"));
+    g_assert_true (g_settings_set_string (settings, test->action, test->shortcut));
     application = nemo_main_application_get_singleton ();
     g_assert_true (g_application_register (G_APPLICATION (application), NULL, NULL));
     g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, "list-view");
     Fixture fixture = fixture_new ();
-    g_autofree char *alternate = g_settings_get_string (settings, "delete-permanently-alt");
+    g_autofree char *alternate = g_settings_get_string (settings, test->conflicting_default);
     g_assert_cmpstr (alternate, ==, "");
+    g_autofree char *custom = g_settings_get_string (settings, test->action);
+    g_assert_cmpstr (custom, ==, test->shortcut);
     nemo_keybindings_apply_all ();
     guint bindings = 0;
-    g_signal_connect (fixture.slot->content_view, "trash", G_CALLBACK (record_trash_binding), &bindings);
+    guint key;
+    GdkModifierType modifiers;
+    gtk_accelerator_parse (test->shortcut, &key, &modifiers);
+    g_signal_connect (fixture.slot->content_view, test->signal, G_CALLBACK (record_view_binding), &bindings);
     g_assert_true (gtk_bindings_activate (G_OBJECT (fixture.slot->content_view),
-                                         GDK_KEY_F8, GDK_SHIFT_MASK));
+                                         key, modifiers));
     g_assert_cmpuint (bindings, ==, 1);
     g_assert_cmpuint (trash_calls, ==, 0);
     g_assert_cmpuint (delete_calls, ==, 0);
@@ -163,12 +191,18 @@ test_shortcut (gconstpointer data)
         return;
     }
     g_log_set_always_fatal (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL);
+    if (test->trash) {
+        GSettings *settings = g_settings_new ("org.nemo.keybindings");
+        g_assert_true (g_settings_set_string (settings, "trash", "F8"));
+        g_object_unref (settings);
+    }
     application = nemo_main_application_get_singleton ();
     g_assert_true (g_application_register (G_APPLICATION (application), NULL, NULL));
     g_settings_set_string (nemo_preferences, NEMO_PREFERENCES_DEFAULT_FOLDER_VIEWER, test->view);
     g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_IGNORE_VIEW_METADATA, TRUE);
-    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_ENABLE_DELETE, TRUE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_ENABLE_DELETE, !test->trash);
     g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_CONFIRM_TRASH, TRUE);
+    g_settings_set_boolean (nemo_preferences, NEMO_PREFERENCES_CONFIRM_MOVE_TO_TRASH, TRUE);
     Fixture fixture = fixture_new ();
     nemo_window_slot_open_location (fixture.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
     WAIT_FOR (slot_at (fixture.slot, fixture.containing));
@@ -178,7 +212,12 @@ test_shortcut (gconstpointer data)
     nemo_view_set_selection (view, &selection);
     nemo_view_grab_focus (view);
     expected_file = fixture.item;
-    WAIT_FOR (delete_enabled (fixture.window));
+    g_autofree char *original_contents = NULL;
+    gsize original_length;
+    if (test->trash)
+        g_assert_true (g_file_load_contents (fixture.item, NULL, &original_contents,
+                                             &original_length, NULL, NULL));
+    WAIT_FOR (operation_enabled (fixture.window, test->trash ? NEMO_ACTION_TRASH : NEMO_ACTION_DELETE));
     guint response = g_timeout_add (10, respond_confirmation, (gpointer) test);
 
     GtkWidget *entry = gtk_entry_new ();
@@ -207,10 +246,12 @@ test_shortcut (gconstpointer data)
         g_settings_reset (nemo_keybinding_settings, "delete-permanently-alt");
         nemo_view_set_selection (view, &selection);
         nemo_view_grab_focus (view);
-        WAIT_FOR (delete_enabled (fixture.window));
+        WAIT_FOR (operation_enabled (fixture.window, NEMO_ACTION_DELETE));
     }
     expect_confirmation = TRUE;
     send_key (fixture.window, test->key);
+    g_assert_cmpuint (delete_calls, ==, !test->trash);
+    g_assert_cmpuint (trash_calls, ==, test->trash);
     WAIT_FOR (completed);
     g_source_remove (response);
     g_assert_true (confirmed);
@@ -220,8 +261,28 @@ test_shortcut (gconstpointer data)
     WAIT_FOR (nemo_progress_info_manager_get_all_infos (manager) == NULL);
     g_object_unref (manager);
     if (!test->cancel) {
-        g_autofree char *path = g_file_get_path (fixture.item);
-        g_assert_true (g_file_set_contents (path, "temporary search fixture", -1, NULL));
+        if (test->trash) {
+            g_autofree char *trashed_path = g_build_filename (
+                g_get_user_data_dir (), "Trash", "files", "needle.txt", NULL);
+            g_autoptr (GFile) trashed = g_file_new_for_path (trashed_path);
+            g_autofree char *contents = NULL;
+            gsize length;
+            g_assert_true (g_file_load_contents (trashed, NULL, &contents, &length, NULL, NULL));
+            g_assert_cmpmem (contents, length, original_contents, original_length);
+            g_autofree char *info_path = g_build_filename (
+                g_get_user_data_dir (), "Trash", "info", "needle.txt.trashinfo", NULL);
+            g_autoptr (GKeyFile) info = g_key_file_new ();
+            g_assert_true (g_key_file_load_from_file (info, info_path, G_KEY_FILE_NONE, NULL));
+            g_autofree char *encoded_path = g_key_file_get_string (info, "Trash Info", "Path", NULL);
+            g_autofree char *decoded_path = g_uri_unescape_string (encoded_path, NULL);
+            g_autofree char *path = g_file_get_path (fixture.item);
+            g_assert_cmpstr (decoded_path, ==, path);
+            g_assert_true (g_file_move (trashed, fixture.item, G_FILE_COPY_NONE, NULL, NULL, NULL, NULL));
+            g_assert_cmpint (g_unlink (info_path), ==, 0);
+        } else {
+            g_autofree char *path = g_file_get_path (fixture.item);
+            g_assert_true (g_file_set_contents (path, "temporary search fixture", -1, NULL));
+        }
     }
     nemo_file_unref (file);
     fixture_clear (&fixture);
@@ -234,14 +295,30 @@ main (int argc, char **argv)
     if (g_strcmp0 (g_getenv ("NEMO_TEST_ISOLATED"), "1") != 0)
         return 77;
     gtk_test_init (&argc, &argv, NULL);
-    g_test_add_func ("/delete-shortcuts/custom-trash-conflict", test_custom_binding_preserved);
+    static const CustomCase custom_cases[] = {
+        { "trash", "<Shift>F8", "delete-permanently-alt", "trash" },
+        { "delete-permanently", "Delete", "trash-alt", "delete" },
+        { "trash-alt", "<Shift>F8", "delete-permanently-alt", "trash" },
+        { "delete-permanently", "F8", "trash", "delete" }
+    };
+    for (guint i = 0; i < G_N_ELEMENTS (custom_cases); i++) {
+        g_autofree char *name = g_strdup_printf ("/delete-shortcuts/custom-%s-conflict/%s",
+                                                custom_cases[i].action, custom_cases[i].shortcut);
+        g_test_add_data_func (name, &custom_cases[i], test_custom_binding_preserved);
+    }
     static const DeleteCase cases[] = {
         { "list-view", "<Shift>Delete", TRUE, FALSE },
         { "list-view", "<Shift>F8", FALSE, TRUE },
         { "icon-view", "<Shift>Delete", FALSE, FALSE },
         { "icon-view", "<Shift>F8", TRUE, FALSE },
         { "compact-view", "<Shift>Delete", TRUE, FALSE },
-        { "compact-view", "<Shift>F8", FALSE, FALSE }
+        { "compact-view", "<Shift>F8", FALSE, FALSE },
+        { "list-view", "Delete", FALSE, FALSE, TRUE },
+        { "list-view", "F8", TRUE, FALSE, TRUE },
+        { "icon-view", "Delete", TRUE, FALSE, TRUE },
+        { "icon-view", "F8", FALSE, FALSE, TRUE },
+        { "compact-view", "Delete", FALSE, FALSE, TRUE },
+        { "compact-view", "F8", TRUE, FALSE, TRUE }
     };
     for (guint i = 0; i < G_N_ELEMENTS (cases); i++) {
         g_autofree char *name = g_strdup_printf ("/delete-shortcuts/%s/%s",

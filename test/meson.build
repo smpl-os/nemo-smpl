@@ -438,11 +438,15 @@ if smpl_features_enabled
   endif
   foreach regression : ui_regressions
     regression_suites = ['hardening']
+    regression_runner = hardening_runner
+    if regression.name() == 'test-delete-shortcuts'
+      regression_runner += ['--gvfs']
+    endif
     if regression == completion_test
       regression_suites += ['transfer-safety']
     endif
     test(regression.name(), hardening_python,
-      args: hardening_runner + [regression],
+      args: regression_runner + [regression],
       env: {'GSETTINGS_SCHEMA_DIR': meson.current_build_dir()},
       depends: ui_regression_dependencies,
       suite: regression_suites,

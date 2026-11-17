@@ -505,9 +505,13 @@ For a selection containing no folders, Space retains its preview behavior;
 typing, filtering, and text editing keep their existing Space handling.
 Desktop icons retain their existing selection behavior.
 
+**F8** and **Delete** move the selection to Trash using the normal confirmation
+policy; cancelling leaves files untouched. If Trash is unavailable, Nemo asks
+before permanently deleting instead. Delete still edits text in entry fields.
 Permanent deletion keeps the existing Delete preference and confirmation policy.
 **Shift+Delete** and **Shift+F8** are the primary and alternate defaults under
-**Keyboard Shortcuts → File Operations**; existing custom bindings are preserved.
+**Keyboard Shortcuts → File Operations**; existing custom bindings are preserved,
+and new alternate defaults do not take shortcuts already assigned to other actions.
 
 | Shortcut | Action |
 |----------|--------|
@@ -522,6 +526,7 @@ Permanent deletion keeps the existing Delete preference and confirmation policy.
 | **Alt+F5** | Copy selected files and folders into a new 7z archive |
 | **Alt+Shift+F5** | Pack into a new verified 7z archive, then remove originals |
 | **F6** | Move dialog |
+| **F8 / Delete** | Move selected files to Trash (normal confirmation applies) |
 | **Shift+Delete / Shift+F8** | Delete permanently, without moving to Trash (normal confirmation applies) |
 | **Space** | Calculate sizes of selected folders |
 | **Alt+C** | Close the visible docked file-transfer panel |

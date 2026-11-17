@@ -76,7 +76,7 @@ jobs:
                 libexif libraw exempi gstreamer gst-plugins-base-libs \
                 gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav pulseaudio \
                 pango gobject-introspection libgsf python zstd mesa \
-                dbus xorg-server-xvfb xorg-xauth weston libarchive sqlite libisofs libisoburn \
+                dbus gvfs xorg-server-xvfb xorg-xauth weston libarchive sqlite libisofs libisoburn \
                 md4c poppler-glib mupdf-tools bubblewrap
 
               BUILD_UID=$(stat -c %u /src)

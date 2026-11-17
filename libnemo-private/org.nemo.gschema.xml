@@ -1351,11 +1351,11 @@
       <summary>Pin or unpin file</summary>
     </key>
     <key name="trash" type="s">
-      <default>'Delete'</default>
+      <default>'F8'</default>
       <summary>Move to trash</summary>
     </key>
     <key name="trash-alt" type="s">
-      <default>''</default>
+      <default>'Delete'</default>
       <summary>Move to trash (alternate)</summary>
     </key>
     <key name="delete-permanently" type="s">

@@ -39,12 +39,18 @@ def run_wayland(weston, command, env, root):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("usage: run-isolated-regression.py <test executable> [args...]", file=sys.stderr)
+    arguments = sys.argv[1:]
+    wayland = False
+    gvfs = False
+    while arguments and arguments[0] in ("--wayland", "--gvfs"):
+        option = arguments.pop(0)
+        wayland |= option == "--wayland"
+        gvfs |= option == "--gvfs"
+    if not arguments:
+        print("usage: run-isolated-regression.py [--wayland] [--gvfs] <test executable> [args...]",
+              file=sys.stderr)
         return 2
 
-    wayland = sys.argv[1] == "--wayland"
-    arguments = sys.argv[2:] if wayland else sys.argv[1:]
     xvfb = shutil.which("weston" if wayland else "xvfb-run")
     dbus = shutil.which("dbus-run-session")
     if xvfb is None or dbus is None:
@@ -82,7 +88,7 @@ def main():
             GDK_BACKEND="wayland" if wayland else "x11",
             XDG_SESSION_TYPE="wayland" if wayland else "x11",
             GSETTINGS_BACKEND="memory",
-            GIO_USE_VFS="local",
+            GIO_USE_VFS="gvfs" if gvfs else "local",
             GIO_USE_VOLUME_MONITOR="unix",
             NO_AT_BRIDGE="1",
             GTK_MODULES="",
@@ -90,12 +96,31 @@ def main():
             G_DEBUG="fatal-criticals",
             NEMO_TEST_ISOLATED="1",
         )
-        # Do not auto-start host desktop services (notably document-portal
-        # FUSE mounts) inside a disposable test profile.
+        # Only explicitly requested GVfs services may start on the private bus.
+        services_xml = ""
+        if gvfs:
+            services = root / "services"
+            services.mkdir(mode=0o700)
+            data_dirs = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+            for name in ("Daemon", "Metadata"):
+                filename = f"org.gtk.vfs.{name}.service"
+                source = next((Path(directory) / "dbus-1/services" / filename
+                               for directory in data_dirs
+                               if (Path(directory) / "dbus-1/services" / filename).is_file()), None)
+                if source is None:
+                    print(f"SKIP: GVfs regressions require {filename}.", file=sys.stderr)
+                    return 77
+                contents = source.read_text(encoding="utf-8")
+                if name == "Daemon":
+                    contents = "\n".join(line + " --no-fuse" if line.startswith("Exec=") else line
+                                         for line in contents.splitlines()) + "\n"
+                (services / filename).write_text(contents, encoding="utf-8")
+            services_xml = f"<servicedir>{services}</servicedir>"
         bus_config = root / "session.conf"
         bus_config.write_text(
             "<busconfig><type>session</type>"
             f"<listen>unix:tmpdir={root / 'runtime'}</listen>"
+            f"{services_xml}"
             '<policy context="default"><allow own="*"/>'
             '<allow send_destination="*"/><allow receive_sender="*"/>'
             "</policy></busconfig>",

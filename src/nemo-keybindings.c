@@ -145,8 +145,8 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 #endif
 
 	/* File Operations — binding-set entries (unified from nemo-view.c) */
-	{ "trash",                 NULL,                                        N_("Move to Trash"),              N_("File Operations"), "Delete",             "NemoView", "trash" },
-	{ "trash-alt",             NULL,                                        N_("Move to Trash (alternate)"),  N_("File Operations"), "",                   "NemoView", "trash" },
+	{ "trash",                 NULL,                                        N_("Move to Trash"),              N_("File Operations"), "F8",                 "NemoView", "trash" },
+	{ "trash-alt",             NULL,                                        N_("Move to Trash (alternate)"),  N_("File Operations"), "Delete",             "NemoView", "trash" },
 	{ "delete-permanently",    NULL,                                        N_("Delete Permanently"),         N_("File Operations"), "<Shift>Delete",      "NemoView", "delete" },
 	{ "delete-permanently-alt", NULL,                                       N_("Delete Permanently (alternate)"), N_("File Operations"), "<Shift>F8",       "NemoView", "delete" },
 
@@ -328,7 +328,7 @@ reserve_new_shortcut_defaults (void)
 {
 	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode",
 	                       "preview-scroll-up", "preview-scroll-down", "calculate-directory-sizes",
-	                       "delete-permanently-alt" };
+	                       "trash", "trash-alt", "delete-permanently-alt" };
 	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
 		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
 		if (user_value != NULL) {
