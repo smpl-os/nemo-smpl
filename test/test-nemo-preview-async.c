@@ -1918,6 +1918,64 @@ test_player_transport (void)
 }
 
 static void
+test_player_video_loop (void)
+{
+	g_autofree char *directory = g_dir_make_tmp ("nemo-player-loop-XXXXXX", NULL);
+	g_autofree char *encoded = preview_media_encode_fixture (
+		"videotestsrc num-buffers=60 pattern=smpte ! "
+		"video/x-raw,format=I420,width=128,height=72,framerate=30/1 ! "
+		"vp8enc deadline=1 threads=2 ! webmmux ! filesink name=output", "webm");
+	g_autofree char *path = g_build_filename (directory, "a.webm", NULL);
+	g_assert_cmpint (g_rename (encoded, path), ==, 0);
+	GFile *video = g_file_new_for_path (path);
+	GFile *first_audio = player_track_fixture (directory, "b.wav");
+	GFile *second_audio = player_track_fixture (directory, "c.wav");
+	NemoQuickPreview *player = g_object_ref_sink (nemo_quick_preview_new_player ());
+	nemo_quick_preview_show_file (player, video, NULL);
+	WAIT_UNTIL (player->media_ready && player->video_playing &&
+		    player->frame_surface != NULL && player->dir_files != NULL &&
+		    player->playlist_fill_id == 0);
+	g_assert_false (player->media_is_audio);
+	g_assert_cmpuint (player->dir_files->len, ==, 3);
+	GstElement *pipeline = player->pipeline;
+	gint64 duration, position;
+	g_assert_true (gst_element_query_duration (pipeline, GST_FORMAT_TIME, &duration));
+	for (guint i = 0; i < 2; i++) {
+		gtk_combo_box_set_active (GTK_COMBO_BOX (player->speed_combo), i == 0 ? 2 : 5);
+		iterate_for (100);
+		g_assert_true (media_seek_with_rate (player, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+						   duration - GST_SECOND / 5));
+		WAIT_UNTIL (gst_element_query_position (pipeline, GST_FORMAT_TIME, &position) &&
+			    position < duration / 2 && player->video_playing && !player->player_finished);
+		g_assert_true (player->pipeline == pipeline);
+		g_assert_true (g_file_equal (player->current_file, video));
+		g_assert_cmpint (player->current_index, ==, 0);
+		g_assert_cmpfloat (player->playback_rate, ==, i == 0 ? 1 : 2);
+		g_assert_cmpuint (player->advance_id, ==, 0);
+		gint64 before = position;
+		iterate_for (100);
+		g_assert_true (gst_element_query_position (pipeline, GST_FORMAT_TIME, &position));
+		g_assert_cmpint (position, >, before);
+	}
+	g_signal_emit_by_name (player->next_button, "clicked");
+	WAIT_UNTIL (player->media_ready && player->video_playing &&
+		    g_file_equal (player->current_file, first_audio));
+	g_assert_true (player->media_is_audio);
+	g_assert_true (gst_element_query_duration (player->pipeline, GST_FORMAT_TIME, &duration));
+	g_assert_true (media_seek_with_rate (player, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
+					   duration - GST_SECOND / 5));
+	WAIT_UNTIL (player->media_ready && player->video_playing &&
+		    g_file_equal (player->current_file, second_audio));
+	gtk_widget_destroy (GTK_WIDGET (player));
+	g_object_unref (player);
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	remove_fixture (video);
+	remove_fixture (first_audio);
+	remove_fixture (second_audio);
+	g_assert_cmpint (g_rmdir (directory), ==, 0);
+}
+
+static void
 test_player_voice_pitch (void)
 {
 	g_autofree char *directory = g_dir_make_tmp ("nemo-player-pitch-XXXXXX", NULL);
@@ -2810,6 +2868,7 @@ main (int argc, char **argv)
 	g_test_message ("GTK display: %s", gdk_display_get_name (gdk_display_get_default ()));
 #ifdef HAVE_GSTREAMER
 	g_test_add_func ("/preview/player/transport-speed-playlist-delete", test_player_transport);
+	g_test_add_func ("/preview/player/video-loops-audio-advances", test_player_video_loop);
 	g_test_add_func ("/preview/player/playlist-follows-playing-track", test_player_playlist_follows_track);
 	g_test_add_func ("/preview/player/stereo-tones-default-off", test_player_audio_effects);
 	g_test_add_func ("/preview/player/loudness/cache-playback-volume", test_player_loudness_cache_and_playback);

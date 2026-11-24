@@ -213,8 +213,10 @@ Nemo can then exit when no other windows or operations require it.
 Double-click a track or use the previous/next buttons or **Ctrl+Left/Right**.
 Opening the playlist and changing tracks select and scroll to the playing row,
 even in a long directory listing.
-Playback advances automatically and stops at the end of the playlist; decoder
-errors are shown rather than silently skipping files.
+Videos loop the current file by default, retaining playback speed; use the
+previous/next controls to change files. Audio playback advances automatically
+and stops at the end of the playlist. Decoder and looping errors are shown
+rather than silently skipping files.
 
 **Delete** sends only the playing track to Trash with Nemo's usual confirmation
 and error handling, just like image previews. Cancelling leaves the track alone;

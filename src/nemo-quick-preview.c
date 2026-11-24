@@ -671,7 +671,16 @@ player_advance (gpointer data)
 	if (self->delete_request != NULL)
 		return G_SOURCE_REMOVE;
 	self->eos_pending = FALSE;
-	if (!self->destroyed && self->delete_request == NULL && self->dir_files != NULL &&
+	if (self->destroyed)
+		return G_SOURCE_REMOVE;
+	if (!self->media_is_audio) {
+		if (!media_seek_with_rate (self, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, 0)) {
+			preview_set_status (self, _("Unable to loop this video."));
+			media_stop (self);
+			return G_SOURCE_REMOVE;
+		}
+		player_set_playing (self, TRUE);
+	} else if (self->dir_files != NULL &&
 	    self->current_index + 1 < (gint) self->dir_files->len)
 		navigate_to_offset (self, 1);
 	return G_SOURCE_REMOVE;
@@ -681,7 +690,7 @@ static void
 player_schedule_next (NemoQuickPreview *self)
 {
 	if (self->player_mode && self->eos_pending && self->advance_id == 0 &&
-	    self->dir_files != NULL && self->delete_request == NULL)
+	    (!self->media_is_audio || self->dir_files != NULL) && self->delete_request == NULL)
 		self->advance_id = g_idle_add (player_advance, self);
 }
 
