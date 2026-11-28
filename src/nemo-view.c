@@ -7235,18 +7235,37 @@ action_copy_files_callback (GtkAction *action,
 	nemo_file_list_free (selection);
 }
 
+#ifdef NEMO_SMPL
+void
+nemo_view_copy_paths (NemoView *view)
+#else
 static void
-action_copy_path_callback (GtkAction *action,
-			   gpointer callback_data)
+action_copy_path_callback (GtkAction *action, gpointer callback_data)
+#endif
 {
+#ifndef NEMO_SMPL
 	NemoView *view;
+#endif
 	GList *selection, *l;
 	GString *paths;
 	GtkClipboard *clipboard;
 
+#ifndef NEMO_SMPL
 	view = NEMO_VIEW (callback_data);
+#endif
 	selection = nemo_view_get_selection (view);
 
+#ifdef NEMO_SMPL
+	if (selection == NULL && NEMO_VIEW_GET_CLASS (view)->get_cursor_file != NULL) {
+		NemoFile *file = NEMO_VIEW_GET_CLASS (view)->get_cursor_file (view);
+		if (file != NULL) {
+			if (nemo_file_is_parent_entry (file))
+				nemo_file_unref (file);
+			else
+				selection = g_list_prepend (NULL, file);
+		}
+	}
+#endif
 	if (selection == NULL) {
 		return;
 	}
@@ -7284,6 +7303,12 @@ action_copy_path_callback (GtkAction *action,
 }
 
 #ifdef NEMO_SMPL
+static void
+action_copy_path_callback (GtkAction *action, gpointer callback_data)
+{
+	nemo_view_copy_paths (NEMO_VIEW (callback_data));
+}
+
 static void
 archive_selection (NemoView *view, gboolean move)
 {

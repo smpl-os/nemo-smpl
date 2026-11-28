@@ -2,6 +2,25 @@
 #include <glib/gstdio.h>
 #include <unistd.h>
 
+static G_GNUC_UNUSED char *
+preview_midi_fixture (void)
+{
+	static const guint8 midi[] = {
+		'M','T','h','d', 0,0,0,6, 0,0, 0,1, 0,96,
+		'M','T','r','k', 0,0,0,12,
+		0,0x90,60,100, 96,0x80,60,0, 0,0xff,0x2f,0
+	};
+	char *path = NULL;
+	g_autoptr (GError) error = NULL;
+	int fd = g_file_open_tmp ("nemo-preview-XXXXXX.mid", &path, &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (fd, >=, 0);
+	g_assert_cmpint (close (fd), ==, 0);
+	g_assert_true (g_file_set_contents (path, (const char *) midi, sizeof midi, &error));
+	g_assert_no_error (error);
+	return path;
+}
+
 static GstElement *
 preview_media_factory_make (const char *factory, const char *name)
 {

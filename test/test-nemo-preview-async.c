@@ -2598,6 +2598,60 @@ test_visualizer_application_exit (gconstpointer data)
 }
 
 static void
+assert_no_fluid_decoder (GstElement *pipeline, GstElement *element, gpointer unused)
+{
+	GstElementFactory *factory = gst_element_get_factory (element);
+	if (factory != NULL)
+		g_assert_cmpstr (gst_plugin_feature_get_name (GST_PLUGIN_FEATURE (factory)), !=, "fluiddec");
+}
+
+static void
+complete_midi_loudness (GObject *source, GAsyncResult *result, gpointer data)
+{
+	g_autoptr (GError) error = NULL;
+	g_autofree NemoMediaLoudness *measurement = nemo_media_loudness_finish (result, &error);
+	g_assert_true (measurement != NULL || error != NULL);
+	*(gboolean *) data = TRUE;
+}
+
+static void
+test_midi_decoder_safety (void)
+{
+	if (!g_test_subprocess ()) {
+		g_test_trap_subprocess (NULL, 20 * G_USEC_PER_SEC, 0);
+		g_test_trap_assert_passed ();
+		return;
+	}
+	g_autofree char *path = preview_midi_fixture ();
+	const char *input = g_getenv ("NEMO_TEST_MIDI_FILE");
+	GFile *file = g_file_new_for_path (input != NULL ? input : path);
+	gboolean loudness_done = FALSE;
+	nemo_media_loudness_analyze_async (file, NULL, complete_midi_loudness, &loudness_done);
+	NemoQuickPreview *previews[3];
+	for (guint i = 0; i < G_N_ELEMENTS (previews); i++) {
+		previews[i] = g_object_ref_sink (i == 0 ?
+			g_object_new (NEMO_TYPE_QUICK_PREVIEW, NULL) : nemo_quick_preview_new_player ());
+		preview_show_media (previews[i], file, TRUE);
+		g_assert_nonnull (previews[i]->pipeline);
+		g_signal_connect (previews[i]->pipeline, "element-setup",
+				  G_CALLBACK (assert_no_fluid_decoder), NULL);
+	}
+	for (guint i = 0; i < G_N_ELEMENTS (previews); i++) {
+		WAIT_UNTIL (previews[i]->media_ready || previews[i]->pipeline == NULL);
+		if (previews[i]->pipeline == NULL) {
+			g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (previews[i]->stack)), ==, "status");
+			g_assert_cmpuint (strlen (gtk_label_get_text (GTK_LABEL (previews[i]->status_label))), >, 0);
+		}
+		gtk_widget_destroy (GTK_WIDGET (previews[i]));
+		g_object_unref (previews[i]);
+	}
+	WAIT_UNTIL (g_atomic_int_get (&media_pipeline_count) == 0);
+	WAIT_UNTIL (loudness_done);
+	g_object_unref (file);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
 test_player_error_recovery (void)
 {
 	g_autofree char *directory = g_dir_make_tmp ("nemo-player-errors-XXXXXX", NULL);
@@ -2887,6 +2941,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview/player/stereo-spectrum-spectrogram-rain", test_player_native_visuals);
 	g_test_add_func ("/preview/player/preferences-process-restart", test_player_preferences_restart);
 	g_test_add_func ("/preview/player/codec-error-recovery-audio-webm", test_player_error_recovery);
+	g_test_add_func ("/preview/player/midi-decoder-safety", test_midi_decoder_safety);
 	g_test_add_data_func ("/preview/player/visualization-process-exit",
 		GINT_TO_POINTER (FALSE), test_visualizer_application_exit);
 	g_test_add_data_func ("/preview/player/visualization-explicit-quit",

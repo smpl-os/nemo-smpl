@@ -1,6 +1,7 @@
 /* Whole-track, bounded-memory EBU R128 analysis. SPDX-License-Identifier: GPL-2.0-or-later */
 #include <config.h>
 #include "nemo-media-loudness.h"
+#include "nemo-preview-utils.h"
 #include <libnemo-private/nemo-file-utilities.h>
 #include <gst/app/gstappsink.h>
 #include <gst/audio/audio-format.h>
@@ -216,7 +217,8 @@ audio_autoplug_select (GstElement *decoder, GstPad *pad, GstCaps *caps,
 	const char *klass = gst_element_factory_get_metadata (factory, GST_ELEMENT_METADATA_KLASS);
 	/* In particular, never instantiate HLS/DASH demuxers that could fetch
 	 * external URIs from an otherwise local manifest. */
-	if (klass == NULL || strstr (klass, "Adaptive") != NULL ||
+	if (!nemo_preview_media_decoder_is_safe (factory) ||
+	    klass == NULL || strstr (klass, "Adaptive") != NULL ||
 	    strstr (klass, "Network") != NULL || strstr (klass, "Source") != NULL ||
 	    (strstr (klass, "Decoder") != NULL &&
 	     (strstr (klass, "Video") != NULL || strstr (klass, "Image") != NULL)))

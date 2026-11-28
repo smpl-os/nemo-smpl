@@ -3031,6 +3031,7 @@ preview_show_media (NemoQuickPreview *self, GFile *file, gboolean is_audio)
 	}
 
 #ifdef NEMO_SMPL
+	nemo_preview_media_guard_decoders (self->pipeline);
 	if (self->player_mode) {
 		self->audio_filter = nemo_media_audio_filter_new (&init_error);
 		if (self->audio_filter == NULL) {

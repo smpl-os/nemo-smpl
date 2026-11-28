@@ -52,6 +52,8 @@ void nemo_preview_run_task (GTask *task, GTaskThreadFunc worker);
 #define NEMO_PREVIEW_MEDIA_LOAD_SECONDS 30
 
 GstElement *nemo_preview_media_create_sink (GError **error);
+gboolean nemo_preview_media_decoder_is_safe (GstElementFactory *factory);
+void nemo_preview_media_guard_decoders (GstElement *playbin);
 gchar *nemo_preview_media_missing_plugin (GstMessage *message, gboolean is_audio);
 cairo_surface_t *nemo_preview_media_render_frame (GstSample *sample,
 						 GstVideoInfo *info,

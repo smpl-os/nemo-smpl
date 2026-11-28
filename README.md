@@ -197,6 +197,12 @@ error instead of leaving a black preview indefinitely.
 Release packages include the GStreamer plugin sets needed for VP8, VP9 and AV1
 WebM decoding; corrupt files or unsupported codec variants can still fail.
 
+MIDI playback needs a configured **WildMidi** GStreamer decoder and instrument
+bank. The in-process FluidSynth decoder is excluded from F3, sidebar playback,
+and loudness analysis: its audio-device initialization can abort the whole file
+manager when MIDI decoders run concurrently. Missing MIDI support or instrument
+data is reported as a preview error, without closing Nemo.
+
 Video preview frames are limited to 1920×1080 with their aspect ratio preserved;
 the original file is unchanged. Converted-frame buffering is bounded and preview
 resources are released when switching or closing files. Decoders still need
@@ -473,6 +479,13 @@ Bookmarks**. The new Favorites shortcut leaves an existing assignment alone.
 
 ## Keyboard Shortcuts
 
+**Ctrl+Shift+Enter** copies the selected files' full paths to the clipboard as
+plain text, one path per line. With no marked files, it uses the keyboard cursor.
+Remote files use their full URI. This does not copy file contents or prepare a
+file transfer. Configure **Copy Full Paths as Text** under **Preferences →
+Keyboard Shortcuts → Clipboard**; existing conflicting shortcuts are preserved.
+Text-entry fields retain their editing behavior.
+
 ### Marking files with the keyboard
 
 List, icon and compact views support Commander-style persistent marks.
@@ -528,6 +541,7 @@ and new alternate defaults do not take shortcuts already assigned to other actio
 | **Alt+F5** | Copy selected files and folders into a new 7z archive |
 | **Alt+Shift+F5** | Pack into a new verified 7z archive, then remove originals |
 | **F6** | Move dialog |
+| **Ctrl+Shift+Enter** | Copy full file paths as plain text, one per line |
 | **F8 / Delete** | Move selected files to Trash (normal confirmation applies) |
 | **Shift+Delete / Shift+F8** | Delete permanently, without moving to Trash (normal confirmation applies) |
 | **Space** | Calculate sizes of selected folders |

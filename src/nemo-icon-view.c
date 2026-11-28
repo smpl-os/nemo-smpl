@@ -1229,6 +1229,16 @@ nemo_icon_view_is_empty (NemoView *view)
 		(get_icon_container (NEMO_ICON_VIEW (view)));
 }
 
+#ifdef NEMO_SMPL
+static NemoFile *
+nemo_icon_view_get_cursor_file (NemoView *view)
+{
+	NemoFile *file = (NemoFile *) nemo_icon_container_get_cursor_data (
+		get_icon_container (NEMO_ICON_VIEW (view)));
+	return file != NULL ? nemo_file_ref (file) : NULL;
+}
+#endif
+
 static GList *
 nemo_icon_view_get_selection (NemoView *view)
 {
@@ -2779,6 +2789,9 @@ nemo_icon_view_class_init (NemoIconViewClass *klass)
     nemo_view_class->peek_selection = nemo_icon_view_peek_selection;
 	nemo_view_class->get_selection_count = nemo_icon_view_get_selection_count;
 	nemo_view_class->get_selection_for_file_transfer = nemo_icon_view_get_selection;
+#ifdef NEMO_SMPL
+	nemo_view_class->get_cursor_file = nemo_icon_view_get_cursor_file;
+#endif
 	nemo_view_class->get_item_count = nemo_icon_view_get_item_count;
 	nemo_view_class->is_empty = nemo_icon_view_is_empty;
 	nemo_view_class->remove_file = nemo_icon_view_remove_file;

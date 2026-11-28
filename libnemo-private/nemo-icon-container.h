@@ -310,6 +310,9 @@ void              nemo_icon_container_select_first                  (NemoIconCon
 /* operations on the selection */
 void              nemo_icon_container_update_selection              (NemoIconContainer *container);
 GList     *       nemo_icon_container_get_selection                 (NemoIconContainer  *view);
+#ifdef NEMO_SMPL
+NemoIconData *nemo_icon_container_get_cursor_data (NemoIconContainer *container);
+#endif
 GList     *       nemo_icon_container_peek_selection                (NemoIconContainer  *view);
 gint              nemo_icon_container_get_selection_count           (NemoIconContainer  *container);
 void			  nemo_icon_container_invert_selection				(NemoIconContainer  *view);

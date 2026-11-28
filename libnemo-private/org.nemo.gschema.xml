@@ -1396,6 +1396,10 @@
       <default>'&lt;Control&gt;c'</default>
       <summary>Copy files</summary>
     </key>
+    <key name="copy-path" type="s">
+      <default>'&lt;Control&gt;&lt;Shift&gt;Return'</default>
+      <summary>Copy full file paths as text</summary>
+    </key>
     <key name="paste" type="s">
       <default>'&lt;Control&gt;v'</default>
       <summary>Paste files</summary>

@@ -153,6 +153,7 @@ const NemoKeybindingEntry nemo_keybinding_entries[] = {
 	/* Clipboard */
 	{ "cut",                   "<Actions>/DirViewActions/Cut",              N_("Cut"),                        N_("Clipboard"), "<Control>x",               NULL, NULL },
 	{ "copy",                  "<Actions>/DirViewActions/Copy",             N_("Copy"),                       N_("Clipboard"), "<Control>c",               NULL, NULL },
+	{ "copy-path",             "<Actions>/DirViewActions/Copy Path",        N_("Copy Full Paths as Text"),     N_("Clipboard"), "<Control><Shift>Return",    NULL, NULL },
 	{ "paste",                 "<Actions>/DirViewActions/Paste",            N_("Paste"),                      N_("Clipboard"), "<Control>v",               NULL, NULL },
 
 	/* Selection */
@@ -328,7 +329,7 @@ reserve_new_shortcut_defaults (void)
 {
 	const char *keys[] = { "go-back-alt", "go-forward-alt", "go-up-secondary", "go-down", "add-favorite", "toggle-zen-mode",
 	                       "preview-scroll-up", "preview-scroll-down", "calculate-directory-sizes",
-	                       "trash", "trash-alt", "delete-permanently-alt" };
+	                       "trash", "trash-alt", "delete-permanently-alt", "copy-path" };
 	for (guint i = 0; i < G_N_ELEMENTS (keys); i++) {
 		GVariant *user_value = g_settings_get_user_value (nemo_keybinding_settings, keys[i]);
 		if (user_value != NULL) {

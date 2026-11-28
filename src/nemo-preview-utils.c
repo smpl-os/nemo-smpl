@@ -150,6 +150,34 @@ nemo_preview_media_create_sink (GError **error)
 	return sink;
 }
 
+gboolean
+nemo_preview_media_decoder_is_safe (GstElementFactory *factory)
+{
+	/* FluidSynth settings initialization probes PortAudio devices and can
+	 * corrupt its global state when concurrent MIDI decoders are created. */
+	return !g_str_equal (gst_plugin_feature_get_name (GST_PLUGIN_FEATURE (factory)), "fluiddec");
+}
+
+static gint
+media_autoplug_select (GstElement *decoder, GstPad *pad, GstCaps *caps,
+		       GstElementFactory *factory, gpointer unused)
+{
+	return nemo_preview_media_decoder_is_safe (factory) ? 0 : 2;
+}
+
+static void
+media_element_setup (GstElement *playbin, GstElement *element, gpointer unused)
+{
+	if (g_signal_lookup ("autoplug-select", G_OBJECT_TYPE (element)) != 0)
+		g_signal_connect (element, "autoplug-select", G_CALLBACK (media_autoplug_select), NULL);
+}
+
+void
+nemo_preview_media_guard_decoders (GstElement *playbin)
+{
+	g_signal_connect (playbin, "element-setup", G_CALLBACK (media_element_setup), NULL);
+}
+
 gchar *
 nemo_preview_media_missing_plugin (GstMessage *message, gboolean is_audio)
 {
@@ -175,6 +203,10 @@ nemo_preview_media_missing_plugin (GstMessage *message, gboolean is_audio)
 		if (gst_caps_is_empty (caps) || gst_caps_is_any (caps))
 			return NULL;
 		name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
+		if (is_audio && (g_str_equal (name, "audio/x-midi-event") ||
+				g_str_equal (name, "audio/midi")))
+			return g_strdup (_("MIDI playback requires a working WildMidi decoder and instrument bank.\n"
+					   "The in-process FluidSynth decoder is disabled because its audio-device initialization can crash Nemo."));
 		if (is_audio ? !g_str_has_prefix (name, "audio/") :
 		    !(g_str_has_prefix (name, "video/") || g_str_has_prefix (name, "image/")))
 			return NULL;

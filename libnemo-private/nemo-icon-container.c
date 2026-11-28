@@ -6258,6 +6258,16 @@ nemo_icon_container_get_real_selection (NemoIconContainer *container)
     return g_list_reverse (list);
 }
 
+#ifdef NEMO_SMPL
+NemoIconData *
+nemo_icon_container_get_cursor_data (NemoIconContainer *container)
+{
+	g_return_val_if_fail (NEMO_IS_ICON_CONTAINER (container), NULL);
+	return container->details->keyboard_focus != NULL ?
+		container->details->keyboard_focus->data : NULL;
+}
+#endif
+
 /**
  * nemo_icon_container_get_selection:
  * @container: An icon container.

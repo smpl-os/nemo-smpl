@@ -1375,6 +1375,14 @@ nemo_window_key_press_event (GtkWidget *widget,
 			return TRUE;
 		}
 #ifdef NEMO_SMPL
+		g_autofree char *copy_path = g_settings_get_string (nemo_keybinding_settings, "copy-path");
+		guint copy_key;
+		GdkModifierType copy_mods;
+		gtk_accelerator_parse (copy_path, &copy_key, &copy_mods);
+		if (copy_key != 0 &&
+		    gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (copy_key) &&
+		    (event->state & gtk_accelerator_get_default_mod_mask ()) == copy_mods)
+			return TRUE;
 		/* Single-line entries may leave Ctrl+Up/Down unhandled. Keep
 		 * editing arrows from falling through to folder navigation. */
 		if ((event->state & gtk_accelerator_get_default_mod_mask ()) == GDK_CONTROL_MASK &&
@@ -1407,6 +1415,16 @@ nemo_window_key_press_event (GtkWidget *widget,
 				if (handled)
 					return TRUE;
 			}
+		}
+		g_autofree char *copy_path = g_settings_get_string (nemo_keybinding_settings, "copy-path");
+		guint copy_key;
+		GdkModifierType copy_mods;
+		gtk_accelerator_parse (copy_path, &copy_key, &copy_mods);
+		if (copy_key != 0 &&
+		    gdk_keyval_to_lower (event->keyval) == gdk_keyval_to_lower (copy_key) &&
+		    (event->state & gtk_accelerator_get_default_mod_mask ()) == copy_mods) {
+			nemo_view_copy_paths (view);
+			return TRUE;
 		}
 		g_autofree char *accel = g_settings_get_string (nemo_keybinding_settings,
 							      "calculate-directory-sizes");

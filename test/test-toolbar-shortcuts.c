@@ -4,6 +4,7 @@
 #include "../src/nemo-keybindings.h"
 #include "../src/nemo-toolbar.h"
 #include "../src/nemo-notebook.h"
+#include "../src/nemo-icon-view.h"
 
 static char *rendered_tooltip;
 static gboolean send_control_arrow (NemoWindow *window, guint key);
@@ -201,7 +202,7 @@ test_control_navigation (void)
 }
 
 static gboolean
-send_control_arrow (NemoWindow *window, guint key)
+send_accelerator (NemoWindow *window, guint key, GdkModifierType modifiers)
 {
     GdkKeymapKey *entries = NULL;
     gint count;
@@ -210,7 +211,7 @@ send_control_arrow (NemoWindow *window, guint key)
     GdkEvent *event = gdk_event_new (GDK_KEY_PRESS);
     event->key.window = g_object_ref (gtk_widget_get_window (GTK_WIDGET (window)));
     event->key.keyval = key;
-    event->key.state = GDK_CONTROL_MASK;
+    event->key.state = modifiers;
     event->key.hardware_keycode = entries[0].keycode;
     event->key.group = entries[0].group;
     gdk_event_set_device (event, gdk_seat_get_keyboard (gdk_display_get_default_seat (display)));
@@ -218,6 +219,99 @@ send_control_arrow (NemoWindow *window, guint key)
     gdk_event_free (event);
     g_free (entries);
     return handled;
+}
+
+static gboolean
+send_control_arrow (NemoWindow *window, guint key)
+{
+    return send_accelerator (window, key, GDK_CONTROL_MASK);
+}
+
+static void
+assert_clipboard_text (GtkClipboard *clipboard, const char *expected)
+{
+    g_autofree char *text = gtk_clipboard_wait_for_text (clipboard);
+    g_assert_cmpstr (text, ==, expected);
+}
+
+static void
+test_copy_path_binding_conflict (void)
+{
+    g_autofree char *copy = g_settings_get_string (nemo_keybinding_settings, "copy-path");
+    g_autofree char *rename = g_settings_get_string (nemo_keybinding_settings, "rename");
+    g_assert_cmpstr (copy, ==, "");
+    g_assert_cmpstr (rename, ==, "<Control><Shift>Return");
+}
+
+static void
+test_copy_paths (void)
+{
+    Fixture fixture = fixture_new ();
+    g_autofree char *folder_path = g_file_get_path (fixture.containing);
+    g_autofree char *second_path = g_build_filename (folder_path, "path with spaces.txt", NULL);
+    g_assert_true (g_file_set_contents (second_path, "path fixture", -1, NULL));
+    g_autoptr (GFile) second_location = g_file_new_for_path (second_path);
+    nemo_window_slot_open_location (fixture.slot, fixture.containing, NEMO_WINDOW_OPEN_FLAG_SAME_SLOT);
+    WAIT_FOR (slot_at (fixture.slot, fixture.containing));
+    NemoView *view = fixture.slot->content_view;
+    GtkClipboard *clipboard = gtk_clipboard_get (GDK_SELECTION_CLIPBOARD);
+    g_autofree char *first_path = g_file_get_path (fixture.item);
+    NemoFile *first = nemo_file_get (fixture.item);
+    NemoFile *second = nemo_file_get (second_location);
+    GList selection = { .data = first };
+    nemo_view_set_selection (view, &selection);
+    nemo_view_grab_focus (view);
+    GtkAction *action = find_action (fixture.window, "Copy Path");
+    g_assert_nonnull (action);
+    WAIT_FOR (gtk_action_is_sensitive (action));
+    g_assert_true (send_accelerator (fixture.window, GDK_KEY_Return, GDK_CONTROL_MASK | GDK_SHIFT_MASK));
+    assert_clipboard_text (clipboard, first_path);
+    g_assert_false (gtk_clipboard_wait_is_target_available (
+        clipboard, gdk_atom_intern_static_string ("x-special/gnome-copied-files")));
+
+    /* Leave a keyboard cursor without selecting a file. */
+    if (NEMO_IS_ICON_VIEW (view)) {
+        send_accelerator (fixture.window, GDK_KEY_space, GDK_CONTROL_MASK);
+        send_accelerator (fixture.window, GDK_KEY_space, GDK_CONTROL_MASK);
+    } else
+        send_accelerator (fixture.window, GDK_KEY_Escape, 0);
+    g_assert_cmpint (nemo_view_get_selection_count (view), ==, 0);
+    NemoFile *cursor = NEMO_VIEW_GET_CLASS (view)->get_cursor_file (view);
+    g_assert_nonnull (cursor);
+    g_assert_true (cursor == first);
+    nemo_file_unref (cursor);
+    gtk_clipboard_set_text (clipboard, "before cursor copy", -1);
+    g_assert_true (send_accelerator (fixture.window, GDK_KEY_Return, GDK_CONTROL_MASK | GDK_SHIFT_MASK));
+    assert_clipboard_text (clipboard, first_path);
+
+    GList other = { .data = second };
+    GList both = { .data = first, .next = &other };
+    nemo_view_set_selection (view, &both);
+    WAIT_FOR (nemo_view_get_selection_count (view) == 2);
+    g_assert_true (send_accelerator (fixture.window, GDK_KEY_Return, GDK_CONTROL_MASK | GDK_SHIFT_MASK));
+    g_autofree char *expected = g_strdup_printf ("%s\n%s", first_path, second_path);
+    assert_clipboard_text (clipboard, expected);
+
+    GtkWidget *entry = gtk_entry_new ();
+    gtk_box_pack_start (GTK_BOX (fixture.slot), entry, FALSE, FALSE, 0);
+    gtk_widget_show (entry);
+    gtk_widget_grab_focus (entry);
+    gtk_clipboard_set_text (clipboard, "editing clipboard", -1);
+    send_accelerator (fixture.window, GDK_KEY_Return, GDK_CONTROL_MASK | GDK_SHIFT_MASK);
+    assert_clipboard_text (clipboard, "editing clipboard");
+    gtk_widget_destroy (entry);
+    nemo_view_grab_focus (view);
+    nemo_keybindings_set_for_action ("copy-path", "<Control><Alt>p");
+    g_assert_true (send_accelerator (fixture.window, GDK_KEY_p, GDK_CONTROL_MASK | GDK_MOD1_MASK));
+    assert_clipboard_text (clipboard, expected);
+    nemo_keybindings_set_for_action ("copy-path", "");
+    gtk_clipboard_set_text (clipboard, "disabled clipboard", -1);
+    send_accelerator (fixture.window, GDK_KEY_p, GDK_CONTROL_MASK | GDK_MOD1_MASK);
+    assert_clipboard_text (clipboard, "disabled clipboard");
+    nemo_file_unref (second);
+    nemo_file_unref (first);
+    g_assert_true (g_file_delete (second_location, NULL, NULL));
+    fixture_clear (&fixture);
 }
 
 static void
@@ -518,6 +612,8 @@ run_case (gconstpointer data)
         g_settings_set_string (nemo_keybinding_settings, "new-tab", "<Alt>Page_Up");
         g_settings_set_string (nemo_keybinding_settings, "new-folder", "<Alt>Page_Down");
         g_settings_set_string (nemo_keybinding_settings, "preview-scroll-down", "<Alt>j");
+        if (g_str_equal (test->path, "/toolbar/copy-paths-existing-shortcut"))
+            g_settings_set_string (nemo_keybinding_settings, "rename", "<Control><Shift>Return");
     }
     application = nemo_main_application_get_singleton ();
     GError *error = NULL;
@@ -546,6 +642,10 @@ main (int argc, char **argv)
         { "/toolbar/control-arrow-editing", test_editing_keeps_control_arrows, FALSE, NULL },
         { "/toolbar/existing-shortcut-preserved", test_existing_binding_wins, TRUE, NULL },
         { "/toolbar/preview-scroll-bindings", test_preview_scroll_bindings, FALSE, NULL },
+        { "/toolbar/copy-paths-list", test_copy_paths, FALSE, "list-view" },
+        { "/toolbar/copy-paths-icon", test_copy_paths, FALSE, "icon-view" },
+        { "/toolbar/copy-paths-compact", test_copy_paths, FALSE, "compact-view" },
+        { "/toolbar/copy-paths-existing-shortcut", test_copy_path_binding_conflict, TRUE, NULL },
         { "/toolbar/split-pane-divider", test_split_divider, FALSE, NULL },
         { "/toolbar/zen-layout", test_zen_layout, FALSE, NULL },
         { "/toolbar/zen-hidden-preferences-shortcut", test_zen_hidden_preferences_and_shortcut, FALSE, NULL },

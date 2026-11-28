@@ -485,6 +485,37 @@ test_loading_timeout (void)
 }
 
 static void
+test_midi_decoder_safety (void)
+{
+	if (!g_test_subprocess ()) {
+		g_test_trap_subprocess (NULL, 15 * G_USEC_PER_SEC, 0);
+		g_test_trap_assert_passed ();
+		return;
+	}
+	g_autofree char *path = preview_midi_fixture ();
+	const char *input = g_getenv ("NEMO_TEST_MIDI_FILE");
+	g_autoptr (GFile) location = g_file_new_for_path (input != NULL ? input : path);
+	NemoFile *file = nemo_file_get (location);
+	NemoPreviewPane *pane = new_test_pane ();
+	load_media_preview (pane, file, TRUE);
+	gint64 deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+	while (pane->pipeline != NULL && !pane->video_ready && g_get_monotonic_time () < deadline) {
+		g_main_context_iteration (NULL, FALSE);
+		g_usleep (1000);
+	}
+	if (pane->pipeline != NULL)
+		g_assert_true (pane->video_ready);
+	else {
+		g_assert_cmpstr (gtk_stack_get_visible_child_name (GTK_STACK (pane->stack)), ==, "info");
+		g_assert_cmpuint (strlen (gtk_label_get_text (GTK_LABEL (pane->info_error_label))), >, 0);
+	}
+	gtk_widget_destroy (GTK_WIDGET (pane));
+	g_object_unref (pane);
+	nemo_file_unref (file);
+	g_assert_cmpint (g_unlink (path), ==, 0);
+}
+
+static void
 test_audio_only (void)
 {
 	g_autofree char *path = preview_media_fixture (0, 0);
@@ -643,6 +674,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/preview-pane/media-missing-video-decoder", test_missing_video);
 	g_test_add_func ("/preview-pane/media-loading-timeout", test_loading_timeout);
 	g_test_add_func ("/preview-pane/media-audio-only", test_audio_only);
+	g_test_add_func ("/preview-pane/midi-decoder-safety", test_midi_decoder_safety);
 #endif
 	result = g_test_run ();
 	g_assert_cmpint (g_chdir (cwd), ==, 0);

@@ -918,6 +918,9 @@ load_media_preview (NemoPreviewPane *self,
 		return;
 	}
 
+#ifdef NEMO_SMPL
+	nemo_preview_media_guard_decoders (self->pipeline);
+#endif
 	location = nemo_file_get_location (file);
 	uri = g_file_get_uri (location);
 	g_object_unref (location);

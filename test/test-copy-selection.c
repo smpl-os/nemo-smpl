@@ -718,6 +718,31 @@ test_drag (gconstpointer mode)
     free_view (dest);
 }
 
+static void
+test_paths_as_text (void)
+{
+    SelectionView *view = new_view ("text-paths");
+    nemo_file_list_free (view->selected);
+    g_autofree char *parent = g_build_filename (g_getenv ("NEMO_TEST_PROFILE"), "folder with spaces", NULL);
+    g_autofree char *child = g_build_filename (parent, "child.txt", NULL);
+    view->selected = g_list_append (NULL, nemo_file_get_by_uri ("sftp://example.invalid/folder/remote.txt"));
+    g_autoptr (GFile) parent_location = g_file_new_for_path (parent);
+    g_autoptr (GFile) child_location = g_file_new_for_path (child);
+    view->selected = g_list_append (view->selected, nemo_file_get (parent_location));
+    view->selected = g_list_append (view->selected, nemo_file_get (child_location));
+    view->transfer = g_list_append (NULL, nemo_file_ref (view->selected->next->data));
+    copy_or_cut_files (NEMO_VIEW (view), view->transfer, FALSE);
+    GtkClipboard *clipboard = nemo_clipboard_get (GTK_WIDGET (view));
+    nemo_view_copy_paths (NEMO_VIEW (view));
+    g_autofree char *expected = g_strdup_printf ("sftp://example.invalid/folder/remote.txt\n%s\n%s", parent, child);
+    g_autofree char *actual = gtk_clipboard_wait_for_text (clipboard);
+    g_assert_cmpstr (actual, ==, expected);
+    GtkSelectionData *transfer = gtk_clipboard_wait_for_contents (
+        clipboard, gdk_atom_intern_static_string ("x-special/gnome-copied-files"));
+    g_assert_null (transfer);
+    free_view (view);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -732,6 +757,7 @@ main (int argc, char **argv)
         return 77;
     }
     nemo_global_preferences_init ();
+    g_test_add_func ("/copy-selection/paths-as-text", test_paths_as_text);
     g_test_add_data_func ("/copy-selection/success", GINT_TO_POINTER (TRUE), test_completion);
     g_test_add_data_func ("/copy-selection/failed-partial-skipped-cancelled",
                           GINT_TO_POINTER (FALSE), test_completion);

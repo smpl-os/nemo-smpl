@@ -4021,6 +4021,25 @@ nemo_list_view_get_selection (NemoView *view)
 	return g_list_reverse (list);
 }
 
+#ifdef NEMO_SMPL
+static NemoFile *
+nemo_list_view_get_cursor_file (NemoView *view)
+{
+	GtkTreeView *tree = NEMO_LIST_VIEW (view)->details->tree_view;
+	GtkTreePath *path = NULL;
+	GtkTreeIter iter;
+	NemoFile *file = NULL;
+	gtk_tree_view_get_cursor (tree, &path, NULL);
+	if (path != NULL) {
+		GtkTreeModel *model = gtk_tree_view_get_model (tree);
+		if (gtk_tree_model_get_iter (model, &iter, path))
+			gtk_tree_model_get (model, &iter, NEMO_LIST_MODEL_FILE_COLUMN, &file, -1);
+		gtk_tree_path_free (path);
+	}
+	return file;
+}
+#endif
+
 static GList *
 nemo_list_view_peek_selection (NemoView *view)
 {
@@ -5045,6 +5064,9 @@ nemo_list_view_class_init (NemoListViewClass *class)
     nemo_view_class->peek_selection = nemo_list_view_peek_selection;
     nemo_view_class->get_selection_count = nemo_list_view_get_selection_count;
 	nemo_view_class->get_selection_for_file_transfer = nemo_list_view_get_selection_for_file_transfer;
+#ifdef NEMO_SMPL
+	nemo_view_class->get_cursor_file = nemo_list_view_get_cursor_file;
+#endif
 	nemo_view_class->get_item_count = nemo_list_view_get_item_count;
 	nemo_view_class->is_empty = nemo_list_view_is_empty;
 	nemo_view_class->remove_file = nemo_list_view_remove_file;

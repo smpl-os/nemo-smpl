@@ -163,6 +163,10 @@ struct NemoViewClass {
 	 * NemoFile pointers.
 	 */
 	GList *	(* get_selection) 	 	(NemoView *view);
+#ifdef NEMO_SMPL
+	/* Optional keyboard cursor fallback; returns a referenced file. */
+	NemoFile * (* get_cursor_file) (NemoView *view);
+#endif
 
     /* peek_selection is not a signal; it is just a function pointer for
      * subclasses to replace (override). Subclasses must replace it
@@ -431,6 +435,9 @@ void              nemo_view_new_file_with_initial_contents (NemoView *view,
 /* selection handling */
 int               nemo_view_get_selection_count        (NemoView      *view);
 GList *           nemo_view_get_selection              (NemoView      *view);
+#ifdef NEMO_SMPL
+void              nemo_view_copy_paths                 (NemoView      *view);
+#endif
 GList *           nemo_view_get_selection_for_file_transfer (NemoView *view);
 GList *           nemo_view_peek_selection             (NemoView      *view);
 gint              nemo_view_get_selection_count        (NemoView      *view);
