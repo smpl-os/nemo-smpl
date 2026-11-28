@@ -39,6 +39,13 @@ the request. Unreadable contents are reported as an incomplete total.
 
 ## Installation
 
+### Opening from a terminal
+
+Run `nemo .` to open the terminal's current directory, including when Nemo is
+already running. Relative paths are resolved in the invoking terminal, not
+the existing Nemo process. Use `nemo ..` for the parent directory or
+`nemo "/path/with spaces"` for a specific folder.
+
 ### Arch Linux / smplOS
 
 ```bash

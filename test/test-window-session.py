@@ -60,6 +60,9 @@ def main():
     first.mkdir()
     second.mkdir()
     unplugged.mkdir()
+    terminal = profile / "terminal folder with spaces"
+    other_terminal = terminal / "another terminal"
+    other_terminal.mkdir(parents=True)
     env = os.environ.copy()
     env.update(
         GSETTINGS_BACKEND="keyfile", G_DEBUG="fatal-criticals",
@@ -75,6 +78,32 @@ def main():
     audio_server = None
     with log_path.open("w+") as log:
         try:
+            # Resolve relative arguments in the launcher, not the primary
+            # process's working directory, before forwarding them over D-Bus.
+            process = subprocess.Popen(
+                [executable, "."], cwd=terminal,
+                env=env, stdout=log, stderr=log,
+            )
+            subprocess.run(
+                [inspector, "--wait-for-title", f"{terminal.name} - {terminal}"],
+                env=env, check=True, timeout=15,
+            )
+            subprocess.run(
+                [executable, "."], cwd=other_terminal,
+                env=env, stdout=log, stderr=log, check=True, timeout=15,
+            )
+            subprocess.run(
+                [inspector, "--wait-for-title", f"{other_terminal.name} - {other_terminal}"],
+                env=env, check=True, timeout=15,
+            )
+            if process.poll() is not None:
+                raise RuntimeError("Primary Nemo exited during terminal directory navigation")
+            subprocess.run(
+                [executable, "--quit"], env=env, stdout=log, stderr=log,
+                check=True, timeout=20,
+            )
+            if process.wait(timeout=10) != 0:
+                raise RuntimeError(f"Nemo exited with status {process.returncode}")
             cases = [
                 ([str(first)], first, None),
                 ([], first, None),
@@ -344,7 +373,9 @@ def main():
                     except subprocess.TimeoutExpired:
                         child.kill()
                         child.wait()
-    print("Folder/Overview restoration, D-Bus reuse and configured real-process F3 playback passed.")
+    print("Terminal directory navigation, Folder/Overview restoration and D-Bus reuse passed.")
+    if env.get("NEMO_TEST_GSTREAMER") == "1":
+        print("Configured real-process F3 playback passed.")
     return 0
 
 
